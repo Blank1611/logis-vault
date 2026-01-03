@@ -416,10 +416,10 @@ class JobManager:
             
             await log_callback("Starting extraction phase (queue-based)...")
             
-            # Get playlist folder
+            # Get playlist folder - use same path construction as standalone extract
             safe_title = tools._sanitize_title(playlist.title)
             playlist_folder = os.path.join(download_service.base_path, safe_title)
-            audio_folder = os.path.join(playlist_folder, "audio")
+            audio_folder = os.path.join(playlist_folder, safe_title)  # Match extract_audio_for_existing_playlist
             os.makedirs(audio_folder, exist_ok=True)
             
             # Find ffmpeg

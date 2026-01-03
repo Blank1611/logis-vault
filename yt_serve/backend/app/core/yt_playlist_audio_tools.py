@@ -174,6 +174,25 @@ def _sanitize_filename(title: str) -> str:
     return sanitized.strip()
 
 
+def _get_effective_title(entry: dict) -> str:
+    """
+    Get effective title for a video entry, using channel name as fallback for empty titles.
+    This matches the yt-dlp output template logic: %(title|channel|Unknown)s
+    """
+    title = entry.get("title", "").strip()
+    
+    # Check if title is empty or just whitespace/special characters
+    if not title or title in ["​", "", " "] or len(title.strip()) == 0:
+        # Use channel name as fallback
+        channel = entry.get("channel", "").strip()
+        if channel:
+            return channel
+        else:
+            return "Unknown"
+    
+    return title
+
+
 def _find_video_by_title_and_rename(playlist_folder: str, video_id: str, video_title: str) -> bool:
     """
     Find video file by title (old format without ID) and rename to new format with ID.
@@ -1139,13 +1158,15 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                 
                 # Skip if in excluded_ids (from GUI config)
                 if vid in excluded_ids:
-                    print(f"  Skipping (excluded): {e.get('title') or vid} [{vid}]")
+                    effective_title = _get_effective_title(e)
+                    print(f"  Skipping (excluded): {effective_title} [{vid}]")
                     FAILED_VIDEO_IDS.add(vid)
                     continue
                 
                 # Skip if detected as unavailable/private by heuristic
                 if is_entry_unavailable(e, excluded_ids=excluded_ids):
-                    print(f"  Skipping unavailable/private: {e.get('title') or vid} [{vid}]")
+                    effective_title = _get_effective_title(e)
+                    print(f"  Skipping unavailable/private: {effective_title} [{vid}]")
                     if e.get("id"):
                         FAILED_VIDEO_IDS.add(e.get("id"))
                     continue
@@ -1153,18 +1174,18 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                 if not vid:
                     continue
                 
-                # Get video title for old format detection
-                video_title = e.get('title') or None
+                # Get effective title (with channel fallback for empty titles)
+                video_title = _get_effective_title(e)
                 
                 # CUSTOM ARCHIVE LOGIC: Check if we should download
                 # This also checks for old format (title only) and renames if found
                 should_download = _should_download_video(archive_file, playlist_folder, vid, video_title)
                 
                 if not should_download:
-                    print(f"  ✓ Already downloaded: {video_title or vid} [{vid}]")
+                    print(f"  ✓ Already downloaded: {video_title} [{vid}]")
                     SKIPPED_VIDEOS_ARCHIVE.append({
                         "id": vid,
-                        "title": video_title or vid,
+                        "title": video_title,
                         "reason": "already in custom archive and file exists on disk",
                     })
                     continue
@@ -1294,7 +1315,7 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
 
         # Prepare yt-dlp options WITHOUT download_archive (we manage it ourselves)
         common_opts = {
-            "outtmpl": os.path.join(playlist_folder, "%(title)s [%(id)s].%(ext)s"),  # Include ID in filename
+            "outtmpl": os.path.join(playlist_folder, "%(title|channel|Unknown)s [%(id)s].%(ext)s"),  # Use channel as fallback for empty titles
             "ignoreerrors": False,
             # NO download_archive - we manage it ourselves
             "quiet": False,
