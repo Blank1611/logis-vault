@@ -113,12 +113,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from app.api import metrics
+
 # Register API v1 and legacy /api routes
 app.include_router(api_v1_router, prefix="/api/v1")
 app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
 app.include_router(downloads.router, prefix="/api/downloads", tags=["downloads"])
 app.include_router(config.router, prefix="/api/config", tags=["config"])
 app.include_router(websocket.router, prefix="/ws", tags=["websocket"])
+app.include_router(metrics.router, tags=["metrics"])
 
 @app.get("/api/health")
 @app.get("/health")
@@ -172,7 +175,7 @@ if static_dir:
     # SPA catch-all fallback route
     @app.get("/{full_path:path}")
     async def spa_fallback(full_path: str):
-        if full_path.startswith(("api/", "ws/", "docs", "redoc", "openapi.json")):
+        if full_path.startswith(("api/", "ws/", "docs", "redoc", "openapi.json", "metrics")):
             raise HTTPException(status_code=404, detail="Not Found")
         
         potential_file = static_dir / full_path
