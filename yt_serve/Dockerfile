@@ -1,46 +1,42 @@
-# Multi-stage build for YouTube Playlist Manager
-
 # Stage 1: Build frontend
 FROM node:18-alpine AS frontend-builder
 WORKDIR /app/frontend
-COPY yt_serve/frontend/package*.json ./
+
+COPY frontend/package*.json ./
 RUN npm ci
-COPY yt_serve/frontend/ ./
+
+COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Backend with Python
-FROM python:3.11-slim
-WORKDIR /app
+FROM python:3.11-slim AS runner
+WORKDIR /app/backend
 
-# Install Node.js for frontend serving
-RUN apt-get update && apt-get install -y \
-    nodejs \
-    npm \
+# Install ffmpeg
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy backend
-COPY yt_serve/backend/requirements.txt ./backend/
-RUN pip install --no-cache-dir -r backend/requirements.txt
+# Install python dependencies
+COPY backend/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY yt_serve/backend/ ./backend/
-COPY yt_playlist_audio_tools.py ./
+# Copy backend source code
+COPY backend/ ./
 
-# Copy built frontend
-COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
+# Copy compiled frontend static assets to backend/static
+COPY --from=frontend-builder /app/frontend/dist ./static
 
-# Create downloads directory
-RUN mkdir -p /downloads
+# Create downloads and persistent data directory
+RUN mkdir -p /downloads /app/data
 
-# Expose ports
-EXPOSE 8000 5173
+# Expose unified port
+EXPOSE 8000
 
-# Environment variables
-ENV BASE_DOWNLOAD_PATH=/downloads
-ENV PYTHONUNBUFFERED=1
+# Default environment variables
+ENV BASE_DOWNLOAD_PATH=/downloads \
+    DATABASE_PATH=/app/data/yt_manager.db \
+    PYTHONUNBUFFERED=1
 
-# Start script
-COPY docker-start.sh ./
-RUN chmod +x docker-start.sh
+CMD ["python", "run.py"]
 
-CMD ["./docker-start.sh"]

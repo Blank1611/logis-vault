@@ -11,7 +11,7 @@ from datetime import datetime
 from app.models.database import get_db, Job, Playlist
 from app.services.job_manager import job_manager
 from app.services.ytdlp_service import DownloadService
-from app.api.websocket import manager as ws_manager
+from app.api.v1.endpoints.websocket import manager as ws_manager
 from app.core.config import settings
 
 router = APIRouter()
@@ -40,6 +40,20 @@ class JobResponse(BaseModel):
     total_items: int
     completed_items: int
     failed_items: int
+    
+    # Separate download progress
+    download_status: Optional[str]
+    download_total: int
+    download_completed: int
+    download_failed: int
+    download_batch_info: Optional[str]
+    
+    # Separate extraction progress
+    extract_status: Optional[str]
+    extract_total: int
+    extract_completed: int
+    extract_failed: int
+    
     created_at: str
     started_at: Optional[str]
     completed_at: Optional[str]
@@ -95,6 +109,15 @@ async def list_jobs(
             total_items=job.total_items,
             completed_items=job.completed_items,
             failed_items=job.failed_items,
+            download_status=job.download_status,
+            download_total=job.download_total,
+            download_completed=job.download_completed,
+            download_failed=job.download_failed,
+            download_batch_info=job.download_batch_info,
+            extract_status=job.extract_status,
+            extract_total=job.extract_total,
+            extract_completed=job.extract_completed,
+            extract_failed=job.extract_failed,
             created_at=job.created_at.isoformat(),
             started_at=job.started_at.isoformat() if job.started_at else None,
             completed_at=job.completed_at.isoformat() if job.completed_at else None,
@@ -167,6 +190,15 @@ async def create_job(
         total_items=db_job.total_items,
         completed_items=db_job.completed_items,
         failed_items=db_job.failed_items,
+        download_status=db_job.download_status,
+        download_total=db_job.download_total,
+        download_completed=db_job.download_completed,
+        download_failed=db_job.download_failed,
+        download_batch_info=db_job.download_batch_info,
+        extract_status=db_job.extract_status,
+        extract_total=db_job.extract_total,
+        extract_completed=db_job.extract_completed,
+        extract_failed=db_job.extract_failed,
         created_at=db_job.created_at.isoformat(),
         started_at=db_job.started_at.isoformat() if db_job.started_at else None,
         completed_at=db_job.completed_at.isoformat() if db_job.completed_at else None,
@@ -189,6 +221,15 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
         total_items=job.total_items,
         completed_items=job.completed_items,
         failed_items=job.failed_items,
+        download_status=job.download_status,
+        download_total=job.download_total,
+        download_completed=job.download_completed,
+        download_failed=job.download_failed,
+        download_batch_info=job.download_batch_info,
+        extract_status=job.extract_status,
+        extract_total=job.extract_total,
+        extract_completed=job.extract_completed,
+        extract_failed=job.extract_failed,
         created_at=job.created_at.isoformat(),
         started_at=job.started_at.isoformat() if job.started_at else None,
         completed_at=job.completed_at.isoformat() if job.completed_at else None,
@@ -231,3 +272,143 @@ async def get_job_logs(
         LogEntry(message=line.strip())
         for line in log_lines
     ]
+
+# ============================================================================
+# INTERRUPTED JOBS ENDPOINTS (for UI-based recovery dialog)
+# ============================================================================
+
+class InterruptedJobInfo(BaseModel):
+    """Information about an interrupted job"""
+    id: int
+    job_type: str
+    playlist_id: int
+    playlist_title: str
+    created_at: str
+
+class InterruptedJobsResponse(BaseModel):
+    """Response containing interrupted jobs"""
+    jobs: List[InterruptedJobInfo]
+    count: int
+
+class JobRecoveryRequest(BaseModel):
+    """Request to handle interrupted jobs"""
+    action: str  # 'resume_all', 'cancel_all', or 'individual'
+    job_decisions: Optional[dict] = None  # For individual: {job_id: 'resume' or 'cancel'}
+
+class JobRecoveryResponse(BaseModel):
+    """Response after handling interrupted jobs"""
+    message: str
+    processed: int
+    resumed: int
+    cancelled: int
+
+@router.get("/interrupted-jobs", response_model=InterruptedJobsResponse)
+async def get_interrupted_jobs(db: Session = Depends(get_db)):
+    """
+    Get all interrupted jobs (jobs with 'running' status).
+    Called on app initialization to check for jobs that didn't complete.
+    """
+    interrupted_jobs = db.query(Job).filter(Job.status == 'running').all()
+    
+    jobs_info = []
+    for job in interrupted_jobs:
+        playlist = db.query(Playlist).filter(Playlist.id == job.playlist_id).first()
+        playlist_title = playlist.title if playlist else "Unknown Playlist"
+        jobs_info.append(InterruptedJobInfo(
+            id=job.id,
+            job_type=job.job_type,
+            playlist_id=job.playlist_id,
+            playlist_title=playlist_title,
+            created_at=job.created_at.isoformat()
+        ))
+    
+    return InterruptedJobsResponse(
+        jobs=jobs_info,
+        count=len(jobs_info)
+    )
+
+@router.post("/handle-interrupted-jobs", response_model=JobRecoveryResponse)
+async def handle_interrupted_jobs(
+    request: JobRecoveryRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Handle interrupted jobs based on user decision from UI dialog.
+    Supports three actions:
+    - resume_all: Resume all interrupted jobs
+    - cancel_all: Cancel all interrupted jobs
+    - individual: Handle each job based on decision map
+    """
+    interrupted_jobs = db.query(Job).filter(Job.status == 'running').all()
+    
+    if not interrupted_jobs:
+        return JobRecoveryResponse(
+            message="No interrupted jobs found",
+            processed=0,
+            resumed=0,
+            cancelled=0
+        )
+    
+    resumed_count = 0
+    cancelled_count = 0
+    
+    if request.action == 'resume_all':
+        # Resume all interrupted jobs
+        for job in interrupted_jobs:
+            try:
+                job.status = 'pending'
+                job.error = None
+                db.commit()
+                
+                # Start the job in background using the singleton job_manager
+                await job_manager.start_job(job.id)
+                resumed_count += 1
+            except Exception as e:
+                job.status = 'failed'
+                job.error = f"Failed to resume: {str(e)}"
+                db.commit()
+    
+    elif request.action == 'cancel_all':
+        # Cancel all interrupted jobs
+        for job in interrupted_jobs:
+            job.status = 'cancelled'
+            job.error = 'Cancelled by user during startup'
+            cancelled_count += 1
+        db.commit()
+    
+    elif request.action == 'individual' and request.job_decisions:
+        # Handle each job individually based on user decisions
+        for job in interrupted_jobs:
+            decision = request.job_decisions.get(str(job.id))
+            
+            if decision == 'resume':
+                try:
+                    job.status = 'pending'
+                    job.error = None
+                    db.commit()
+                    await job_manager.start_job(job.id)
+                    resumed_count += 1
+                except Exception as e:
+                    job.status = 'failed'
+                    job.error = f"Failed to resume: {str(e)}"
+                    db.commit()
+            
+            elif decision == 'cancel':
+                job.status = 'cancelled'
+                job.error = 'Cancelled by user during startup'
+                cancelled_count += 1
+        
+        db.commit()
+    
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid action. Must be 'resume_all', 'cancel_all', or 'individual'"
+        )
+    
+    return JobRecoveryResponse(
+        message=f"Successfully handled {len(interrupted_jobs)} interrupted job(s)",
+        processed=len(interrupted_jobs),
+        resumed=resumed_count,
+        cancelled=cancelled_count
+    )

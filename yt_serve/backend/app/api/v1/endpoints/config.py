@@ -36,18 +36,18 @@ class ConfigUpdate(BaseModel):
 
 def _check_needs_setup() -> bool:
     """Check if initial setup is needed"""
-    # Check if .env file exists and has required values
-    env_path = Path(__file__).parent.parent.parent / ".env"
-    
-    if not env_path.exists():
+    # Check if BASE_DOWNLOAD_PATH is empty or not configured
+    if not settings.BASE_DOWNLOAD_PATH or settings.BASE_DOWNLOAD_PATH.strip() == "":
         return True
     
-    # Check if BASE_DOWNLOAD_PATH is set to a real path (not default "downloads")
-    if settings.BASE_DOWNLOAD_PATH == "downloads":
-        return True
-    
-    # Check if the path exists
-    if not os.path.exists(settings.BASE_DOWNLOAD_PATH):
+    # In container or production environments where BASE_DOWNLOAD_PATH is set (e.g. /downloads)
+    # setup is not needed.
+    env_path = Path(__file__).parent.parent.parent.parent / ".env"
+    if os.environ.get("BASE_DOWNLOAD_PATH") or env_path.exists():
+        return False
+        
+    # If using unconfigured default relative path 'downloads' with no .env or env var, setup is recommended
+    if settings.BASE_DOWNLOAD_PATH == "downloads" and not os.environ.get("BASE_DOWNLOAD_PATH"):
         return True
     
     return False

@@ -361,22 +361,22 @@ async def handle_interrupted_jobs(
         for job in interrupted_jobs:
             try:
                 job.status = 'pending'
-                job.error_message = None
+                job.error = None
                 db.commit()
                 
-                # Start the job in background
-                await job_manager_svc.start_job(job.id)
+                # Start the job in background using singleton job_manager
+                await job_manager.start_job(job.id)
                 resumed_count += 1
             except Exception as e:
                 job.status = 'failed'
-                job.error_message = f"Failed to resume: {str(e)}"
+                job.error = f"Failed to resume: {str(e)}"
                 db.commit()
     
     elif request.action == 'cancel_all':
         # Cancel all interrupted jobs
         for job in interrupted_jobs:
             job.status = 'cancelled'
-            job.error_message = 'Cancelled by user during startup'
+            job.error = 'Cancelled by user during startup'
             cancelled_count += 1
         db.commit()
     
@@ -388,18 +388,18 @@ async def handle_interrupted_jobs(
             if decision == 'resume':
                 try:
                     job.status = 'pending'
-                    job.error_message = None
+                    job.error = None
                     db.commit()
-                    await job_manager_svc.start_job(job.id)
+                    await job_manager.start_job(job.id)
                     resumed_count += 1
                 except Exception as e:
                     job.status = 'failed'
-                    job.error_message = f"Failed to resume: {str(e)}"
+                    job.error = f"Failed to resume: {str(e)}"
                     db.commit()
             
             elif decision == 'cancel':
                 job.status = 'cancelled'
-                job.error_message = 'Cancelled by user during startup'
+                job.error = 'Cancelled by user during startup'
                 cancelled_count += 1
         
         db.commit()
@@ -416,3 +416,4 @@ async def handle_interrupted_jobs(
         resumed=resumed_count,
         cancelled=cancelled_count
     )
+

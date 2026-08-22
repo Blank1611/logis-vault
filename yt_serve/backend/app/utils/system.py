@@ -169,13 +169,28 @@ def _open_folder_macos(abs_path: str) -> Dict[str, Any]:
 
 
 def _open_folder_linux(abs_path: str) -> Dict[str, Any]:
-    """Open folder on Linux."""
-    subprocess.run(["xdg-open", abs_path], check=True)
-    return {
-        "success": True,
-        "message": "Folder opened successfully", 
-        "path": abs_path
-    }
+    """Open folder on Linux, handling headless/Docker environments gracefully."""
+    import shutil
+    if not shutil.which("xdg-open") or not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return {
+            "success": False,
+            "message": f"File manager cannot be opened in headless/container environment. Download path: {abs_path}",
+            "path": abs_path
+        }
+    try:
+        subprocess.run(["xdg-open", abs_path], check=True)
+        return {
+            "success": True,
+            "message": "Folder opened successfully", 
+            "path": abs_path
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Could not launch file manager: {str(e)}",
+            "path": abs_path
+        }
+
 
 
 def get_system_info() -> Dict[str, str]:

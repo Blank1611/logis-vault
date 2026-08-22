@@ -10,11 +10,9 @@ export function useWebSocketEvents(onEvent: (type: string, data: any) => void) {
   }, [onEvent])
 
   useEffect(() => {
-    // Connect to WebSocket
-    // Use the backend port (8000) directly since frontend is on 5173
+    // Connect to WebSocket using current host and port (or proxy)
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = window.location.hostname
-    const wsUrl = `${protocol}//${host}:8000/ws/events`
+    const wsUrl = `${protocol}//${window.location.host}/ws/events`
     
     console.log('[WebSocket] Attempting to connect to:', wsUrl)
     

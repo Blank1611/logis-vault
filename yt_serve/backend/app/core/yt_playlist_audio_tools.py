@@ -575,14 +575,16 @@ def _remove_from_batch_progress(playlist_folder: str, video_id: str) -> None:
 
 # ====== HELPERS ======
 
-def _find_ffmpeg_windows() -> Optional[str]:
-    possible_names = ['ffmpeg.exe', 'ffmpeg']
+def _find_ffmpeg() -> Optional[str]:
+    possible_names = ['ffmpeg', 'ffmpeg.exe']
     for name in possible_names:
         path = shutil.which(name)
         if path:
             return path
 
     common_paths = [
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
         r"C:\ffmpeg\bin\ffmpeg.exe",
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
         r"%LOCALAPPDATA%\Programs\ffmpeg\bin\ffmpeg.exe",
@@ -593,6 +595,10 @@ def _find_ffmpeg_windows() -> Optional[str]:
             return path
 
     return None
+
+# Alias for backwards compatibility
+_find_ffmpeg_windows = _find_ffmpeg
+
 
 
 def _sanitize_title(title: str) -> str:

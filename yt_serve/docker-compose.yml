@@ -5,14 +5,15 @@ services:
     build: .
     container_name: youtube-playlist-manager
     ports:
-      - "8000:8000"  # Backend
-      - "5173:5173"  # Frontend
+      - "8000:8000"
     volumes:
-      - ./downloads:/downloads  # Download location
-      - ./data:/app/data        # Database and logs
+      - ./downloads:/downloads
+      - ./data:/app/data
     environment:
       - BASE_DOWNLOAD_PATH=/downloads
+      - DATABASE_PATH=/app/data/yt_manager.db
       - AUDIO_EXTRACT_MODE=copy
       - MAX_CONCURRENT_EXTRACTIONS=4
       - BATCH_SIZE=200
     restart: unless-stopped
+

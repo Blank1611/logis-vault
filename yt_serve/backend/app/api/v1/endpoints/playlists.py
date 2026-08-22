@@ -1,11 +1,12 @@
 """
-Playlist management API endpoints
+Playlist management API endpoints for multi-platform playlist operations
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from typing import List, Optional
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 from datetime import datetime
+import os
 
 from app.models.database import get_db, Playlist
 from app.services.ytdlp_service import DownloadService
@@ -95,6 +96,12 @@ async def list_playlists(db: Session = Depends(get_db)):
         ))
     
     return result
+
+# Route without trailing slash for compatibility
+@router.get("", response_model=List[PlaylistResponse])
+async def list_playlists_no_slash(db: Session = Depends(get_db)):
+    """Get all playlists (no trailing slash version)"""
+    return await list_playlists(db)
 
 @router.post("/", response_model=PlaylistResponse, status_code=201)
 async def create_playlist(
@@ -219,3 +226,74 @@ async def refresh_playlist(
     background_tasks.add_task(refresh_playlist_stats_task, playlist_id)
     
     return {"message": "Refresh started", "playlist_id": playlist_id}
+
+@router.post("/{playlist_id}/open-folder")
+async def open_playlist_folder(playlist_id: int, db: Session = Depends(get_db)):
+    """Open playlist folder in file explorer (or return path in headless mode)"""
+    from app.core import yt_playlist_audio_tools as tools
+    from app.utils.system import open_folder_in_explorer
+    
+    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    
+    # Get playlist folder
+    safe_title = tools._sanitize_title(playlist.title)
+    playlist_folder = os.path.join(settings.BASE_DOWNLOAD_PATH, safe_title)
+    
+    try:
+        result = open_folder_in_explorer(playlist_folder)
+        return result
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Playlist folder not found: {playlist_folder}"
+        )
+    except OSError as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=str(e)
+        )
+
+@router.get("/{playlist_id}/video-info")
+async def get_playlist_video_info(playlist_id: int, db: Session = Depends(get_db)):
+    """Get video information (titles) for a playlist from playlist_info.json snapshots"""
+    import json
+    from app.core import yt_playlist_audio_tools as tools
+    
+    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    
+    # Get playlist folder
+    safe_title = tools._sanitize_title(playlist.title)
+    playlist_folder = os.path.join(settings.BASE_DOWNLOAD_PATH, safe_title)
+    snapshot_folder = os.path.join(playlist_folder, "playlist_info_snapshot")
+    
+    # Find the most recent playlist_info.json
+    video_info = {}
+    if os.path.exists(snapshot_folder):
+        json_files = [f for f in os.listdir(snapshot_folder) if f.startswith("playlist_info_") and f.endswith(".json")]
+        if json_files:
+            # Get the most recent file
+            json_files.sort(reverse=True)
+            latest_file = os.path.join(snapshot_folder, json_files[0])
+            
+            try:
+                with open(latest_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    entries = data.get('entries', [])
+                    
+                    # Build a map of video_id -> title
+                    for entry in entries:
+                        if entry and entry.get('id'):
+                            video_info[entry['id']] = {
+                                'title': entry.get('title', 'Unknown Title'),
+                                'duration': entry.get('duration'),
+                                'uploader': entry.get('uploader'),
+                            }
+            except Exception as e:
+                print(f"Error reading playlist info: {e}")
+    
+    return video_info
+

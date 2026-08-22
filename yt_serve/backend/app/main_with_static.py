@@ -1,22 +1,21 @@
 """
-FastAPI main application with static file serving for production builds
+FastAPI main application with static file serving for production builds and SPA routing
 """
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
-from sqlalchemy.orm import Session
+from fastapi.responses import JSONResponse, FileResponse
 from pathlib import Path
-import asyncio
 import os
+import traceback
 
+from app.api.v1.router import router as api_v1_router
 from app.api import playlists, downloads, config, websocket
 from app.core.config import settings
-from app.models.database import get_db, Playlist
 
 app = FastAPI(
-    title="Playlist Manager API",
-    description="Backend API for playlist management with embedded frontend",
+    title="YouTube Playlist Manager API",
+    description="Backend API and web interface for YouTube playlist management",
     version="2.0.0"
 )
 
@@ -29,122 +28,34 @@ async def startup_event():
     
     from app.models.database import SessionLocal, Playlist, Job
     from app.services.ytdlp_service import DownloadService
-    from app.services.job_manager import JobManager
     
     db = SessionLocal()
     try:
+        playlists_list = db.query(Playlist).all()
+        playlists_map = {p.id: p for p in playlists_list}
+        
         # Step 1: Check for interrupted jobs
         print("Checking for interrupted jobs...")
         interrupted_jobs = db.query(Job).filter(Job.status == 'running').all()
         
         if interrupted_jobs:
-            print(f"\n⚠️  Found {len(interrupted_jobs)} interrupted job(s):")
+            print(f"\nFound {len(interrupted_jobs)} interrupted job(s):")
             for job in interrupted_jobs:
-                playlist_title = job.playlist.title if job.playlist else "Unknown"
-                print(f"  - Job #{job.id}: {job.job_type} for '{playlist_title}'")
-                print(f"    Started: {job.created_at}")
-            
-            print(f"\nThese jobs were running when the server was last stopped.")
-            print("What would you like to do?")
-            print("1. Resume interrupted jobs")
-            print("2. Cancel interrupted jobs")
-            print("3. Ask for each job individually")
-            
-            while True:
-                try:
-                    choice = input("\nEnter your choice (1/2/3): ").strip()
-                    if choice in ['1', '2', '3']:
-                        break
-                    print("Please enter 1, 2, or 3")
-                except (EOFError, KeyboardInterrupt):
-                    print("\nDefaulting to cancel all interrupted jobs...")
-                    choice = '2'
-                    break
-            
-            job_manager = JobManager()
-            
-            if choice == '1':
-                # Resume all jobs
-                print(f"\n🔄 Resuming {len(interrupted_jobs)} interrupted jobs...")
-                for job in interrupted_jobs:
-                    try:
-                        # Reset job status and restart
-                        job.status = 'pending'
-                        job.error_message = None
-                        db.commit()
-                        
-                        # Start the job in background
-                        await job_manager.start_job(job.id)
-                        print(f"  ✓ Resumed job #{job.id}")
-                    except Exception as e:
-                        print(f"  ✗ Failed to resume job #{job.id}: {e}")
-                        job.status = 'failed'
-                        job.error_message = f"Failed to resume: {str(e)}"
-                        db.commit()
-            
-            elif choice == '2':
-                # Cancel all jobs
-                print(f"\n❌ Cancelling {len(interrupted_jobs)} interrupted jobs...")
-                for job in interrupted_jobs:
-                    job.status = 'cancelled'
-                    job.error_message = 'Cancelled during server startup'
-                    print(f"  ✓ Cancelled job #{job.id}")
-                db.commit()
-            
-            elif choice == '3':
-                # Ask for each job individually
-                print(f"\n🤔 Asking for each job individually...")
-                for job in interrupted_jobs:
-                    playlist_title = job.playlist.title if job.playlist else "Unknown"
-                    print(f"\nJob #{job.id}: {job.job_type} for '{playlist_title}'")
-                    print(f"Started: {job.created_at}")
-                    
-                    while True:
-                        try:
-                            individual_choice = input("Resume this job? (y/n): ").strip().lower()
-                            if individual_choice in ['y', 'yes']:
-                                try:
-                                    job.status = 'pending'
-                                    job.error_message = None
-                                    db.commit()
-                                    await job_manager.start_job(job.id)
-                                    print(f"  ✓ Resumed job #{job.id}")
-                                except Exception as e:
-                                    print(f"  ✗ Failed to resume job #{job.id}: {e}")
-                                    job.status = 'failed'
-                                    job.error_message = f"Failed to resume: {str(e)}"
-                                    db.commit()
-                                break
-                            elif individual_choice in ['n', 'no']:
-                                job.status = 'cancelled'
-                                job.error_message = 'Cancelled by user during startup'
-                                db.commit()
-                                print(f"  ✓ Cancelled job #{job.id}")
-                                break
-                            else:
-                                print("Please enter 'y' for yes or 'n' for no")
-                        except (EOFError, KeyboardInterrupt):
-                            print(f"\n  ✓ Cancelled job #{job.id} (interrupted)")
-                            job.status = 'cancelled'
-                            job.error_message = 'Cancelled by user during startup'
-                            db.commit()
-                            break
-            
-            print(f"\n✓ Interrupted job handling complete")
+                playlist = playlists_map.get(job.playlist_id)
+                playlist_title = playlist.title if playlist else "Unknown Playlist"
+                print(f"  - Job #{job.id}: {job.job_type} for '{playlist_title}' (started {job.created_at})")
+            print("Interrupted jobs will be presented to the user via the UI recovery dialog.\n")
         else:
-            print("✓ No interrupted jobs found")
+            print("No interrupted jobs found")
+        
+        if not playlists_list:
+            print("No playlists found")
+            return
         
         # Step 2: Refresh playlist stats
         print(f"\n{'='*60}")
         print("Refreshing playlist stats...")
         print("="*60)
-        
-        playlists_list = db.query(Playlist).all()
-        if not playlists_list:
-            print("No playlists found")
-            return
-        
-        print(f"Found {len(playlists_list)} playlists to refresh")
         
         download_service = DownloadService(settings.BASE_DOWNLOAD_PATH, {
             "audio_extract_mode": settings.AUDIO_EXTRACT_MODE,
@@ -169,11 +80,11 @@ async def startup_event():
                 playlist.unavailable_count = unavailable_count
                 db.commit()
                 
-                status = "✓ Caught up" if local_count >= available_count else f"⚠ {available_count - local_count} new"
+                status = "Caught up" if local_count >= available_count else f"{available_count - local_count} new"
                 print(f"{status} ({local_count}/{available_count})")
                 
             except Exception as e:
-                print(f"✗ Error: {str(e)}")
+                print(f"Error: {str(e)}")
         
         print("="*60)
         print("Startup complete!")
@@ -181,49 +92,57 @@ async def startup_event():
         
     except Exception as e:
         print(f"Error during startup: {e}")
+        traceback.print_exc()
     finally:
         db.close()
 
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:8000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include API routers FIRST - this is critical for proper routing
-print("Registering API routers...")
+# Register API v1 and legacy /api routes
+app.include_router(api_v1_router, prefix="/api/v1")
 app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
-print("✓ Playlists router registered at /api/playlists")
 app.include_router(downloads.router, prefix="/api/downloads", tags=["downloads"])
-print("✓ Downloads router registered at /api/downloads")
 app.include_router(config.router, prefix="/api/config", tags=["config"])
-print("✓ Config router registered at /api/config")
 app.include_router(websocket.router, prefix="/ws", tags=["websocket"])
-print("✓ WebSocket router registered at /ws")
 
-# Static file serving - mount AFTER API routers
-static_dir = Path(__file__).parent.parent / "static"
-if static_dir.exists():
-    print(f"✓ Serving static files from: {static_dir}")
+@app.get("/api/health")
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy"}
+
+@app.get("/api/test")
+async def test_endpoint():
+    """Simple test endpoint"""
+    return {"message": "API is working", "endpoint": "/api/test"}
+
+# Static file serving & SPA routing
+possible_static_dirs = [
+    Path(__file__).parent.parent / "static",
+    Path(__file__).parent.parent.parent / "frontend" / "dist",
+    Path("/app/backend/static"),
+    Path("/app/frontend/dist")
+]
+
+static_dir = None
+for s_dir in possible_static_dirs:
+    if s_dir.exists() and (s_dir / "index.html").exists():
+        static_dir = s_dir
+        break
+
+if static_dir:
+    print(f"Serving static frontend from: {static_dir}")
     
-    # Mount static assets only
-    app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="static")
+    if (static_dir / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
     
-    # Serve index.html for root
-    @app.get("/")
-    async def serve_frontend():
-        """Serve the React app's index.html for the root route"""
-        print("DEBUG: Root route (/) hit")
-        index_file = static_dir / "index.html"
-        if index_file.exists():
-            return FileResponse(index_file)
-        else:
-            return {"message": "Frontend not built. Run 'npm run build' in frontend directory."}
-    
-    # Handle specific static files
     @app.get("/favicon.ico")
     async def favicon():
         favicon_file = static_dir / "favicon.ico"
@@ -238,36 +157,34 @@ if static_dir.exists():
             return FileResponse(vite_file)
         raise HTTPException(status_code=404)
     
-    # TODO: Add SPA fallback later - testing API first
-    
-    # TODO: SPA fallback disabled for debugging - API routes should work first
-    # Will re-enable once API routing is confirmed working
+    @app.get("/")
+    async def serve_index():
+        return FileResponse(static_dir / "index.html")
+
+    # SPA catch-all fallback route
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        if full_path.startswith(("api/", "ws/", "docs", "redoc", "openapi.json")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        
+        potential_file = static_dir / full_path
+        if potential_file.is_file():
+            return FileResponse(potential_file)
+        
+        return FileResponse(static_dir / "index.html")
 
 else:
-    print("⚠ Static directory not found. Frontend will not be served.")
-    print(f"   Expected: {static_dir}")
-    print("   Run the build script to create static files.")
+    print("Static directory not found. Serving API mode only.")
     
     @app.get("/")
     async def root():
         """Root endpoint when no static files available"""
         return {
-            "message": "Playlist Manager API",
+            "message": "YouTube Playlist Manager API",
             "version": "2.0.0",
             "docs": "/docs",
-            "redoc": "/redoc",
-            "note": "Frontend not available. Run build script to enable web interface."
+            "redoc": "/redoc"
         }
-
-@app.get("/api/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy"}
-
-@app.get("/api/test")
-async def test_endpoint():
-    """Simple test endpoint"""
-    return {"message": "API is working", "endpoint": "/api/test"}
 
 if __name__ == "__main__":
     import uvicorn
@@ -275,5 +192,5 @@ if __name__ == "__main__":
         "app.main_with_static:app",
         host="0.0.0.0",
         port=8000,
-        reload=True
+        reload=False
     )

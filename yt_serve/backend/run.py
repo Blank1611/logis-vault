@@ -15,9 +15,9 @@ if __name__ == "__main__":
     print()
     
     uvicorn.run(
-        "app.main_with_static:app",  # Use the static-enabled version
+        "app.main:app",
         host="0.0.0.0",
         port=8000,
-        reload=False,  # Disable reload for production
+        reload=False,
         log_level="info"
     )

@@ -97,6 +97,65 @@ class JobManager:
         self.download_services[job.id] = download_service  # Store for cancellation
         
         return job.id
+
+    async def start_job(self, job_id: int) -> int:
+        """
+        Start or resume an existing job by ID
+        """
+        from app.models.database import SessionLocal
+        from app.api.websocket import manager as ws_manager
+        
+        db = SessionLocal()
+        try:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if not job:
+                raise ValueError(f"Job {job_id} not found")
+            
+            playlist = db.query(Playlist).filter(Playlist.id == job.playlist_id).first()
+            if not playlist:
+                raise ValueError(f"Playlist {job.playlist_id} not found for job {job_id}")
+            
+            download_service = DownloadService(settings.BASE_DOWNLOAD_PATH, {
+                "audio_extract_mode": settings.AUDIO_EXTRACT_MODE,
+                "max_extraction_workers": settings.MAX_CONCURRENT_EXTRACTIONS,
+                "batch_size": settings.BATCH_SIZE,
+                "use_browser_cookies": settings.USE_BROWSER_COOKIES,
+                "browser_name": settings.BROWSER_NAME,
+                "cookies_file": settings.COOKIES_FILE,
+            })
+            
+            async def log_callback(j_id, message):
+                await ws_manager.send_message({
+                    "type": "log",
+                    "message": message,
+                    "timestamp": str(datetime.utcnow())
+                }, j_id)
+            
+            async def progress_callback(j_id, progress, completed, total):
+                await ws_manager.send_message({
+                    "type": "progress",
+                    "progress": progress,
+                    "completed": completed,
+                    "total": total
+                }, j_id)
+            
+            task = asyncio.create_task(
+                self._run_job(
+                    job.id,
+                    playlist,
+                    job.job_type,
+                    download_service,
+                    log_callback,
+                    progress_callback
+                )
+            )
+            self.active_jobs[job.id] = task
+            self.cancel_flags[job.id] = False
+            self.download_services[job.id] = download_service
+            return job.id
+        finally:
+            db.close()
+
     
     async def _run_job(
         self,
@@ -430,7 +489,7 @@ class JobManager:
             os.makedirs(audio_folder, exist_ok=True)
             
             # Find ffmpeg
-            ffmpeg_path = tools._find_ffmpeg_windows()
+            ffmpeg_path = tools._find_ffmpeg()
             if not ffmpeg_path:
                 raise RuntimeError("FFmpeg not found")
             

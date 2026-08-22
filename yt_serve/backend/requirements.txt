@@ -19,6 +19,3 @@ yt-dlp[default]>=2024.12.3
 python-dotenv>=1.0.1
 aiofiles>=24.1.0
 
-# Windows automation (for folder opening in foreground)
-pywinauto>=0.6.8; sys_platform == "win32"
-pywin32>=306; sys_platform == "win32"
