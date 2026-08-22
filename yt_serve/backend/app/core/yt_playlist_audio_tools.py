@@ -596,6 +596,138 @@ def _find_ffmpeg() -> Optional[str]:
 
     return None
 
+def _find_ffprobe() -> Optional[str]:
+    possible_names = ['ffprobe', 'ffprobe.exe']
+    for name in possible_names:
+        path = shutil.which(name)
+        if path:
+            return path
+
+    common_paths = [
+        "/usr/bin/ffprobe",
+        "/usr/local/bin/ffprobe",
+        r"C:\ffmpeg\bin\ffprobe.exe",
+        r"C:\Program Files\ffmpeg\bin\ffprobe.exe",
+        r"%LOCALAPPDATA%\Programs\ffmpeg\bin\ffprobe.exe",
+    ]
+    for path_template in common_paths:
+        path = os.path.expandvars(path_template)
+        if os.path.exists(path):
+            return path
+
+    return None
+
+def _cleanup_stale_part_files(playlist_folder: str, vid: str):
+    """
+    Safeguard 1: Purge any partial/temporary download files or 0-byte containers
+    for a specific video ID before starting fresh download.
+    """
+    try:
+        vid_lower = vid.lower()
+        if not os.path.isdir(playlist_folder):
+            return
+            
+        for filename in os.listdir(playlist_folder):
+            full_path = os.path.join(playlist_folder, filename)
+            if not os.path.isfile(full_path):
+                continue
+                
+            fn_lower = filename.lower()
+            if vid_lower in fn_lower:
+                is_part = any(fn_lower.endswith(ext) for ext in (".part", ".ytdl", ".temp", ".tmp"))
+                is_zero_byte = False
+                if any(fn_lower.endswith(ext) for ext in (".mp4", ".mkv", ".webm", ".m4v")):
+                    try:
+                        if os.path.getsize(full_path) < 1024:  # Less than 1 KB
+                            is_zero_byte = True
+                    except OSError:
+                        pass
+                        
+                if is_part or is_zero_byte:
+                    try:
+                        os.remove(full_path)
+                        _log(f"  [Safeguard 1] Removed stale/incomplete file: {filename}")
+                    except Exception as e:
+                        _log(f"  [Safeguard 1] Warning: Could not remove {filename}: {e}")
+    except Exception as e:
+        _log(f"  [Safeguard 1] Warning during stale file cleanup: {e}")
+
+def _verify_video_stream_integrity(file_path: str) -> dict:
+    """
+    Safeguard 2: Experimental audio and video stream verification using ffprobe.
+    Checks that the video container has valid duration and at least one audio stream.
+    Falls back gracefully on any error.
+    """
+    result = {
+        "valid": True,
+        "has_video": True,
+        "has_audio": True,
+        "duration": None,
+        "error": None,
+        "details": {}
+    }
+    
+    if not file_path or not os.path.isfile(file_path):
+        result["valid"] = False
+        result["error"] = "File does not exist"
+        return result
+        
+    try:
+        size = os.path.getsize(file_path)
+        if size < 10240:  # Less than 10 KB
+            result["valid"] = False
+            result["error"] = f"File is too small ({size} bytes)"
+            return result
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+        
+    ffprobe = _find_ffprobe()
+    if not ffprobe:
+        # Graceful fallback: ffprobe not found, pass through
+        result["details"]["note"] = "ffprobe not found, skipping stream inspection"
+        return result
+        
+    try:
+        import subprocess
+        import json
+        cmd = [
+            ffprobe,
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_streams",
+            "-show_format",
+            file_path
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if proc.returncode != 0:
+            result["details"]["probe_error"] = proc.stderr
+            return result  # Fallback to valid=True
+            
+        data = json.loads(proc.stdout)
+        streams = data.get("streams", [])
+        has_video = any(s.get("codec_type") == "video" for s in streams)
+        has_audio = any(s.get("codec_type") == "audio" for s in streams)
+        
+        result["has_video"] = has_video
+        result["has_audio"] = has_audio
+        
+        format_info = data.get("format", {})
+        if "duration" in format_info:
+            try:
+                result["duration"] = float(format_info["duration"])
+            except (ValueError, TypeError):
+                pass
+                
+        if not has_audio:
+            result["valid"] = False
+            result["error"] = "No audio stream found in video container"
+            
+    except Exception as e:
+        result["details"]["exception"] = str(e)
+        
+    return result
+
 # Alias for backwards compatibility
 _find_ffmpeg_windows = _find_ffmpeg
 
@@ -1362,7 +1494,16 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
 
         if USER_AGENT:
             common_opts["user_agent"] = USER_AGENT
-        common_opts.update(_base_speed_opts())
+        common_opts["overwrites"] = True
+        common_opts["continuedl"] = False
+        common_opts["retries"] = 10
+        common_opts["fragment_retries"] = 10
+        common_opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["android", "ios", "web_creator", "mweb", "web"],
+                "player_skip": ["configs", "webpage_signature"]
+            }
+        }
 
         ydl_opts = {
             "format": "bestvideo+bestaudio/best",
@@ -1423,6 +1564,9 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                                 continue
                             else:
                                 _log(f"  File not found despite being in archive - will attempt re-download")
+                        
+                        # Safeguard 1: Purge stale .part or 0-byte files before download
+                        _cleanup_stale_part_files(playlist_folder, vid)
                         
                         # Download the video
                         download_result = ydl.download([video_url])
@@ -1497,6 +1641,26 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                                 _log(f"  ✗ Alternative search failed: {e}")
                         
                         if video_path:
+                            # Safeguard 2 (Experimental & Opt-in): Check stream integrity
+                            from app.core.config import settings
+                            if getattr(settings, "ENABLE_STREAM_INTEGRITY_CHECK", False):
+                                try:
+                                    integrity = _verify_video_stream_integrity(video_path)
+                                    if not integrity.get("valid", True):
+                                        _log(f"  [Safeguard 2] Warning: Stream integrity check failed for {os.path.basename(video_path)}: {integrity.get('error')}")
+                                        _log(f"  [Safeguard 2] Removing corrupted file and retrying download...")
+                                        try:
+                                            os.remove(video_path)
+                                            _cleanup_stale_part_files(playlist_folder, vid)
+                                            ydl.download([video_url])
+                                            video_path = _get_video_file_path(playlist_folder, vid, wait_for_file=True)
+                                        except Exception as retry_err:
+                                            _log(f"  [Safeguard 2] Re-download attempt error: {retry_err} (falling back to standard flow)")
+                                    else:
+                                        _log(f"  [Safeguard 2] Stream integrity verified (audio={integrity.get('has_audio')}, video={integrity.get('has_video')})")
+                                except Exception as safeguard_err:
+                                    _log(f"  [Safeguard 2] Probe error: {safeguard_err} (falling back to standard flow)")
+
                             _log(f"  ✓ Download verified, adding {vid} to archive")
                             _add_to_custom_archive(archive_file, vid)
                             successfully_downloaded.append(vid)

@@ -273,6 +273,27 @@ async def get_job_logs(
         for line in log_lines
     ]
 
+@router.get("/jobs/{job_id}/download-log")
+async def download_job_log(
+    job_id: int,
+    db: Session = Depends(get_db)
+):
+    """Download raw log file for a job"""
+    from fastapi.responses import FileResponse
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    log_file = job_manager._get_log_file_path(job_id)
+    if not os.path.isfile(log_file):
+        raise HTTPException(status_code=404, detail="Log file does not exist for this job")
+        
+    return FileResponse(
+        path=log_file,
+        filename=f"job_{job_id}.log",
+        media_type="text/plain"
+    )
+
 # ============================================================================
 # INTERRUPTED JOBS ENDPOINTS (for UI-based recovery dialog)
 # ============================================================================
@@ -416,4 +437,58 @@ async def handle_interrupted_jobs(
         resumed=resumed_count,
         cancelled=cancelled_count
     )
+
+class IntegrityTestRequest(BaseModel):
+    file_path: Optional[str] = None
+    playlist_id: Optional[int] = None
+    video_id: Optional[str] = None
+
+class IntegrityTestResponse(BaseModel):
+    file_path: str
+    valid: bool
+    has_video: bool
+    has_audio: bool
+    duration: Optional[float] = None
+    error: Optional[str] = None
+    details: dict
+
+@router.post("/test-integrity", response_model=IntegrityTestResponse)
+async def test_integrity(
+    request: IntegrityTestRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Test stream integrity for a specific video file or playlist video.
+    Safeguard 2 testing tool using ffprobe.
+    """
+    from app.core import yt_playlist_audio_tools as tools
+    import os
+    
+    file_to_check = request.file_path
+    
+    if not file_to_check and request.playlist_id and request.video_id:
+        playlist = db.query(Playlist).filter(Playlist.id == request.playlist_id).first()
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+        safe_title = tools._sanitize_title(playlist.title)
+        playlist_folder = os.path.join(settings.BASE_DOWNLOAD_PATH, safe_title)
+        file_to_check = tools._get_video_file_path(playlist_folder, request.video_id, wait_for_file=False)
+        if not file_to_check:
+            raise HTTPException(status_code=404, detail=f"No video file found for video ID {request.video_id}")
+            
+    if not file_to_check or not os.path.isfile(file_to_check):
+        raise HTTPException(status_code=400, detail="Invalid file path or file not found")
+        
+    result = tools._verify_video_stream_integrity(file_to_check)
+    
+    return IntegrityTestResponse(
+        file_path=file_to_check,
+        valid=result.get("valid", True),
+        has_video=result.get("has_video", False),
+        has_audio=result.get("has_audio", False),
+        duration=result.get("duration"),
+        error=result.get("error"),
+        details=result.get("details", {})
+    )
+
 

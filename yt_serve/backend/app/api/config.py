@@ -21,6 +21,8 @@ class ConfigResponse(BaseModel):
     cookies_file: Optional[str]
     use_browser_cookies: bool
     browser_name: str
+    enable_stream_integrity_check: bool
+    flaresolverr_url: Optional[str]
     needs_setup: bool  # Flag for first-run setup
 
 class ConfigUpdate(BaseModel):
@@ -33,6 +35,8 @@ class ConfigUpdate(BaseModel):
     cookies_file: Optional[str] = None
     use_browser_cookies: Optional[bool] = None
     browser_name: Optional[str] = None
+    enable_stream_integrity_check: Optional[bool] = None
+    flaresolverr_url: Optional[str] = None
 
 def _check_needs_setup() -> bool:
     """Check if initial setup is needed"""
@@ -64,6 +68,8 @@ async def get_config():
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
+        enable_stream_integrity_check=getattr(settings, "ENABLE_STREAM_INTEGRITY_CHECK", False),
+        flaresolverr_url=getattr(settings, "FLARESOLVERR_URL", None),
         needs_setup=_check_needs_setup()
     )
 
@@ -98,6 +104,10 @@ def _save_to_env(config: ConfigUpdate):
         env_content['USE_BROWSER_COOKIES'] = 'true' if config.use_browser_cookies else 'false'
     if config.browser_name is not None:
         env_content['BROWSER_NAME'] = config.browser_name
+    if config.enable_stream_integrity_check is not None:
+        env_content['ENABLE_STREAM_INTEGRITY_CHECK'] = 'true' if config.enable_stream_integrity_check else 'false'
+    if config.flaresolverr_url is not None:
+        env_content['FLARESOLVERR_URL'] = config.flaresolverr_url if config.flaresolverr_url else ''
     
     # Write back to .env
     with open(env_path, 'w', encoding='utf-8') as f:
@@ -127,6 +137,10 @@ async def update_config(config: ConfigUpdate):
         settings.USE_BROWSER_COOKIES = config.use_browser_cookies
     if config.browser_name is not None:
         settings.BROWSER_NAME = config.browser_name
+    if config.enable_stream_integrity_check is not None:
+        settings.ENABLE_STREAM_INTEGRITY_CHECK = config.enable_stream_integrity_check
+    if config.flaresolverr_url is not None:
+        settings.FLARESOLVERR_URL = config.flaresolverr_url
     
     # Persist to .env file
     _save_to_env(config)
@@ -140,5 +154,294 @@ async def update_config(config: ConfigUpdate):
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
+        enable_stream_integrity_check=getattr(settings, "ENABLE_STREAM_INTEGRITY_CHECK", False),
+        flaresolverr_url=getattr(settings, "FLARESOLVERR_URL", None),
         needs_setup=_check_needs_setup()
     )
+
+class YtDlpVersionResponse(BaseModel):
+    version: str
+
+class YtDlpUpdateResponse(BaseModel):
+    success: bool
+    message: str
+    old_version: str
+    new_version: str
+    output: str
+
+class FlareSolverrTestRequest(BaseModel):
+    url: Optional[str] = None
+
+class FlareSolverrTestResponse(BaseModel):
+    success: bool
+    message: str
+    version: Optional[str] = None
+    response_time_ms: Optional[float] = None
+
+@router.get("/ytdlp-version", response_model=YtDlpVersionResponse)
+async def get_ytdlp_version():
+    """Get current yt-dlp version"""
+    import yt_dlp.version
+    return YtDlpVersionResponse(version=yt_dlp.version.__version__)
+
+@router.post("/update-ytdlp", response_model=YtDlpUpdateResponse)
+async def update_ytdlp():
+    """Update yt-dlp package using pip"""
+    import sys
+    import subprocess
+    import yt_dlp.version
+    import importlib
+    
+    old_version = yt_dlp.version.__version__
+    
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        try:
+            importlib.reload(yt_dlp.version)
+            new_version = yt_dlp.version.__version__
+        except Exception:
+            new_version = old_version
+            
+        if proc.returncode == 0:
+            return YtDlpUpdateResponse(
+                success=True,
+                message=f"yt-dlp updated successfully: {old_version} -> {new_version}",
+                old_version=old_version,
+                new_version=new_version,
+                output=proc.stdout
+            )
+        else:
+            return YtDlpUpdateResponse(
+                success=False,
+                message=f"Failed to update yt-dlp: {proc.stderr}",
+                old_version=old_version,
+                new_version=old_version,
+                output=proc.stderr
+            )
+    except Exception as e:
+        return YtDlpUpdateResponse(
+            success=False,
+            message=f"Error updating yt-dlp: {str(e)}",
+            old_version=old_version,
+            new_version=old_version,
+            output=str(e)
+        )
+
+@router.post("/test-flaresolverr", response_model=FlareSolverrTestResponse)
+async def test_flaresolverr(request: Optional[FlareSolverrTestRequest] = None):
+    """Test connectivity to FlareSolverr container"""
+    import urllib.request
+    import json
+    import time
+    
+    target_url = (request.url if request and request.url else getattr(settings, "FLARESOLVERR_URL", None)) or "http://localhost:8191/v1"
+    target_url = target_url.rstrip("/")
+    if not target_url.endswith("/v1"):
+        endpoint = f"{target_url}/v1"
+    else:
+        endpoint = target_url
+        
+    start_time = time.time()
+    try:
+        req = urllib.request.Request(
+            endpoint,
+            data=json.dumps({"cmd": "sessions.list"}).encode('utf-8'),
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            resp_time = round((time.time() - start_time) * 1000, 2)
+            data = json.loads(response.read().decode('utf-8'))
+            version = data.get("version", "Unknown")
+            return FlareSolverrTestResponse(
+                success=True,
+                message=f"Connected to FlareSolverr successfully! (v{version})",
+                version=version,
+                response_time_ms=resp_time
+            )
+    except Exception as e:
+        return FlareSolverrTestResponse(
+            success=False,
+            message=f"Failed to connect to FlareSolverr at {endpoint}: {str(e)}"
+        )
+
+# ============================================================================
+# COOKIES MANAGEMENT & EXPIRATION DETECTION
+# ============================================================================
+
+from fastapi import UploadFile, File
+
+class CookieStatusResponse(BaseModel):
+    is_installed: bool
+    status: str  # "valid", "expiring_soon", "expired", "invalid", "not_installed"
+    status_message: str
+    file_path: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    last_modified: Optional[str] = None
+    earliest_expiration: Optional[str] = None
+    days_remaining: Optional[int] = None
+    auth_cookies_found: List[str] = []
+
+def _parse_cookie_file_status(file_path: Optional[str]) -> CookieStatusResponse:
+    """Parse Netscape format cookies file and evaluate expiration/staleness"""
+    import time
+    from datetime import datetime
+    
+    if not file_path or not os.path.isfile(file_path):
+        return CookieStatusResponse(
+            is_installed=False,
+            status="not_installed",
+            status_message="No cookies file installed (using mobile client emulation)",
+            auth_cookies_found=[]
+        )
+        
+    try:
+        stat = os.stat(file_path)
+        file_size = stat.st_size
+        last_mod = datetime.utcfromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        
+        auth_cookie_names = {"LOGIN_INFO", "__Secure-1PSID", "__Secure-3PSID", "SID", "SAPISID", "SSID", "HSID"}
+        found_auth_cookies = set()
+        expiration_timestamps = []
+        
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split('\t')
+                if len(parts) >= 7:
+                    cookie_name = parts[5].strip()
+                    try:
+                        expiry = int(parts[4].strip())
+                        if cookie_name in auth_cookie_names:
+                            found_auth_cookies.add(cookie_name)
+                            if expiry > 0:  # Exclude session-only cookies
+                                expiration_timestamps.append(expiry)
+                    except ValueError:
+                        pass
+                        
+        if not found_auth_cookies:
+            return CookieStatusResponse(
+                is_installed=True,
+                status="invalid",
+                status_message="Cookies file is installed, but no YouTube session login cookies were found",
+                file_path=file_path,
+                file_size_bytes=file_size,
+                last_modified=last_mod,
+                auth_cookies_found=[]
+            )
+            
+        current_time = time.time()
+        if not expiration_timestamps:
+            return CookieStatusResponse(
+                is_installed=True,
+                status="valid",
+                status_message="Cookies Active (Session tokens detected)",
+                file_path=file_path,
+                file_size_bytes=file_size,
+                last_modified=last_mod,
+                auth_cookies_found=sorted(list(found_auth_cookies))
+            )
+            
+        earliest_expiry = min(expiration_timestamps)
+        earliest_dt = datetime.utcfromtimestamp(earliest_expiry)
+        earliest_str = earliest_dt.strftime("%Y-%m-%d")
+        seconds_left = earliest_expiry - current_time
+        days_left = int(seconds_left // 86400)
+        
+        if seconds_left < 0:
+            return CookieStatusResponse(
+                is_installed=True,
+                status="expired",
+                status_message=f"Cookies Expired on {earliest_str} ({abs(days_left)} days ago). Please upload a fresh cookies.txt.",
+                file_path=file_path,
+                file_size_bytes=file_size,
+                last_modified=last_mod,
+                earliest_expiration=earliest_str,
+                days_remaining=days_left,
+                auth_cookies_found=sorted(list(found_auth_cookies))
+            )
+        elif days_left <= 7:
+            return CookieStatusResponse(
+                is_installed=True,
+                status="expiring_soon",
+                status_message=f"Cookies Expiring Soon (in {days_left} day{'s' if days_left != 1 else ''} on {earliest_str}).",
+                file_path=file_path,
+                file_size_bytes=file_size,
+                last_modified=last_mod,
+                earliest_expiration=earliest_str,
+                days_remaining=days_left,
+                auth_cookies_found=sorted(list(found_auth_cookies))
+            )
+        else:
+            return CookieStatusResponse(
+                is_installed=True,
+                status="valid",
+                status_message=f"Cookies Active & Valid (Expires in {days_left} days on {earliest_str})",
+                file_path=file_path,
+                file_size_bytes=file_size,
+                last_modified=last_mod,
+                earliest_expiration=earliest_str,
+                days_remaining=days_left,
+                auth_cookies_found=sorted(list(found_auth_cookies))
+            )
+            
+    except Exception as e:
+        return CookieStatusResponse(
+            is_installed=True,
+            status="invalid",
+            status_message=f"Error reading cookies file: {str(e)}",
+            file_path=file_path,
+            auth_cookies_found=[]
+        )
+
+@router.get("/cookies-status", response_model=CookieStatusResponse)
+async def get_cookies_status():
+    """Get current cookie status, staleness, and expiration date"""
+    return _parse_cookie_file_status(settings.COOKIES_FILE)
+
+@router.post("/upload-cookies", response_model=CookieStatusResponse)
+async def upload_cookies(file: UploadFile = File(...)):
+    """Upload a new cookies.txt file directly via web UI"""
+    data_dir = Path(__file__).parent.parent.parent.parent / "data"
+    if not data_dir.exists():
+        data_dir = Path(settings.BASE_DOWNLOAD_PATH)
+    os.makedirs(data_dir, exist_ok=True)
+    
+    target_path = data_dir / "cookies.txt"
+    
+    content = await file.read()
+    with open(target_path, "wb") as f:
+        f.write(content)
+        
+    target_path_str = str(target_path.resolve())
+    settings.COOKIES_FILE = target_path_str
+    
+    update_data = ConfigUpdate(cookies_file=target_path_str)
+    _save_to_env(update_data)
+    
+    return _parse_cookie_file_status(target_path_str)
+
+@router.delete("/cookies", response_model=CookieStatusResponse)
+async def delete_cookies():
+    """Remove installed cookies file and clear setting"""
+    if settings.COOKIES_FILE and os.path.exists(settings.COOKIES_FILE):
+        try:
+            os.remove(settings.COOKIES_FILE)
+        except Exception:
+            pass
+            
+    settings.COOKIES_FILE = None
+    update_data = ConfigUpdate(cookies_file="")
+    _save_to_env(update_data)
+    
+    return _parse_cookie_file_status(None)
+
+
+

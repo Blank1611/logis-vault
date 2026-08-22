@@ -25,17 +25,69 @@ class JobManager:
         # Ensure logs directory exists
         self.logs_dir = os.path.join(settings.BASE_DOWNLOAD_PATH, "logs")
         os.makedirs(self.logs_dir, exist_ok=True)
+        
+        # Concurrency semaphore for video downloads
+        self._download_semaphore: Optional[asyncio.Semaphore] = None
+    
+    def _get_download_semaphore(self) -> asyncio.Semaphore:
+        """Get or initialize the global download concurrency semaphore"""
+        if self._download_semaphore is None:
+            max_concurrent = max(1, getattr(settings, "MAX_CONCURRENT_DOWNLOADS", 1))
+            self._download_semaphore = asyncio.Semaphore(max_concurrent)
+        return self._download_semaphore
+
     
     def _get_log_file_path(self, job_id: int) -> str:
         """Get log file path for a job"""
         return os.path.join(self.logs_dir, f"job_{job_id}.log")
     
-    def _write_log(self, job_id: int, message: str):
-        """Write log message to file"""
+    def _cleanup_old_logs(self, max_days: int = 30, max_files: int = 100):
+        """Clean up old job log files to prevent infinite disk accumulation"""
+        try:
+            if not os.path.isdir(self.logs_dir):
+                return
+            now = time.time()
+            log_files = []
+            for fname in os.listdir(self.logs_dir):
+                if fname.startswith("job_") and fname.endswith(".log"):
+                    fpath = os.path.join(self.logs_dir, fname)
+                    if os.path.isfile(fpath):
+                        mtime = os.path.getmtime(fpath)
+                        log_files.append((fpath, mtime))
+            
+            # Sort newest to oldest
+            log_files.sort(key=lambda x: x[1], reverse=True)
+            
+            # Delete files older than max_days or exceeding max_files
+            for idx, (fpath, mtime) in enumerate(log_files):
+                age_days = (now - mtime) / 86400
+                if age_days > max_days or idx >= max_files:
+                    try:
+                        os.remove(fpath)
+                    except OSError:
+                        pass
+        except Exception as e:
+            print(f"Warning during log cleanup: {e}")
+
+    def _write_log(self, job_id: int, message: str, level: Optional[str] = None):
+        """Write structured log message to file"""
         log_file = self._get_log_file_path(job_id)
         timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Infer level if not provided
+        if not level:
+            msg_lower = message.lower()
+            if "⚠️" in message or "warn" in msg_lower:
+                level = "WARN"
+            elif "✗" in message or "error" in msg_lower or "failed" in msg_lower:
+                level = "ERROR"
+            elif "✓" in message or "completed" in msg_lower or "success" in msg_lower or "verified" in msg_lower:
+                level = "SUCCESS"
+            else:
+                level = "INFO"
+                
         with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"[{timestamp}] {message}\n")
+            f.write(f"[{timestamp}] [{level}] {message}\n")
     
     async def create_download_job(
         self,
@@ -64,6 +116,9 @@ class JobManager:
         playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
         if not playlist:
             raise ValueError(f"Playlist {playlist_id} not found")
+        
+        # Periodic log cleanup
+        self._cleanup_old_logs()
         
         # Create job with initialized status fields
         job = Job(
@@ -234,14 +289,18 @@ class JobManager:
                 job.download_status = "pending"
                 db.commit()
                 
-                await log_wrapper("Starting download...")
-                
-                failed_ids = await download_service.download_playlist(
-                    playlist.url,
-                    set(playlist.excluded_ids or []),
-                    progress_callback=download_progress_wrapper,
-                    log_callback=log_wrapper
-                )
+                await log_wrapper("Waiting for download slot in queue...")
+                async with self._get_download_semaphore():
+                    job.download_status = "running"
+                    db.commit()
+                    await log_wrapper("Starting download...")
+                    
+                    failed_ids = await download_service.download_playlist(
+                        playlist.url,
+                        set(playlist.excluded_ids or []),
+                        progress_callback=download_progress_wrapper,
+                        log_callback=log_wrapper
+                    )
                 
                 # Update playlist
                 playlist.last_download = datetime.utcnow()
@@ -391,12 +450,6 @@ class JobManager:
     ):
         """Run download phase and publish downloaded videos to extraction queue"""
         try:
-            job = db.query(Job).filter(Job.id == job_id).first()
-            job.download_status = "running"
-            db.commit()
-            
-            await log_callback("Starting download phase...")
-            
             # Create callback to publish downloaded videos to extraction queue
             async def video_downloaded_callback(video_path: str):
                 """Called when a video is successfully downloaded"""
@@ -404,13 +457,22 @@ class JobManager:
                     await self.extraction_queues[job_id].put(video_path)
                     await log_callback(f"Video queued for extraction: {os.path.basename(video_path)}")
             
-            failed_ids = await download_service.download_playlist(
-                playlist.url,
-                set(playlist.excluded_ids or []),
-                progress_callback=progress_callback,
-                log_callback=log_callback,
-                video_downloaded_callback=video_downloaded_callback
-            )
+            await log_callback("Waiting for download slot in queue...")
+            async with self._get_download_semaphore():
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if job:
+                    job.download_status = "running"
+                    db.commit()
+                
+                await log_callback("Starting download phase...")
+                
+                failed_ids = await download_service.download_playlist(
+                    playlist.url,
+                    set(playlist.excluded_ids or []),
+                    progress_callback=progress_callback,
+                    log_callback=log_callback,
+                    video_downloaded_callback=video_downloaded_callback
+                )
             
             # Signal that download is complete (send None as sentinel)
             if job_id in self.extraction_queues:
@@ -673,15 +735,11 @@ class JobManager:
         Args:
             job_id: Job ID
             lines: Number of lines to return (from end), None for all
-        
-        Returns:
-            List of log lines
         """
         log_file = self._get_log_file_path(job_id)
-        
         if not os.path.exists(log_file):
             return []
-        
+            
         with open(log_file, "r", encoding="utf-8") as f:
             all_lines = f.readlines()
         
@@ -690,5 +748,30 @@ class JobManager:
         
         return all_lines
 
+    async def shutdown(self):
+        """Cancel all running jobs gracefully during server/container shutdown"""
+        print("[JobManager] Shutting down, cancelling active jobs...")
+        from app.models.database import SessionLocal
+        db = SessionLocal()
+        try:
+            for job_id in list(self.active_jobs.keys()):
+                print(f"[JobManager] Cancelling active job #{job_id}")
+                self.cancel_flags[job_id] = True
+                if job_id in self.download_services:
+                    self.download_services[job_id].cancel_current_job()
+                task = self.active_jobs.get(job_id)
+                if task and not task.done():
+                    task.cancel()
+                
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if job and job.status == 'running':
+                    job.error = 'Interrupted by server shutdown'
+                    db.commit()
+        except Exception as e:
+            print(f"[JobManager] Error during shutdown: {e}")
+        finally:
+            db.close()
+
 # Global job manager instance
 job_manager = JobManager()
+

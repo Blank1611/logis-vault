@@ -96,6 +96,14 @@ async def startup_event():
     finally:
         db.close()
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Graceful container/server shutdown"""
+    print("\n[Shutdown] Performing graceful shutdown...")
+    from app.services.job_manager import job_manager
+    await job_manager.shutdown()
+    print("[Shutdown] Complete.\n")
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,

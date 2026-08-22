@@ -1,12 +1,26 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { playlistsApi, jobsApi, configApi, type Config } from './services/api'
-import { PlayCircle, Download, Music, Trash2, RefreshCw, Plus, Loader2, Moon, Sun, Settings, FolderOpen, FileText, Edit3, X, FileText as LogIcon, Grid3x3, List, ExternalLink } from 'lucide-react'
+import { 
+  PlayCircle, Download, Music, Trash2, RefreshCw, Plus, Loader2, Moon, Sun, 
+  Settings, FolderOpen, FileText, Edit3, X, FileText as LogIcon, Grid3x3, List, 
+  ExternalLink, Search, Terminal, Copy, Check, DownloadCloud, RotateCcw, Activity 
+} from 'lucide-react'
 import type { Playlist, Job } from './services/types'
 import { useWebSocketEvents } from './hooks/useWebSocket'
 import { InterruptedJobsDialog } from './components/InterruptedJobsDialog'
 
+export interface ActivityLog {
+  id: string
+  timestamp: string
+  source: string
+  type: string
+  message: string
+  level: 'info' | 'warn' | 'error' | 'success'
+}
+
 function App() {
+  const [activeTab, setActiveTab] = useState<'playlists' | 'logs'>('playlists')
   const [newPlaylistUrl, setNewPlaylistUrl] = useState('')
   // const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const [showSettings, setShowSettings] = useState(false)
@@ -25,18 +39,30 @@ function App() {
     const saved = localStorage.getItem('darkMode')
     return saved ? JSON.parse(saved) : false
   })
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([])
   const queryClient = useQueryClient()
+
+  const addActivityLog = useCallback((source: string, type: string, message: string, level: 'info' | 'warn' | 'error' | 'success' = 'info') => {
+    const timestamp = new Date().toLocaleTimeString()
+    setActivityLogs(prev => [
+      { id: Math.random().toString(36).substring(2, 9), timestamp, source, type, message, level },
+      ...prev.slice(0, 499)
+    ])
+  }, [])
 
   // WebSocket event handler for real-time updates
   const handleWebSocketEvent = useCallback((type: string, data: any) => {
     if (type === 'playlist_updated') {
-      console.log('[UI] Playlist updated via WebSocket:', data)
+      addActivityLog('WebSocket', 'playlist_updated', `Playlist update signal received (ID: ${data?.playlist_id || 'all'})`, 'info')
       // Force immediate refetch of playlists
       queryClient.invalidateQueries({ queryKey: ['playlists'] })
       queryClient.refetchQueries({ queryKey: ['playlists'] })
-      console.log('[UI] Triggered playlist refetch')
+    } else if (type === 'connected') {
+      addActivityLog('WebSocket', 'connected', 'Connected to real-time events stream', 'success')
+    } else if (type === 'job_status') {
+      addActivityLog('JobQueue', 'status_change', `Job #${data?.job_id} status changed to ${data?.status}`, 'info')
     }
-  }, [queryClient])
+  }, [queryClient, addActivityLog])
 
   // Connect to WebSocket for real-time events
   useWebSocketEvents(handleWebSocketEvent)
@@ -233,39 +259,76 @@ function App() {
     return getPlaylistJobs(playlistId).find(j => j.status === 'running' || j.status === 'pending')
   }
 
+  const runningJobsCount = jobs?.filter(j => j.status === 'running' || j.status === 'pending').length || 0
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
       {/* Header */}
       <header className="bg-white dark:bg-gray-800 shadow">
-        <div className="max-w-7xl mx-auto px-4 py-6 flex justify-between items-center">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Playlist Manager</h1>
-          
-          <div className="flex gap-2">
-            {/* View Mode Toggle */}
-            <div className="flex gap-1 p-1 rounded-lg bg-gray-200 dark:bg-gray-700">
+        <div className="max-w-7xl mx-auto px-4 py-6 flex justify-between items-center flex-wrap gap-4">
+          <div className="flex items-center gap-6 flex-wrap">
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Playlist Manager</h1>
+
+            {/* Top Navigation Tabs */}
+            <div className="flex items-center gap-1 bg-gray-200 dark:bg-gray-700/70 p-1 rounded-xl">
               <button
-                onClick={() => setViewMode('grid')}
-                className={`p-2 rounded transition-colors ${
-                  viewMode === 'grid'
-                    ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-400'
-                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                onClick={() => setActiveTab('playlists')}
+                className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${
+                  activeTab === 'playlists'
+                    ? 'bg-white dark:bg-gray-800 text-blue-600 dark:text-blue-400 shadow-sm'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
                 }`}
-                title="Grid View"
               >
-                <Grid3x3 className="w-5 h-5" />
+                <PlayCircle className="w-4 h-4" />
+                Playlists
               </button>
               <button
-                onClick={() => setViewMode('list')}
-                className={`p-2 rounded transition-colors ${
-                  viewMode === 'list'
-                    ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-400'
-                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                onClick={() => setActiveTab('logs')}
+                className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${
+                  activeTab === 'logs'
+                    ? 'bg-white dark:bg-gray-800 text-blue-600 dark:text-blue-400 shadow-sm'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
                 }`}
-                title="List View"
               >
-                <List className="w-5 h-5" />
+                <FileText className="w-4 h-4" />
+                Job Logs
+                {runningJobsCount > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full text-xs font-bold bg-blue-600 text-white animate-pulse">
+                    {runningJobsCount}
+                  </span>
+                )}
               </button>
             </div>
+          </div>
+          
+          <div className="flex gap-2">
+            {/* View Mode Toggle (Only show on playlists tab) */}
+            {activeTab === 'playlists' && (
+              <div className="flex gap-1 p-1 rounded-lg bg-gray-200 dark:bg-gray-700">
+                <button
+                  onClick={() => setViewMode('grid')}
+                  className={`p-2 rounded transition-colors ${
+                    viewMode === 'grid'
+                      ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-400'
+                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                  }`}
+                  title="Grid View"
+                >
+                  <Grid3x3 className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={() => setViewMode('list')}
+                  className={`p-2 rounded transition-colors ${
+                    viewMode === 'list'
+                      ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-400'
+                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                  }`}
+                  title="List View"
+                >
+                  <List className="w-5 h-5" />
+                </button>
+              </div>
+            )}
             
             {/* Settings Button */}
             <button
@@ -293,9 +356,11 @@ function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-8">
-        {/* Add Playlist */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-8">
-          <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">Add Playlist</h2>
+        {activeTab === 'playlists' ? (
+          <>
+            {/* Add Playlist */}
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-8">
+              <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">Add Playlist</h2>
           <div className="flex gap-2">
             <input
               type="text"
@@ -831,6 +896,15 @@ function App() {
             <p>No playlists yet. Add one above to get started!</p>
           </div>
         )}
+          </>
+        ) : (
+          <JobLogsView
+            jobs={jobs || []}
+            playlists={playlists || []}
+            activityLogs={activityLogs}
+            onClearActivity={() => setActivityLogs([])}
+          />
+        )}
       </main>
 
       {/* Initial Setup Modal */}
@@ -1093,6 +1167,75 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     },
   })
 
+  const { data: ytdlpVersionData, refetch: refetchYtdlp } = useQuery({
+    queryKey: ['ytdlpVersion'],
+    queryFn: async () => {
+      const res = await configApi.getYtdlpVersion()
+      return res.data
+    },
+  })
+
+  const updateYtdlpMutation = useMutation({
+    mutationFn: () => configApi.updateYtdlp(),
+    onSuccess: (res) => {
+      if (res.data.success) {
+        alert(`yt-dlp updated successfully to version ${res.data.new_version}`)
+        refetchYtdlp()
+      } else {
+        alert(`Failed to update yt-dlp: ${res.data.message}`)
+      }
+    },
+    onError: (err: any) => {
+      alert(`Error updating yt-dlp: ${err.message}`)
+    },
+  })
+
+  const testFlareSolverrMutation = useMutation({
+    mutationFn: (url?: string) => configApi.testFlareSolverr(url),
+    onSuccess: (res) => {
+      if (res.data.success) {
+        alert(`✓ ${res.data.message} (${res.data.response_time_ms}ms)`)
+      } else {
+        alert(`✗ ${res.data.message}`)
+      }
+    },
+    onError: (err: any) => {
+      alert(`Error testing FlareSolverr: ${err.message}`)
+    },
+  })
+
+  const { data: cookieStatus, refetch: refetchCookieStatus } = useQuery({
+    queryKey: ['cookies-status'],
+    queryFn: async () => {
+      const res = await configApi.getCookiesStatus()
+      return res.data
+    },
+  })
+
+  const uploadCookiesMutation = useMutation({
+    mutationFn: (file: File) => configApi.uploadCookies(file),
+    onSuccess: (res) => {
+      refetchCookieStatus()
+      queryClient.invalidateQueries({ queryKey: ['config'] })
+      alert(`✓ ${res.data.status_message}`)
+    },
+    onError: (err: any) => {
+      alert(`Failed to upload cookies: ${err.message}`)
+    },
+  })
+
+  const deleteCookiesMutation = useMutation({
+    mutationFn: () => configApi.deleteCookies(),
+    onSuccess: () => {
+      refetchCookieStatus()
+      queryClient.invalidateQueries({ queryKey: ['config'] })
+      alert('✓ Cookies removed. Downloads will use mobile client emulation.')
+    },
+    onError: (err: any) => {
+      alert(`Failed to remove cookies: ${err.message}`)
+    },
+  })
+
   const [formData, setFormData] = useState<Partial<Config>>({})
 
   useEffect(() => {
@@ -1155,6 +1298,15 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
         validated.browser_name = formData.browser_name.toLowerCase()
       }
     }
+
+    if (formData.enable_stream_integrity_check !== undefined) {
+      validated.enable_stream_integrity_check = formData.enable_stream_integrity_check
+    }
+
+    if (formData.flaresolverr_url !== undefined) {
+      validated.flaresolverr_url = formData.flaresolverr_url?.trim() || null
+    }
+
     
     updateConfig.mutate(validated)
   }
@@ -1297,18 +1449,56 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               )}
 
               {!formData.use_browser_cookies && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Cookies File Path (optional)
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={formData.cookies_file || ''}
-                      onChange={(e) => setFormData({ ...formData, cookies_file: e.target.value })}
-                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                      placeholder="path/to/cookies.txt"
-                    />
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-3">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-900 dark:text-white">YouTube Authentication & Cookies</h4>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                        Required for age-restricted or private playlists. Public tracks use mobile client emulation.
+                      </p>
+                    </div>
+                    {/* Status Badge */}
+                    <div>
+                      {cookieStatus?.status === 'valid' && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                          Active (Expires in {cookieStatus.days_remaining}d)
+                        </span>
+                      )}
+                      {cookieStatus?.status === 'expiring_soon' && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                          Expiring Soon ({cookieStatus.days_remaining}d left)
+                        </span>
+                      )}
+                      {cookieStatus?.status === 'expired' && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                          Expired ({cookieStatus.earliest_expiration})
+                        </span>
+                      )}
+                      {cookieStatus?.status === 'not_installed' && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-300">
+                          Mobile Emulation Active
+                        </span>
+                      )}
+                      {cookieStatus?.status === 'invalid' && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300">
+                          Invalid / Anonymous
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Status Message / Expiry info */}
+                  {cookieStatus?.status_message && (
+                    <p className="text-xs font-mono text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700">
+                      {cookieStatus.status_message}
+                    </p>
+                  )}
+
+                  {/* Upload and Delete Action Buttons */}
+                  <div className="flex gap-2 items-center pt-1">
                     <button
                       type="button"
                       onClick={() => {
@@ -1318,23 +1508,134 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                         input.onchange = (e: any) => {
                           const file = e.target.files?.[0]
                           if (file) {
-                            // Show file name - user will need to provide full path
-                            setFormData({ ...formData, cookies_file: file.name })
+                            uploadCookiesMutation.mutate(file)
                           }
                         }
                         input.click()
                       }}
-                      className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 whitespace-nowrap flex items-center gap-2"
+                      disabled={uploadCookiesMutation.isPending}
+                      className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 disabled:bg-gray-400"
                     >
-                      <FileText className="w-4 h-4" />
-                      Browse
+                      {uploadCookiesMutation.isPending ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          Uploading...
+                        </>
+                      ) : (
+                        <>
+                          <FileText className="w-3.5 h-3.5" />
+                          Upload cookies.txt
+                        </>
+                      )}
                     </button>
+
+                    {cookieStatus?.is_installed && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirm('Are you sure you want to remove the installed cookies?')) {
+                            deleteCookiesMutation.mutate()
+                          }
+                        }}
+                        disabled={deleteCookiesMutation.isPending}
+                        className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 dark:bg-rose-900/30 dark:hover:bg-rose-900/50 dark:text-rose-300 text-xs font-medium rounded-lg flex items-center gap-1.5"
+                      >
+                        {deleteCookiesMutation.isPending ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          'Remove Cookies'
+                        )}
+                      </button>
+                    )}
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Note: Browser security limits file access. You may need to type the full path manually.
+
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                    💡 <strong>Tip:</strong> Export cookies from a free secondary / throwaway Google account to keep your personal account completely safe.
                   </p>
                 </div>
               )}
+
+              {/* Experimental Stream Integrity Safeguard */}
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-2">
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    id="enable_stream_integrity_check"
+                    checked={formData.enable_stream_integrity_check || false}
+                    onChange={(e) => setFormData({ ...formData, enable_stream_integrity_check: e.target.checked })}
+                    className="mt-1 w-4 h-4 text-blue-600 rounded border-gray-300 dark:border-gray-600"
+                  />
+                  <div>
+                    <label htmlFor="enable_stream_integrity_check" className="text-sm font-semibold text-gray-900 dark:text-white cursor-pointer">
+                      Experimental Stream Integrity Verification (ffprobe)
+                    </label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      Inspects downloaded video containers for valid audio & video streams. Falls back gracefully if inspection fails.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* FlareSolverr Homelab Proxy */}
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-2">
+                <label className="block text-sm font-semibold text-gray-900 dark:text-white mb-1">
+                  FlareSolverr Proxy URL (Optional)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={formData.flaresolverr_url || ''}
+                    onChange={(e) => setFormData({ ...formData, flaresolverr_url: e.target.value })}
+                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                    placeholder="http://localhost:8191/v1"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => testFlareSolverrMutation.mutate(formData.flaresolverr_url || undefined)}
+                    disabled={testFlareSolverrMutation.isPending}
+                    className="px-3 py-2 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-700 disabled:bg-gray-400 flex items-center gap-1.5 whitespace-nowrap"
+                  >
+                    {testFlareSolverrMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Testing...
+                      </>
+                    ) : (
+                      'Test Connection'
+                    )}
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Connect your homelab FlareSolverr container to bypass anti-bot challenges and solve session cookies.
+                </p>
+              </div>
+
+              {/* yt-dlp updater box */}
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-2">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white">yt-dlp Engine</h4>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Installed Version: <span className="font-mono font-medium text-blue-600 dark:text-blue-400">{ytdlpVersionData?.version || 'Loading...'}</span>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => updateYtdlpMutation.mutate()}
+                    disabled={updateYtdlpMutation.isPending}
+                    className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium rounded-md hover:bg-emerald-700 disabled:bg-gray-400 flex items-center gap-1.5"
+                  >
+                    {updateYtdlpMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      'Update yt-dlp'
+                    )}
+                  </button>
+                </div>
+              </div>
 
               <div className="flex gap-2 pt-4">
                 <button
@@ -1606,6 +1907,429 @@ function ExclusionsModal({ playlist, onClose }: { playlist: Playlist; onClose: (
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Job Logs View Component
+function JobLogsView({
+  jobs,
+  playlists,
+  activityLogs,
+  onClearActivity
+}: {
+  jobs: Job[]
+  playlists: Playlist[]
+  activityLogs: ActivityLog[]
+  onClearActivity: () => void
+}) {
+  const [selectedSource, setSelectedSource] = useState<string>(() => {
+    const running = jobs.find(j => j.status === 'running' || j.status === 'pending')
+    if (running) return `job_${running.id}`
+    if (jobs.length > 0) return `job_${jobs[0].id}`
+    return 'system'
+  })
+  
+  const [selectedLevel, setSelectedLevel] = useState<'ALL' | 'ERROR' | 'WARN' | 'SUCCESS' | 'INFO'>('ALL')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [autoScroll, setAutoScroll] = useState(true)
+  const [copied, setCopied] = useState(false)
+  const logsEndRef = useRef<HTMLDivElement>(null)
+
+  // Auto-switch to newly running job if currently on finished job
+  useEffect(() => {
+    const running = jobs.find(j => j.status === 'running')
+    if (running && (!selectedSource.startsWith('job_') || jobs.find(j => `job_${j.id}` === selectedSource)?.status !== 'running')) {
+      setSelectedSource(`job_${running.id}`)
+    }
+  }, [jobs])
+
+  const isJobSource = selectedSource.startsWith('job_')
+  const selectedJobId = isJobSource ? parseInt(selectedSource.replace('job_', ''), 10) : null
+  const selectedJob = jobs.find(j => j.id === selectedJobId)
+  const selectedPlaylist = selectedJob ? playlists.find(p => p.id === selectedJob.playlist_id) : null
+
+  // Fetch job logs if job source is selected
+  const { data: jobLogs, isLoading: jobLogsLoading } = useQuery({
+    queryKey: ['job-logs', selectedJobId],
+    queryFn: async () => {
+      if (!selectedJobId) return []
+      const res = await jobsApi.logs(selectedJobId, 1000)
+      return res.data
+    },
+    enabled: !!selectedJobId,
+    refetchInterval: selectedJob?.status === 'running' ? 1500 : false,
+  })
+
+  // Auto scroll to bottom
+  useEffect(() => {
+    if (autoScroll) {
+      logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [jobLogs, activityLogs, autoScroll])
+
+  // Parse lines
+  const parsedJobLogs = (jobLogs || []).map(entry => {
+    const text = entry.message
+    let level: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS' = 'INFO'
+    let timestamp = ''
+    let body = text
+
+    // Parse [YYYY-MM-DD HH:MM:SS] [LEVEL] msg
+    const match = text.match(/^\[(.*?)\]\s*(?:\[(.*?)\])?\s*(.*)$/)
+    if (match) {
+      timestamp = match[1]
+      const rawLevel = match[2]?.toUpperCase()
+      if (rawLevel && ['INFO', 'WARN', 'ERROR', 'SUCCESS'].includes(rawLevel)) {
+        level = rawLevel as any
+      } else {
+        if (text.includes('⚠️') || text.toLowerCase().includes('warn')) level = 'WARN'
+        else if (text.includes('✗') || text.toLowerCase().includes('error') || text.toLowerCase().includes('failed')) level = 'ERROR'
+        else if (text.includes('✓') || text.toLowerCase().includes('completed') || text.toLowerCase().includes('success') || text.toLowerCase().includes('verified')) level = 'SUCCESS'
+      }
+      body = match[3] || text
+    }
+    return { timestamp, level, body, raw: text }
+  })
+
+  const filteredJobLogs = parsedJobLogs.filter(log => {
+    if (selectedLevel !== 'ALL' && log.level !== selectedLevel) return false
+    if (searchQuery.trim()) {
+      return log.raw.toLowerCase().includes(searchQuery.toLowerCase())
+    }
+    return true
+  })
+
+  const filteredActivityLogs = activityLogs.filter(log => {
+    if (selectedLevel !== 'ALL') {
+      if (selectedLevel === 'ERROR' && log.level !== 'error') return false
+      if (selectedLevel === 'WARN' && log.level !== 'warn') return false
+      if (selectedLevel === 'SUCCESS' && log.level !== 'success') return false
+      if (selectedLevel === 'INFO' && log.level !== 'info') return false
+    }
+    if (searchQuery.trim()) {
+      return log.message.toLowerCase().includes(searchQuery.toLowerCase()) || log.source.toLowerCase().includes(searchQuery.toLowerCase())
+    }
+    return true
+  })
+
+  const copyToClipboard = () => {
+    let content = ''
+    if (isJobSource) {
+      content = filteredJobLogs.map(l => l.raw).join('\n')
+    } else {
+      content = filteredActivityLogs.map(l => `[${l.timestamp}] [${l.level.toUpperCase()}] [${l.source}] ${l.message}`).join('\n')
+    }
+    navigator.clipboard.writeText(content)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const runningJobs = jobs.filter(j => j.status === 'running' || j.status === 'pending')
+  const completedJobs = jobs.filter(j => j.status !== 'running' && j.status !== 'pending')
+
+  return (
+    <div className="space-y-6">
+      {/* Top Controls Bar */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-5 border border-gray-200 dark:border-gray-700 space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          
+          {/* Log Source Selector Dropdown */}
+          <div className="flex-1 max-w-xl">
+            <label className="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5 flex items-center gap-1.5">
+              <Terminal className="w-3.5 h-3.5 text-blue-500" />
+              Log Source
+            </label>
+            <select
+              value={selectedSource}
+              onChange={(e) => setSelectedSource(e.target.value)}
+              className="w-full px-3.5 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            >
+              {runningJobs.length > 0 && (
+                <optgroup label="🟢 Active Running Jobs">
+                  {runningJobs.map(j => {
+                    const pl = playlists.find(p => p.id === j.playlist_id)
+                    const title = pl ? pl.title : `Playlist #${j.playlist_id}`
+                    return (
+                      <option key={j.id} value={`job_${j.id}`}>
+                        ⚡ Job #{j.id} — {title} ({j.job_type}) [{j.status.toUpperCase()}]
+                      </option>
+                    )
+                  })}
+                </optgroup>
+              )}
+              
+              <optgroup label="⚪ Recent Jobs History">
+                {completedJobs.slice(0, 20).map(j => {
+                  const pl = playlists.find(p => p.id === j.playlist_id)
+                  const title = pl ? pl.title : `Playlist #${j.playlist_id}`
+                  return (
+                    <option key={j.id} value={`job_${j.id}`}>
+                      Job #{j.id} — {title} ({j.job_type}) [{j.status}]
+                    </option>
+                  )
+                })}
+              </optgroup>
+
+              <optgroup label="🌐 Live System & Events">
+                <option value="system">
+                  🌐 System & WebSocket Live Activity ({activityLogs.length} events)
+                </option>
+              </optgroup>
+            </select>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setAutoScroll(!autoScroll)}
+              className={`px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 border transition-all ${
+                autoScroll
+                  ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700'
+                  : 'bg-gray-100 text-gray-600 border-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:border-gray-600'
+              }`}
+              title="Auto-scroll to bottom on new logs"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${autoScroll ? 'animate-spin' : ''}`} />
+              Auto-Scroll: {autoScroll ? 'ON' : 'OFF'}
+            </button>
+
+            <button
+              onClick={copyToClipboard}
+              className="px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-gray-600 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? 'Copied!' : 'Copy Logs'}
+            </button>
+
+            {isJobSource && selectedJobId && (
+              <a
+                href={jobsApi.getDownloadLogUrl(selectedJobId)}
+                download={`job_${selectedJobId}.log`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                <DownloadCloud className="w-3.5 h-3.5" />
+                Download .log
+              </a>
+            )}
+
+            {!isJobSource && (
+              <button
+                onClick={onClearActivity}
+                className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:hover:bg-rose-900/50 dark:text-rose-300 border border-rose-200 dark:border-rose-800 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Clear Activity
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Filters and Search Bar */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-gray-100 dark:border-gray-700">
+          {/* Level Filter Buttons */}
+          <div className="flex items-center gap-1.5 flex-wrap w-full sm:w-auto">
+            {(['ALL', 'ERROR', 'WARN', 'SUCCESS', 'INFO'] as const).map(lvl => (
+              <button
+                key={lvl}
+                onClick={() => setSelectedLevel(lvl)}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                  selectedLevel === lvl
+                    ? lvl === 'ERROR'
+                      ? 'bg-rose-600 text-white'
+                      : lvl === 'WARN'
+                      ? 'bg-amber-500 text-white'
+                      : lvl === 'SUCCESS'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
+              >
+                {lvl}
+              </button>
+            ))}
+          </div>
+
+          {/* Search Box */}
+          <div className="relative w-full sm:w-72">
+            <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search in log lines..."
+              className="w-full pl-9 pr-3 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-xs text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Selected Job Header / Progress Banner (if job selected) */}
+      {isJobSource && selectedJob && (
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-4 border border-gray-200 dark:border-gray-700">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-gray-900 dark:text-white">
+                  {selectedPlaylist ? selectedPlaylist.title : `Playlist #${selectedJob.playlist_id}`}
+                </h3>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider ${
+                  selectedJob.status === 'running'
+                    ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 animate-pulse'
+                    : selectedJob.status === 'completed'
+                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300'
+                    : selectedJob.status === 'failed'
+                    ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300'
+                    : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                }`}>
+                  {selectedJob.status}
+                </span>
+                <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                  (Job #{selectedJob.id} • {selectedJob.job_type})
+                </span>
+              </div>
+              {selectedJob.error && (
+                <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">
+                  Error: {selectedJob.error}
+                </p>
+              )}
+            </div>
+
+            {/* Progress Bars */}
+            <div className="flex items-center gap-6 text-xs font-medium">
+              {selectedJob.job_type !== 'extract' && (
+                <div>
+                  <div className="flex justify-between gap-2 text-gray-600 dark:text-gray-400 mb-1">
+                    <span>Download Progress</span>
+                    <span>{selectedJob.download_completed} / {selectedJob.download_total}</span>
+                  </div>
+                  <div className="w-36 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-blue-600 transition-all duration-300"
+                      style={{
+                        width: `${selectedJob.download_total > 0 ? (selectedJob.download_completed / selectedJob.download_total) * 100 : 0}%`
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {selectedJob.job_type !== 'download' && (
+                <div>
+                  <div className="flex justify-between gap-2 text-gray-600 dark:text-gray-400 mb-1">
+                    <span>Audio Extraction</span>
+                    <span>{selectedJob.extract_completed} / {selectedJob.extract_total}</span>
+                  </div>
+                  <div className="w-36 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-purple-600 transition-all duration-300"
+                      style={{
+                        width: `${selectedJob.extract_total > 0 ? (selectedJob.extract_completed / selectedJob.extract_total) * 100 : 0}%`
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Terminal Display Console */}
+      <div className="bg-gray-950 rounded-xl shadow-2xl border border-gray-800 p-4 font-mono text-xs text-gray-200 min-h-[500px] max-h-[70vh] overflow-y-auto">
+        {isJobSource ? (
+          jobLogsLoading ? (
+            <div className="text-center py-16 text-gray-500">
+              <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-500 mb-2" />
+              Loading job output logs...
+            </div>
+          ) : filteredJobLogs.length > 0 ? (
+            <div className="space-y-1">
+              {filteredJobLogs.map((log, idx) => (
+                <div key={idx} className="flex items-start gap-2.5 hover:bg-gray-900/60 px-2 py-0.5 rounded transition-colors break-all">
+                  {log.timestamp && (
+                    <span className="text-gray-500 select-none whitespace-nowrap text-[11px]">
+                      {log.timestamp}
+                    </span>
+                  )}
+                  {log.level && (
+                    <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold select-none whitespace-nowrap ${
+                      log.level === 'ERROR'
+                        ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                        : log.level === 'WARN'
+                        ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                        : log.level === 'SUCCESS'
+                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                        : 'bg-blue-950 text-blue-300 border border-blue-800'
+                    }`}>
+                      {log.level}
+                    </span>
+                  )}
+                  <span className={`flex-1 whitespace-pre-wrap ${
+                    log.level === 'ERROR'
+                      ? 'text-rose-300 font-semibold'
+                      : log.level === 'WARN'
+                      ? 'text-amber-200'
+                      : log.level === 'SUCCESS'
+                      ? 'text-emerald-200'
+                      : 'text-gray-300'
+                  }`}>
+                    {log.body}
+                  </span>
+                </div>
+              ))}
+              <div ref={logsEndRef} />
+            </div>
+          ) : (
+            <div className="text-center py-20 text-gray-500">
+              <Terminal className="w-8 h-8 mx-auto mb-2 opacity-50" />
+              No logs matched your current filters.
+            </div>
+          )
+        ) : (
+          filteredActivityLogs.length > 0 ? (
+            <div className="space-y-1">
+              {filteredActivityLogs.map(log => (
+                <div key={log.id} className="flex items-start gap-2.5 hover:bg-gray-900/60 px-2 py-0.5 rounded transition-colors break-all">
+                  <span className="text-gray-500 select-none whitespace-nowrap text-[11px]">
+                    {log.timestamp}
+                  </span>
+                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold select-none whitespace-nowrap ${
+                    log.level === 'error'
+                      ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                      : log.level === 'warn'
+                      ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                      : log.level === 'success'
+                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                      : 'bg-cyan-950 text-cyan-300 border border-cyan-800'
+                  }`}>
+                    {log.source.toUpperCase()}
+                  </span>
+                  <span className={`flex-1 whitespace-pre-wrap ${
+                    log.level === 'error'
+                      ? 'text-rose-300 font-semibold'
+                      : log.level === 'warn'
+                      ? 'text-amber-200'
+                      : log.level === 'success'
+                      ? 'text-emerald-200'
+                      : 'text-gray-300'
+                  }`}>
+                    {log.message}
+                  </span>
+                </div>
+              ))}
+              <div ref={logsEndRef} />
+            </div>
+          ) : (
+            <div className="text-center py-20 text-gray-500">
+              <Activity className="w-8 h-8 mx-auto mb-2 opacity-50" />
+              No system activity events recorded yet.
+            </div>
+          )
+        )}
       </div>
     </div>
   )

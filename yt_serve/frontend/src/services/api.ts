@@ -25,6 +25,7 @@ export const jobsApi = {
   cancel: (id: number) => api.post(`/downloads/jobs/${id}/cancel`),
   logs: (id: number, lines?: number) =>
     api.get<LogEntry[]>(`/downloads/jobs/${id}/logs`, { params: { lines } }),
+  getDownloadLogUrl: (id: number) => `/api/downloads/jobs/${id}/download-log`,
   
   // Interrupted jobs handling
   getInterrupted: () => api.get<{
@@ -48,6 +49,17 @@ export const jobsApi = {
       action,
       job_decisions: jobDecisions,
     }),
+
+  testIntegrity: (params: { file_path?: string; playlist_id?: number; video_id?: string }) =>
+    api.post<{
+      file_path: string
+      valid: boolean
+      has_video: boolean
+      has_audio: boolean
+      duration?: number
+      error?: string
+      details: Record<string, any>
+    }>('/downloads/test-integrity', params),
 }
 
 export interface Config {
@@ -59,12 +71,49 @@ export interface Config {
   cookies_file: string | null
   use_browser_cookies: boolean
   browser_name: string
+  enable_stream_integrity_check?: boolean
+  flaresolverr_url?: string | null
   needs_setup: boolean
+}
+
+export interface CookieStatus {
+  is_installed: boolean
+  status: 'valid' | 'expiring_soon' | 'expired' | 'invalid' | 'not_installed'
+  status_message: string
+  file_path?: string | null
+  file_size_bytes?: number | null
+  last_modified?: string | null
+  earliest_expiration?: string | null
+  days_remaining?: number | null
+  auth_cookies_found: string[]
 }
 
 export const configApi = {
   get: () => api.get<Config>('/config'),
   update: (config: Partial<Config>) => api.put<Config>('/config', config),
+  getYtdlpVersion: () => api.get<{ version: string }>('/config/ytdlp-version'),
+  updateYtdlp: () => api.post<{
+    success: boolean
+    message: string
+    old_version: string
+    new_version: string
+    output: string
+  }>('/config/update-ytdlp'),
+  testFlareSolverr: (url?: string) => api.post<{
+    success: boolean
+    message: string
+    version?: string
+    response_time_ms?: number
+  }>('/config/test-flaresolverr', { url }),
+  getCookiesStatus: () => api.get<CookieStatus>('/config/cookies-status'),
+  uploadCookies: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post<CookieStatus>('/config/upload-cookies', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
+  deleteCookies: () => api.delete<CookieStatus>('/config/cookies'),
 }
 
 export default api

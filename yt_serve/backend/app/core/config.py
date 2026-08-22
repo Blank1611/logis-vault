@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     USE_BROWSER_COOKIES: bool = False
     BROWSER_NAME: str = "chrome"
     
+    # Experimental Integrity Safeguards
+    ENABLE_STREAM_INTEGRITY_CHECK: bool = False
+    
+    # FlareSolverr Proxy (Optional)
+    FLARESOLVERR_URL: Optional[str] = None
+
+    
     class Config:
         env_file = str(ENV_FILE)
         env_file_encoding = "utf-8"
