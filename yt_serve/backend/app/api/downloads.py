@@ -272,3 +272,147 @@ async def get_job_logs(
         LogEntry(message=line.strip())
         for line in log_lines
     ]
+
+# ============================================================================
+# INTERRUPTED JOBS ENDPOINTS (for UI-based recovery dialog)
+# ============================================================================
+
+class InterruptedJobInfo(BaseModel):
+    """Information about an interrupted job"""
+    id: int
+    job_type: str
+    playlist_id: int
+    playlist_title: str
+    created_at: str
+
+class InterruptedJobsResponse(BaseModel):
+    """Response containing interrupted jobs"""
+    jobs: List[InterruptedJobInfo]
+    count: int
+
+class JobRecoveryRequest(BaseModel):
+    """Request to handle interrupted jobs"""
+    action: str  # 'resume_all', 'cancel_all', or 'individual'
+    job_decisions: Optional[dict] = None  # For individual: {job_id: 'resume' or 'cancel'}
+
+class JobRecoveryResponse(BaseModel):
+    """Response after handling interrupted jobs"""
+    message: str
+    processed: int
+    resumed: int
+    cancelled: int
+
+@router.get("/interrupted-jobs", response_model=InterruptedJobsResponse)
+async def get_interrupted_jobs(db: Session = Depends(get_db)):
+    """
+    Get all interrupted jobs (jobs with 'running' status).
+    Called on app initialization to check for jobs that didn't complete.
+    """
+    interrupted_jobs = db.query(Job).filter(Job.status == 'running').all()
+    
+    jobs_info = []
+    for job in interrupted_jobs:
+        #playlist = db.query(Playlist).filter(Playlist.id == job.playlist_id).first()
+        playlist = db.query(Playlist).filter(Playlist.id == job.playlist_id).first()
+        playlist_title = playlist.title if playlist else "Unknown Playlist"
+        jobs_info.append(InterruptedJobInfo(
+            id=job.id,
+            job_type=job.job_type,
+            playlist_id=job.playlist_id,
+            playlist_title=playlist_title,
+            created_at=job.created_at.isoformat()
+        ))
+    
+    return InterruptedJobsResponse(
+        jobs=jobs_info,
+        count=len(jobs_info)
+    )
+
+@router.post("/handle-interrupted-jobs", response_model=JobRecoveryResponse)
+async def handle_interrupted_jobs(
+    request: JobRecoveryRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Handle interrupted jobs based on user decision from UI dialog.
+    Supports three actions:
+    - resume_all: Resume all interrupted jobs
+    - cancel_all: Cancel all interrupted jobs
+    - individual: Handle each job based on decision map
+    """
+    interrupted_jobs = db.query(Job).filter(Job.status == 'running').all()
+    
+    if not interrupted_jobs:
+        return JobRecoveryResponse(
+            message="No interrupted jobs found",
+            processed=0,
+            resumed=0,
+            cancelled=0
+        )
+    
+    from app.services.job_manager import JobManager
+    job_manager_svc = JobManager()
+    
+    resumed_count = 0
+    cancelled_count = 0
+    
+    if request.action == 'resume_all':
+        # Resume all interrupted jobs
+        for job in interrupted_jobs:
+            try:
+                job.status = 'pending'
+                job.error_message = None
+                db.commit()
+                
+                # Start the job in background
+                await job_manager_svc.start_job(job.id)
+                resumed_count += 1
+            except Exception as e:
+                job.status = 'failed'
+                job.error_message = f"Failed to resume: {str(e)}"
+                db.commit()
+    
+    elif request.action == 'cancel_all':
+        # Cancel all interrupted jobs
+        for job in interrupted_jobs:
+            job.status = 'cancelled'
+            job.error_message = 'Cancelled by user during startup'
+            cancelled_count += 1
+        db.commit()
+    
+    elif request.action == 'individual' and request.job_decisions:
+        # Handle each job individually based on user decisions
+        for job in interrupted_jobs:
+            decision = request.job_decisions.get(str(job.id))
+            
+            if decision == 'resume':
+                try:
+                    job.status = 'pending'
+                    job.error_message = None
+                    db.commit()
+                    await job_manager_svc.start_job(job.id)
+                    resumed_count += 1
+                except Exception as e:
+                    job.status = 'failed'
+                    job.error_message = f"Failed to resume: {str(e)}"
+                    db.commit()
+            
+            elif decision == 'cancel':
+                job.status = 'cancelled'
+                job.error_message = 'Cancelled by user during startup'
+                cancelled_count += 1
+        
+        db.commit()
+    
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid action. Must be 'resume_all', 'cancel_all', or 'individual'"
+        )
+    
+    return JobRecoveryResponse(
+        message=f"Successfully handled {len(interrupted_jobs)} interrupted job(s)",
+        processed=len(interrupted_jobs),
+        resumed=resumed_count,
+        cancelled=cancelled_count
+    )

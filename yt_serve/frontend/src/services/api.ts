@@ -25,6 +25,29 @@ export const jobsApi = {
   cancel: (id: number) => api.post(`/downloads/jobs/${id}/cancel`),
   logs: (id: number, lines?: number) =>
     api.get<LogEntry[]>(`/downloads/jobs/${id}/logs`, { params: { lines } }),
+  
+  // Interrupted jobs handling
+  getInterrupted: () => api.get<{
+    jobs: Array<{
+      id: number
+      job_type: string
+      playlist_id: number
+      playlist_title: string
+      created_at: string
+    }>
+    count: number
+  }>('/downloads/interrupted-jobs'),
+  
+  handleInterrupted: (action: 'resume_all' | 'cancel_all' | 'individual', jobDecisions?: Record<string, 'resume' | 'cancel'>) =>
+    api.post<{
+      message: string
+      processed: number
+      resumed: number
+      cancelled: number
+    }>('/downloads/handle-interrupted-jobs', {
+      action,
+      job_decisions: jobDecisions,
+    }),
 }
 
 export interface Config {

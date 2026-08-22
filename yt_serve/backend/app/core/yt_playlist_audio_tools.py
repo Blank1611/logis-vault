@@ -611,6 +611,10 @@ def _get_playlist_info(url: str, force_refresh: bool = False) -> dict:
         "quiet": True,
         "skip_download": True,
         "extract_flat": "in_playlist",
+        "js_runtimes": {
+        'node': {} 
+    },
+        # "js_runtimes": {"node": "C:\Program Files\nodejs\node.exe"}
     }
     if USE_BROWSER_COOKIES and _check_browser_cookies_available():
         ydl_opts_info["cookies_from_browser"] = (BROWSER_NAME,)
@@ -781,11 +785,29 @@ def _build_playlist_paths(title: str, create_folders: bool = True) -> Tuple[str,
 
 def _base_speed_opts() -> dict:
     return {
-        "concurrent_fragment_downloads": CONCURRENT_FRAGMENTS,
+        "concurrent_fragment_downloads": max(1, CONCURRENT_FRAGMENTS // 2),  # Reduce concurrent fragments to avoid 403s
         "continuedl": True,
-        "retries": 5,
-        "fragment_retries": 5,
+        "retries": 10,  # Increase retries for transient errors
+        "fragment_retries": 10,  # Increase fragment retries
+        "retry_sleep_functions": {
+            "http": lambda n: min(4 ** n, 60),  # Exponential backoff for HTTP errors
+            "fragment": lambda n: min(2 ** n, 30),  # Exponential backoff for fragments
+        },
         "noprogress": False,
+        "sleep_interval": 1,  # Add delay between downloads
+        "max_sleep_interval": 5,  # Maximum sleep interval
+        "sleep_interval_subtitles": 0,
+        'verbose': True,
+        # Add specific handling for 403 errors
+        "extractor_retries": 3,
+        "file_access_retries": 3,
+        "js_runtimes": {'node':{}}
+        # Add JavaScript runtime support for YouTube's new requirements
+        # "extractor_args": {
+        #     "youtube": {
+        #         "js_runtimes": ['node:C:\Program Files\nodejs\node.EXE']  # Use Node.js for JavaScript execution
+        #     }
+        # }
     }
 
 
@@ -1349,6 +1371,7 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
         
         try:
             with YoutubeDL(ydl_opts) as ydl:
+                ydl.cache.remove()
                 for idx, (vid, video_url) in enumerate(current_batch, 1):
                     # Check cancellation BEFORE each video
                     if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):

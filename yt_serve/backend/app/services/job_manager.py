@@ -226,6 +226,11 @@ class JobManager:
                 
                 await log_wrapper("Starting download and extraction...")
                 
+                # CREATE EXTRACTION QUEUE FIRST - Must happen before download starts
+                # This prevents race condition where download publishes to queue before it exists
+                self.extraction_queues[job_id] = asyncio.Queue()
+                await log_wrapper("Extraction queue created")
+                
                 # Start download task
                 download_task = asyncio.create_task(
                     self._run_download_phase(
@@ -407,8 +412,10 @@ class JobManager:
         from app.core import yt_playlist_audio_tools as tools
         
         try:
-            # Create extraction queue for this job
-            self.extraction_queues[job_id] = asyncio.Queue()
+            # Create extraction queue for this job if it doesn't exist
+            # (It may already exist if this is part of a "both" job type)
+            if job_id not in self.extraction_queues:
+                self.extraction_queues[job_id] = asyncio.Queue()
             
             job = db.query(Job).filter(Job.id == job_id).first()
             job.extract_status = "running"

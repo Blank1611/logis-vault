@@ -1,17 +1,21 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { playlistsApi, jobsApi, configApi, type Config } from './services/api'
-import { PlayCircle, Download, Music, Trash2, RefreshCw, Plus, Loader2, Moon, Sun, Settings, FolderOpen, FileText, Edit3, X, FileText as LogIcon, Grid3x3, List, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
+import { PlayCircle, Download, Music, Trash2, RefreshCw, Plus, Loader2, Moon, Sun, Settings, FolderOpen, FileText, Edit3, X, FileText as LogIcon, Grid3x3, List, ExternalLink } from 'lucide-react'
 import type { Playlist, Job } from './services/types'
 import { useWebSocketEvents } from './hooks/useWebSocket'
+import { InterruptedJobsDialog } from './components/InterruptedJobsDialog'
 
 function App() {
   const [newPlaylistUrl, setNewPlaylistUrl] = useState('')
-  const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
+  // const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [showInitialSetup, setShowInitialSetup] = useState(false)
   const [editingExclusions, setEditingExclusions] = useState<Playlist | null>(null)
   const [viewingLogs, setViewingLogs] = useState<Job | null>(null)
+  const [interruptedJobs, setInterruptedJobs] = useState<any[]>([])
+  const [showInterruptedDialog, setShowInterruptedDialog] = useState(false)
+  const [interruptedJobsHandled, setInterruptedJobsHandled] = useState(false)
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
     const saved = localStorage.getItem('viewMode')
     return (saved as 'grid' | 'list') || 'grid'
@@ -71,6 +75,28 @@ function App() {
     }
   }, [config])
 
+  // Check for interrupted jobs on app initialization
+  useEffect(() => {
+    const checkInterruptedJobs = async () => {
+      if (interruptedJobsHandled) return
+      
+      try {
+        const res = await jobsApi.getInterrupted()
+        if (res.data.count > 0) {
+          setInterruptedJobs(res.data.jobs)
+          setShowInterruptedDialog(true)
+        } else {
+          setInterruptedJobsHandled(true)
+        }
+      } catch (error) {
+        console.error('Error checking interrupted jobs:', error)
+        setInterruptedJobsHandled(true)
+      }
+    }
+
+    checkInterruptedJobs()
+  }, [interruptedJobsHandled])
+
   // Apply dark mode class to document
   useEffect(() => {
     console.log('Dark mode:', darkMode)
@@ -96,7 +122,7 @@ function App() {
   })
 
   // Fetch jobs
-  const { data: jobs, dataUpdatedAt } = useQuery({
+  const { data: jobs } = useQuery({
     queryKey: ['jobs'],
     queryFn: async () => {
       const res = await jobsApi.list()
@@ -167,6 +193,23 @@ function App() {
     mutationFn: (id: number) => jobsApi.cancel(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+
+  // Handle interrupted jobs mutations
+  const handleInterruptedJobs = useMutation({
+    mutationFn: ({
+      action,
+      jobDecisions,
+    }: {
+      action: 'resume_all' | 'cancel_all' | 'individual'
+      jobDecisions?: Record<string, 'resume' | 'cancel'>
+    }) => jobsApi.handleInterrupted(action, jobDecisions),
+    onSuccess: () => {
+      setShowInterruptedDialog(false)
+      setInterruptedJobsHandled(true)
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['playlists'] })
     },
   })
 
@@ -793,11 +836,34 @@ function App() {
       {/* Initial Setup Modal */}
       {showInitialSetup && (
         <InitialSetupModal 
-          onClose={() => setShowInitialSetup(false)}
           onComplete={() => {
             setShowInitialSetup(false)
             queryClient.invalidateQueries({ queryKey: ['config'] })
           }}
+        />
+      )}
+
+      {/* Interrupted Jobs Dialog */}
+      {showInterruptedDialog && interruptedJobs.length > 0 && (
+        <InterruptedJobsDialog
+          jobs={interruptedJobs}
+          onResumeAll={async () => {
+            await handleInterruptedJobs.mutateAsync({
+              action: 'resume_all',
+            })
+          }}
+          onCancelAll={async () => {
+            await handleInterruptedJobs.mutateAsync({
+              action: 'cancel_all',
+            })
+          }}
+          onIndividual={async (decisions) => {
+            await handleInterruptedJobs.mutateAsync({
+              action: 'individual',
+              jobDecisions: decisions,
+            })
+          }}
+          isLoading={handleInterruptedJobs.isPending}
         />
       )}
 
@@ -824,7 +890,7 @@ function App() {
 }
 
 // Initial Setup Modal Component
-function InitialSetupModal({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
+function InitialSetupModal({ onComplete }: { onComplete: () => void }) {
   const [formData, setFormData] = useState<Partial<Config>>({
     base_download_path: '',
     audio_extract_mode: 'copy',

