@@ -1725,6 +1725,29 @@ def extract_audio_for_existing_playlist(title: str):
     extract_audio_for_existing_playlist_folder(playlist_folder, audio_folder)
 
 
+def _detect_audio_codec(vid_path: str, ffmpeg_path: str) -> Optional[str]:
+    """Detect the audio stream codec using ffprobe"""
+    from subprocess import run, PIPE
+    try:
+        ffprobe_path = "ffprobe"
+        if ffmpeg_path and ffmpeg_path != "ffmpeg":
+            ffprobe_candidate = os.path.join(os.path.dirname(ffmpeg_path), "ffprobe.exe" if sys.platform == "win32" else "ffprobe")
+            if os.path.isfile(ffprobe_candidate):
+                ffprobe_path = ffprobe_candidate
+        res = run([
+            ffprobe_path, "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=codec_name",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            vid_path
+        ], stdout=PIPE, stderr=PIPE, text=True, timeout=10)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip().lower()
+    except Exception:
+        pass
+    return None
+
+
 def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, idx: int, total: int) -> Dict:
     """Extract audio from a single video file. Returns result dict."""
     from subprocess import run, DEVNULL, CalledProcessError
@@ -1733,38 +1756,32 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
     thread_id = threading.current_thread().name
     base_name = os.path.splitext(os.path.basename(vid_path))[0]
     
-    # Determine output file extension based on mode
-    if AUDIO_EXTRACT_MODE == "copy":
-        # For copy mode, use .m4a for AAC audio (most common in YouTube videos)
-        # Note: May fail for some codecs, automatic fallback to MP3 will handle it
-        audio_ext = ".m4a"
-    elif AUDIO_EXTRACT_MODE == "opus":
-        audio_ext = ".opus"
-    else:  # mp3_best or mp3_high
-        audio_ext = ".mp3"
-    
-    audio_path = os.path.join(audio_folder, base_name + audio_ext)
-    
     # Check if audio already exists in ANY format (mp3, m4a, opus, etc.)
-    # This handles cases where extraction mode changed between runs
     audio_extensions = [".mp3", ".m4a", ".opus", ".mka", ".aac", ".ogg"]
     for ext in audio_extensions:
         existing_audio = os.path.join(audio_folder, base_name + ext)
         if os.path.isfile(existing_audio):
-            return {
-                "status": "skipped",
-                "video": vid_path,
-                "audio": existing_audio,
-                "reason": f"already exists as {ext}",
-                "thread_id": thread_id
-            }
+            # If the file is 0-byte or corrupt (<=1KB), clean it up so we re-extract cleanly
+            if os.path.getsize(existing_audio) <= 1024:
+                try:
+                    os.remove(existing_audio)
+                except Exception:
+                    pass
+            else:
+                return {
+                    "status": "skipped",
+                    "video": vid_path,
+                    "audio": existing_audio,
+                    "reason": f"already exists as {ext}",
+                    "thread_id": thread_id
+                }
     
     # Check if video file exists and is readable
     if not os.path.exists(vid_path):
         return {
             "status": "failed",
             "video": vid_path,
-            "audio": audio_path,
+            "audio": "",
             "error": "Video file not found",
             "thread_id": thread_id
         }
@@ -1773,10 +1790,31 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
         return {
             "status": "failed",
             "video": vid_path,
-            "audio": audio_path,
+            "audio": "",
             "error": "Video file is empty (0 bytes)",
             "thread_id": thread_id
         }
+    
+    # Determine output file extension and command based on extraction mode and audio codec
+    detected_codec = None
+    if AUDIO_EXTRACT_MODE == "copy":
+        detected_codec = _detect_audio_codec(vid_path, ffmpeg_path)
+        if detected_codec == "opus":
+            audio_ext = ".opus"
+        elif detected_codec in ["aac", "alac"]:
+            audio_ext = ".m4a"
+        elif detected_codec == "mp3":
+            audio_ext = ".mp3"
+        elif detected_codec in ["vorbis", "flac"]:
+            audio_ext = ".ogg"
+        else:
+            audio_ext = ".m4a"
+    elif AUDIO_EXTRACT_MODE == "opus":
+        audio_ext = ".opus"
+    else:  # mp3_best or mp3_high
+        audio_ext = ".mp3"
+    
+    audio_path = os.path.join(audio_folder, base_name + audio_ext)
     
     # Build ffmpeg command based on extraction mode
     if AUDIO_EXTRACT_MODE == "copy":
@@ -1784,7 +1822,7 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
             ffmpeg_path, "-y", "-i", vid_path,
             "-vn", "-acodec", "copy", audio_path,
         ]
-        mode_label = "copy"
+        mode_label = f"copy ({detected_codec or 'stream'})"
     elif AUDIO_EXTRACT_MODE == "opus":
         cmd = [
             ffmpeg_path, "-y", "-i", vid_path,
@@ -1809,10 +1847,10 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
     
     try:
         start = time.time()
-        # First attempt with original command
         result = run(cmd, stdout=DEVNULL, stderr=DEVNULL, check=False)
         
-        if result.returncode == 0:
+        # Verify success and that output file is valid non-empty
+        if result.returncode == 0 and os.path.isfile(audio_path) and os.path.getsize(audio_path) > 1024:
             duration = time.time() - start
             print(f"[{timestamp}] [{thread_id}] [{idx}/{total}] ✓ Completed in {duration:.1f}s: {os.path.basename(audio_path)}")
             return {
@@ -1823,15 +1861,18 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
                 "duration": duration
             }
         else:
-            # First attempt failed - try fallback strategies
+            # Clean up failed 0-byte or corrupted target file
+            if os.path.exists(audio_path):
+                try:
+                    os.remove(audio_path)
+                except Exception:
+                    pass
+            
             error_code = result.returncode
             
-            # Error -22 (4294967274) often means invalid argument or no audio stream
-            # Try with re-encoding instead of copy
-            if AUDIO_EXTRACT_MODE == "copy" and error_code in [4294967274, -22, 22]:
-                print(f"[{timestamp}] [{thread_id}] [{idx}/{total}] Copy mode failed, trying re-encode...")
-                
-                # Fallback to MP3 encoding
+            # Fallback to MP3 encoding if copy failed or was unsupported
+            if AUDIO_EXTRACT_MODE == "copy":
+                print(f"[{timestamp}] [{thread_id}] [{idx}/{total}] Copy mode failed, falling back to MP3 re-encode...")
                 fallback_audio_path = os.path.join(audio_folder, base_name + ".mp3")
                 fallback_cmd = [
                     ffmpeg_path, "-y", "-i", vid_path,
@@ -1839,8 +1880,7 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
                 ]
                 
                 fallback_result = run(fallback_cmd, stdout=DEVNULL, stderr=DEVNULL, check=False)
-                
-                if fallback_result.returncode == 0:
+                if fallback_result.returncode == 0 and os.path.isfile(fallback_audio_path) and os.path.getsize(fallback_audio_path) > 1024:
                     duration = time.time() - start
                     print(f"[{timestamp}] [{thread_id}] [{idx}/{total}] ✓ Completed with fallback in {duration:.1f}s: {os.path.basename(fallback_audio_path)}")
                     return {
@@ -1851,8 +1891,13 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
                         "duration": duration,
                         "fallback": True
                     }
+                else:
+                    if os.path.exists(fallback_audio_path):
+                        try:
+                            os.remove(fallback_audio_path)
+                        except Exception:
+                            pass
             
-            # All attempts failed
             print(f"[{timestamp}] [{thread_id}] [{idx}/{total}] ⚠️  Failed: {os.path.basename(vid_path)} (error code: {error_code})")
             return {
                 "status": "failed",
@@ -1862,6 +1907,11 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
                 "thread_id": thread_id
             }
     except Exception as e:
+        if os.path.exists(audio_path) and os.path.getsize(audio_path) == 0:
+            try:
+                os.remove(audio_path)
+            except Exception:
+                pass
         print(f"[{timestamp}] [{thread_id}] [{idx}/{total}] ⚠️  Unexpected error: {os.path.basename(vid_path)} - {e}")
         return {
             "status": "failed",
