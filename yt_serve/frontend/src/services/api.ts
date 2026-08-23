@@ -72,6 +72,12 @@ export interface Config {
   sleep_interval_min?: number
   sleep_interval_max?: number
   concurrent_fragments?: number
+  enable_daily_auto_refresh?: boolean
+  daily_refresh_interval_hours?: number
+  enable_git_metadata_sync?: boolean
+  git_remote_url?: string | null
+  git_auth_token?: string | null
+  git_branch?: string
   cookies_file: string | null
   use_browser_cookies: boolean
   browser_name: string
@@ -109,6 +115,10 @@ export const configApi = {
     version?: string
     response_time_ms?: number
   }>('/config/test-flaresolverr', { url }),
+  testGitSync: () => api.post<{
+    success: boolean
+    message: string
+  }>('/config/test-git-sync'),
   getCookiesStatus: () => api.get<CookieStatus>('/config/cookies-status'),
   uploadCookies: (file: File) => {
     const formData = new FormData()

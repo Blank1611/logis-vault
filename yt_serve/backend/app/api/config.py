@@ -22,6 +22,12 @@ class ConfigResponse(BaseModel):
     sleep_interval_min: int = 1
     sleep_interval_max: int = 5
     concurrent_fragments: int = 2
+    enable_daily_auto_refresh: bool = True
+    daily_refresh_interval_hours: int = 24
+    enable_git_metadata_sync: bool = True
+    git_remote_url: Optional[str] = None
+    git_auth_token: Optional[str] = None
+    git_branch: str = "main"
     cookies_file: Optional[str]
     use_browser_cookies: bool
     browser_name: str
@@ -40,6 +46,12 @@ class ConfigUpdate(BaseModel):
     sleep_interval_min: Optional[int] = None
     sleep_interval_max: Optional[int] = None
     concurrent_fragments: Optional[int] = None
+    enable_daily_auto_refresh: Optional[bool] = None
+    daily_refresh_interval_hours: Optional[int] = None
+    enable_git_metadata_sync: Optional[bool] = None
+    git_remote_url: Optional[str] = None
+    git_auth_token: Optional[str] = None
+    git_branch: Optional[str] = None
     cookies_file: Optional[str] = None
     use_browser_cookies: Optional[bool] = None
     browser_name: Optional[str] = None
@@ -77,6 +89,12 @@ async def get_config():
         sleep_interval_min=getattr(settings, "SLEEP_INTERVAL_MIN", 1),
         sleep_interval_max=getattr(settings, "SLEEP_INTERVAL_MAX", 5),
         concurrent_fragments=getattr(settings, "CONCURRENT_FRAGMENTS", 2),
+        enable_daily_auto_refresh=getattr(settings, "ENABLE_DAILY_AUTO_REFRESH", True),
+        daily_refresh_interval_hours=getattr(settings, "DAILY_REFRESH_INTERVAL_HOURS", 24),
+        enable_git_metadata_sync=getattr(settings, "ENABLE_GIT_METADATA_SYNC", True),
+        git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
+        git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
+        git_branch=getattr(settings, "GIT_BRANCH", "main") or "main",
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
@@ -119,6 +137,18 @@ def _save_to_env(config: ConfigUpdate):
         env_content['SLEEP_INTERVAL_MAX'] = str(config.sleep_interval_max)
     if config.concurrent_fragments is not None:
         env_content['CONCURRENT_FRAGMENTS'] = str(config.concurrent_fragments)
+    if config.enable_daily_auto_refresh is not None:
+        env_content['ENABLE_DAILY_AUTO_REFRESH'] = 'true' if config.enable_daily_auto_refresh else 'false'
+    if config.daily_refresh_interval_hours is not None:
+        env_content['DAILY_REFRESH_INTERVAL_HOURS'] = str(config.daily_refresh_interval_hours)
+    if config.enable_git_metadata_sync is not None:
+        env_content['ENABLE_GIT_METADATA_SYNC'] = 'true' if config.enable_git_metadata_sync else 'false'
+    if config.git_remote_url is not None:
+        env_content['GIT_REMOTE_URL'] = config.git_remote_url if config.git_remote_url else ''
+    if config.git_auth_token is not None:
+        env_content['GIT_AUTH_TOKEN'] = config.git_auth_token if config.git_auth_token else ''
+    if config.git_branch is not None:
+        env_content['GIT_BRANCH'] = config.git_branch
     if config.cookies_file is not None:
         env_content['COOKIES_FILE'] = config.cookies_file if config.cookies_file else ''
     if config.use_browser_cookies is not None:
@@ -160,6 +190,18 @@ async def update_config(config: ConfigUpdate):
         settings.SLEEP_INTERVAL_MAX = config.sleep_interval_max
     if config.concurrent_fragments is not None:
         settings.CONCURRENT_FRAGMENTS = config.concurrent_fragments
+    if config.enable_daily_auto_refresh is not None:
+        settings.ENABLE_DAILY_AUTO_REFRESH = config.enable_daily_auto_refresh
+    if config.daily_refresh_interval_hours is not None:
+        settings.DAILY_REFRESH_INTERVAL_HOURS = config.daily_refresh_interval_hours
+    if config.enable_git_metadata_sync is not None:
+        settings.ENABLE_GIT_METADATA_SYNC = config.enable_git_metadata_sync
+    if config.git_remote_url is not None:
+        settings.GIT_REMOTE_URL = config.git_remote_url
+    if config.git_auth_token is not None:
+        settings.GIT_AUTH_TOKEN = config.git_auth_token
+    if config.git_branch is not None:
+        settings.GIT_BRANCH = config.git_branch
     if config.cookies_file is not None:
         settings.COOKIES_FILE = config.cookies_file
     if config.use_browser_cookies is not None:
@@ -184,6 +226,12 @@ async def update_config(config: ConfigUpdate):
         sleep_interval_min=getattr(settings, "SLEEP_INTERVAL_MIN", 1),
         sleep_interval_max=getattr(settings, "SLEEP_INTERVAL_MAX", 5),
         concurrent_fragments=getattr(settings, "CONCURRENT_FRAGMENTS", 2),
+        enable_daily_auto_refresh=getattr(settings, "ENABLE_DAILY_AUTO_REFRESH", True),
+        daily_refresh_interval_hours=getattr(settings, "DAILY_REFRESH_INTERVAL_HOURS", 24),
+        enable_git_metadata_sync=getattr(settings, "ENABLE_GIT_METADATA_SYNC", True),
+        git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
+        git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
+        git_branch=getattr(settings, "GIT_BRANCH", "main") or "main",
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
@@ -302,6 +350,32 @@ async def test_flaresolverr(request: Optional[FlareSolverrTestRequest] = None):
             success=False,
             message=f"Failed to connect to FlareSolverr at {endpoint}: {str(e)}"
         )
+
+class GitSyncTestResponse(BaseModel):
+    success: bool
+    message: str
+
+@router.post("/test-git-sync", response_model=GitSyncTestResponse)
+async def test_git_sync():
+    """Test Git repository initialization and remote push/connectivity"""
+    from app.utils.git_sync import ensure_git_repo, push_to_remote_sync
+    
+    base_path = settings.BASE_DOWNLOAD_PATH
+    if not ensure_git_repo(base_path):
+        return GitSyncTestResponse(
+            success=False,
+            message=f"Failed to initialize local Git repository in {base_path}"
+        )
+        
+    remote_url = getattr(settings, "GIT_REMOTE_URL", None)
+    if not remote_url or not remote_url.strip():
+        return GitSyncTestResponse(
+            success=True,
+            message="Local Git repository initialized successfully! (No remote URL configured)"
+        )
+        
+    success, msg = push_to_remote_sync()
+    return GitSyncTestResponse(success=success, message=msg)
 
 # ============================================================================
 # COOKIES MANAGEMENT & EXPIRATION DETECTION

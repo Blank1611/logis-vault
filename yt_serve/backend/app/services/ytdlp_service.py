@@ -222,7 +222,8 @@ class DownloadService:
         self,
         title: str,
         url: str,
-        excluded_ids: list
+        excluded_ids: list,
+        source: str = "ondemand"
     ) -> tuple:
         """Get playlist statistics"""
         if not tools:
@@ -248,7 +249,8 @@ class DownloadService:
             tools._get_playlist_entries,
             url,
             playlist_folder,
-            False  # force_refresh
+            False,  # force_refresh
+            source
         )
         
         # Count available and unavailable

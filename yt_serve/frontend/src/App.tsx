@@ -1353,6 +1353,16 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     },
   })
 
+  const testGitSyncMutation = useMutation({
+    mutationFn: () => configApi.testGitSync(),
+    onSuccess: (res) => {
+      alert(res.data.success ? `✓ ${res.data.message}` : `✗ ${res.data.message}`)
+    },
+    onError: (err: any) => {
+      alert(`Git test failed: ${err.message}`)
+    },
+  })
+
   const [formData, setFormData] = useState<Partial<Config>>({})
 
   useEffect(() => {
@@ -1404,6 +1414,42 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
         validated.batch_size = size
       }
     }
+
+    if (formData.sleep_interval_min !== undefined) {
+      validated.sleep_interval_min = Number(formData.sleep_interval_min)
+    }
+
+    if (formData.sleep_interval_max !== undefined) {
+      validated.sleep_interval_max = Number(formData.sleep_interval_max)
+    }
+
+    if (formData.concurrent_fragments !== undefined) {
+      validated.concurrent_fragments = Number(formData.concurrent_fragments)
+    }
+
+    if (formData.enable_daily_auto_refresh !== undefined) {
+      validated.enable_daily_auto_refresh = formData.enable_daily_auto_refresh
+    }
+
+    if (formData.daily_refresh_interval_hours !== undefined) {
+      validated.daily_refresh_interval_hours = Number(formData.daily_refresh_interval_hours)
+    }
+
+    if (formData.enable_git_metadata_sync !== undefined) {
+      validated.enable_git_metadata_sync = formData.enable_git_metadata_sync
+    }
+
+    if (formData.git_remote_url !== undefined) {
+      validated.git_remote_url = formData.git_remote_url?.trim() || null
+    }
+
+    if (formData.git_auth_token !== undefined) {
+      validated.git_auth_token = formData.git_auth_token?.trim() || null
+    }
+
+    if (formData.git_branch !== undefined) {
+      validated.git_branch = formData.git_branch?.trim() || 'main'
+    }
     
     if (formData.cookies_file !== undefined) {
       validated.cookies_file = formData.cookies_file?.trim() || null
@@ -1428,7 +1474,6 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       validated.flaresolverr_url = formData.flaresolverr_url?.trim() || null
     }
 
-    
     updateConfig.mutate(validated)
   }
 
@@ -1849,6 +1894,103 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                     <p className="text-xs text-gray-500 dark:text-gray-400">
                       Connect your homelab FlareSolverr container to bypass anti-bot challenges and solve session cookies.
                     </p>
+                  </div>
+
+                  {/* 24/7 Daily Background Metadata Scheduler */}
+                  <div className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 space-y-2">
+                    <FieldHeader
+                      label="24/7 Daily Background Metadata Scheduler"
+                      recommended="Recommended: Enabled"
+                      infoText="Automatically scans all playlists once every 24 hours in the background to detect newly added tracks, deleted videos, and silently privatized songs without requiring container restarts."
+                    />
+                    <label className="flex items-center space-x-2 mt-1">
+                      <input
+                        type="checkbox"
+                        checked={formData.enable_daily_auto_refresh ?? true}
+                        onChange={(e) => setFormData({ ...formData, enable_daily_auto_refresh: e.target.checked })}
+                        className="rounded text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Enable Daily Auto-Scan</span>
+                    </label>
+                  </div>
+
+                  {/* Automated Git Metadata Versioning & GitHub Sync */}
+                  <div className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 space-y-3">
+                    <FieldHeader
+                      label="Automated Git Metadata Versioning & GitHub Sync"
+                      recommended="Recommended: Enabled"
+                      infoText="Initializes a Git repo in your download folder (with media files strictly ignored) and creates one atomic commit per playlist whenever playlist_info.json changes, listing exact video IDs of added or removed/privatized songs."
+                    />
+                    <label className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        checked={formData.enable_git_metadata_sync ?? true}
+                        onChange={(e) => setFormData({ ...formData, enable_git_metadata_sync: e.target.checked })}
+                        className="rounded text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Enable Git Versioning for playlist_info.json</span>
+                    </label>
+
+                    {formData.enable_git_metadata_sync && (
+                      <div className="space-y-2.5 pt-1 border-t border-gray-100 dark:border-gray-700/60">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            GitHub / Remote Git URL (Optional)
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.git_remote_url || ''}
+                            onChange={(e) => setFormData({ ...formData, git_remote_url: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs"
+                            placeholder="https://github.com/username/yt-playlists-metadata.git"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                              GitHub Auth Token / PAT (Optional)
+                            </label>
+                            <input
+                              type="password"
+                              value={formData.git_auth_token || ''}
+                              onChange={(e) => setFormData({ ...formData, git_auth_token: e.target.value })}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs font-mono"
+                              placeholder="ghp_xxxx..."
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                              Target Git Branch
+                            </label>
+                            <input
+                              type="text"
+                              value={formData.git_branch || 'main'}
+                              onChange={(e) => setFormData({ ...formData, git_branch: e.target.value })}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs"
+                              placeholder="main"
+                            />
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => testGitSyncMutation.mutate()}
+                          disabled={testGitSyncMutation.isPending}
+                          className="px-3 py-1.5 bg-gray-800 hover:bg-black dark:bg-gray-700 dark:hover:bg-gray-600 text-white text-xs font-medium rounded-lg disabled:bg-gray-400 flex items-center gap-1.5"
+                        >
+                          {testGitSyncMutation.isPending ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Testing Git Sync...
+                            </>
+                          ) : (
+                            'Test Git Connection'
+                          )}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </details>

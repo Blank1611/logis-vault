@@ -64,7 +64,8 @@ async def refresh_playlist_stats_task(playlist_id: int):
         local_count, available_count, unavailable_count = await download_service.get_playlist_stats(
             playlist.title,
             playlist.url,
-            playlist.excluded_ids or []
+            playlist.excluded_ids or [],
+            source="ondemand"
         )
         
         playlist.local_count = local_count

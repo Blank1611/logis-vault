@@ -82,6 +82,16 @@ SLEEP_INTERVAL_MAX=5
 # Concurrent DASH video stream fragments per download (1-16)
 CONCURRENT_FRAGMENTS=2
 
+# Automated Daily Background Refresh (24/7 Server Mode)
+ENABLE_DAILY_AUTO_REFRESH=true
+DAILY_REFRESH_INTERVAL_HOURS=24
+
+# Automated Git Metadata Sync & Versioning
+ENABLE_GIT_METADATA_SYNC=true
+# GIT_REMOTE_URL=https://github.com/username/yt-playlists-metadata.git
+# GIT_AUTH_TOKEN=ghp_yourPersonalAccessTokenHere
+GIT_BRANCH=main
+
 # Optional FlareSolverr Proxy URL (e.g. http://flaresolverr:8191/v1)
 # FLARESOLVERR_URL=http://flaresolverr:8191/v1
 """
@@ -125,6 +135,16 @@ class Settings(BaseSettings):
     SLEEP_INTERVAL_MIN: int = 1
     SLEEP_INTERVAL_MAX: int = 5
     CONCURRENT_FRAGMENTS: int = 2
+    
+    # Daily Scheduler
+    ENABLE_DAILY_AUTO_REFRESH: bool = True
+    DAILY_REFRESH_INTERVAL_HOURS: int = 24
+    
+    # Git Metadata Sync
+    ENABLE_GIT_METADATA_SYNC: bool = True
+    GIT_REMOTE_URL: Optional[str] = None
+    GIT_AUTH_TOKEN: Optional[str] = None
+    GIT_BRANCH: str = "main"
     
     # Cookies
     COOKIES_FILE: Optional[str] = None

@@ -72,7 +72,8 @@ async def startup_event():
                 local_count, available_count, unavailable_count = await download_service.get_playlist_stats(
                     playlist.title,
                     playlist.url,
-                    playlist.excluded_ids or []
+                    playlist.excluded_ids or [],
+                    source="startup"
                 )
                 
                 playlist.local_count = local_count
@@ -90,6 +91,10 @@ async def startup_event():
         print("Startup complete!")
         print("="*60 + "\n")
         
+        # Start background 24/7 daily metadata scheduler
+        from app.services.scheduler import start_daily_scheduler
+        start_daily_scheduler()
+        
     except Exception as e:
         print(f"Error during startup: {e}")
         traceback.print_exc()
@@ -100,6 +105,8 @@ async def startup_event():
 async def shutdown_event():
     """Graceful container/server shutdown"""
     print("\n[Shutdown] Performing graceful shutdown...")
+    from app.services.scheduler import stop_daily_scheduler
+    stop_daily_scheduler()
     from app.services.job_manager import job_manager
     await job_manager.shutdown()
     print("[Shutdown] Complete.\n")

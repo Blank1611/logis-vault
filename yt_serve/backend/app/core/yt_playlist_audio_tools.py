@@ -761,10 +761,11 @@ def _load_cached_playlist_info(playlist_folder: str) -> Optional[dict]:
         return None
 
 
-def _save_playlist_info_with_versioning(playlist_folder: str, info: dict):
+def _save_playlist_info_with_versioning(playlist_folder: str, info: dict, source: str = "ondemand"):
     """
     Save playlist_info.json to the playlist_info_snapshot subdirectory.
     If file already exists, rename old file with creation date before saving new one.
+    Automatically stages and commits atomic Git versioning if changes are detected.
     """
     # Create snapshot subdirectory
     snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
@@ -772,6 +773,15 @@ def _save_playlist_info_with_versioning(playlist_folder: str, info: dict):
     
     info_path = os.path.join(snapshot_dir, "playlist_info.json")
     
+    # Load previous info before renaming to compute exact deltas for Git
+    old_info = None
+    if os.path.isfile(info_path):
+        try:
+            with open(info_path, "r", encoding="utf-8") as f:
+                old_info = json.load(f)
+        except Exception:
+            pass
+
     # If file exists, rename it with its creation date
     if os.path.isfile(info_path):
         try:
@@ -792,7 +802,15 @@ def _save_playlist_info_with_versioning(playlist_folder: str, info: dict):
     
     print(f"  Saved playlist_info.json to: playlist_info_snapshot/")
 
-def _get_playlist_entries(url: str, playlist_folder: str, force_refresh: bool = False) -> List[dict]:
+    # Git metadata versioning: stage & commit atomically for this playlist
+    try:
+        from app.utils.git_sync import commit_playlist_atomic
+        playlist_title = info.get("title") or os.path.basename(playlist_folder)
+        commit_playlist_atomic(playlist_folder, playlist_title, old_info, info, source=source)
+    except Exception as git_err:
+        print(f"  [GIT SYNC] Note: {git_err}")
+
+def _get_playlist_entries(url: str, playlist_folder: str, force_refresh: bool = False, source: str = "ondemand") -> List[dict]:
     """
     Return playlist entries (list of entry dicts), using cache when possible.
     
@@ -811,7 +829,7 @@ def _get_playlist_entries(url: str, playlist_folder: str, force_refresh: bool = 
     # Fetch fresh info from yt-dlp API
     info = _get_playlist_info(url, force_refresh=force_refresh)
     playlist_entries = info.get("entries") or []
-    _save_playlist_info_with_versioning(playlist_folder, info)
+    _save_playlist_info_with_versioning(playlist_folder, info, source=source)
     return playlist_entries
 
 def _check_browser_cookies_available(browser_name: str = BROWSER_NAME) -> bool:
