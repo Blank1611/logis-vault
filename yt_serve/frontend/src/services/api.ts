@@ -64,6 +64,7 @@ export const jobsApi = {
 
 export interface Config {
   base_download_path: string
+  temp_download_path?: string | null
   audio_extract_mode: string
   max_extraction_workers: number
   max_concurrent_downloads: number

@@ -38,6 +38,14 @@ def parse_args():
     )
     
     parser.add_argument(
+        "--storage.temp.path",
+        dest="temp_path",
+        type=str,
+        default=None,
+        help="Optional fast SSD directory for active downloads and FFmpeg processing (e.g. /downloads-temp)"
+    )
+    
+    parser.add_argument(
         "--web.listen-address",
         dest="listen_address",
         type=str,

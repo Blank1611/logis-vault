@@ -14,6 +14,7 @@ router = APIRouter()
 class ConfigResponse(BaseModel):
     """Configuration response model"""
     base_download_path: str
+    temp_download_path: Optional[str] = None
     audio_extract_mode: str
     max_extraction_workers: int
     max_concurrent_downloads: int
@@ -28,6 +29,7 @@ class ConfigResponse(BaseModel):
 class ConfigUpdate(BaseModel):
     """Configuration update model"""
     base_download_path: Optional[str] = None
+    temp_download_path: Optional[str] = None
     audio_extract_mode: Optional[str] = None
     max_extraction_workers: Optional[int] = None
     max_concurrent_downloads: Optional[int] = None
@@ -61,6 +63,7 @@ async def get_config():
     """Get current configuration"""
     return ConfigResponse(
         base_download_path=settings.BASE_DOWNLOAD_PATH,
+        temp_download_path=settings.TEMP_DOWNLOAD_PATH,
         audio_extract_mode=settings.AUDIO_EXTRACT_MODE,
         max_extraction_workers=settings.MAX_CONCURRENT_EXTRACTIONS,
         max_concurrent_downloads=settings.MAX_CONCURRENT_DOWNLOADS,
@@ -91,6 +94,8 @@ def _save_to_env(config: ConfigUpdate):
     # Update with new values
     if config.base_download_path is not None:
         env_content['BASE_DOWNLOAD_PATH'] = config.base_download_path
+    if config.temp_download_path is not None:
+        env_content['TEMP_DOWNLOAD_PATH'] = config.temp_download_path if config.temp_download_path else ''
     if config.audio_extract_mode is not None:
         env_content['AUDIO_EXTRACT_MODE'] = config.audio_extract_mode
     if config.max_extraction_workers is not None:
@@ -124,6 +129,8 @@ async def update_config(config: ConfigUpdate):
     # Update in-memory settings
     if config.base_download_path is not None:
         settings.BASE_DOWNLOAD_PATH = config.base_download_path
+    if config.temp_download_path is not None:
+        settings.TEMP_DOWNLOAD_PATH = config.temp_download_path if config.temp_download_path else None
     if config.audio_extract_mode is not None:
         settings.AUDIO_EXTRACT_MODE = config.audio_extract_mode
     if config.max_extraction_workers is not None:
@@ -148,6 +155,7 @@ async def update_config(config: ConfigUpdate):
     
     return ConfigResponse(
         base_download_path=settings.BASE_DOWNLOAD_PATH,
+        temp_download_path=settings.TEMP_DOWNLOAD_PATH,
         audio_extract_mode=settings.AUDIO_EXTRACT_MODE,
         max_extraction_workers=settings.MAX_CONCURRENT_EXTRACTIONS,
         max_concurrent_downloads=settings.MAX_CONCURRENT_DOWNLOADS,

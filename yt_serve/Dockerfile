@@ -30,9 +30,9 @@ COPY --from=frontend-builder /app/frontend/dist ./static
 # Create non-root appuser (UID 1000 / GID 1000) and state directories
 RUN groupadd -g 1000 appuser && \
     useradd -u 1000 -g appuser -d /app -s /bin/sh appuser && \
-    mkdir -p /downloads /app/data && \
-    chown -R appuser:appuser /app /downloads && \
-    chmod 777 /downloads /app/data && \
+    mkdir -p /downloads /downloads-temp /app/data && \
+    chown -R appuser:appuser /app /downloads /downloads-temp && \
+    chmod 777 /downloads /downloads-temp /app/data && \
     chmod -R 775 /app
 
 # Expose unified port

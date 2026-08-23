@@ -41,16 +41,21 @@ else:
 # CLI flag overrides
 _cli_db_path = _resolve_cli_flag("--storage.db.path")
 _cli_downloads_path = _resolve_cli_flag("--storage.downloads.path")
+_cli_temp_path = _resolve_cli_flag("--storage.temp.path")
 
 DEFAULT_ENV_TEMPLATE = """# ==============================================================================
 # YouTube Playlist Manager Configuration (yt_serve)
 # ==============================================================================
 
-# Root directory where playlists and media files will be saved
+# Root directory where playlists and media files will be saved (e.g. 2TB external HDD)
 BASE_DOWNLOAD_PATH=/downloads
 
+# Optional fast SSD directory for active fragment downloads & FFmpeg processing (e.g. /downloads-temp)
+# Leave commented or empty to download directly to BASE_DOWNLOAD_PATH
+# TEMP_DOWNLOAD_PATH=/downloads-temp
+
 # Audio extraction mode:
-# - copy: Stream copy AAC audio to .m4a without re-encoding (lossless & fastest)
+# - copy: Stream copy AAC audio to .m4a / Opus to .opus without re-encoding (lossless & fastest)
 # - mp3_best: Re-encode to highest quality MP3 (VBR ~250-320 kbps)
 # - mp3_high: Re-encode to standard high quality MP3 (VBR ~190-250 kbps)
 # - opus: Re-encode to Opus codec (128 kbps)
@@ -101,6 +106,7 @@ class Settings(BaseSettings):
     
     # Download settings
     BASE_DOWNLOAD_PATH: str = _cli_downloads_path or "downloads"
+    TEMP_DOWNLOAD_PATH: Optional[str] = _cli_temp_path or None
     MAX_CONCURRENT_DOWNLOADS: int = 1
     MAX_CONCURRENT_EXTRACTIONS: int = 4
     
@@ -139,10 +145,17 @@ class Settings(BaseSettings):
             self.DATABASE_PATH = _cli_db_path
         if _cli_downloads_path:
             self.BASE_DOWNLOAD_PATH = _cli_downloads_path
+        if _cli_temp_path:
+            self.TEMP_DOWNLOAD_PATH = _cli_temp_path
+        
+        # Normalize empty string temp path to None
+        if self.TEMP_DOWNLOAD_PATH and not self.TEMP_DOWNLOAD_PATH.strip():
+            self.TEMP_DOWNLOAD_PATH = None
         
         # Debug: Print loaded configuration
         print(f"[CONFIG] Loaded settings:")
         print(f"  BASE_DOWNLOAD_PATH: {self.BASE_DOWNLOAD_PATH}")
+        print(f"  TEMP_DOWNLOAD_PATH: {self.TEMP_DOWNLOAD_PATH or '(Disabled - downloading directly to destination)'}")
         print(f"  DATABASE_PATH: {self.DATABASE_PATH}")
         print(f"  Config file location: {ENV_FILE}")
         print(f"  Config file exists: {ENV_FILE.exists()}")
@@ -154,5 +167,13 @@ class Settings(BaseSettings):
                 print(f"  Download path ready: {self.BASE_DOWNLOAD_PATH}")
             except Exception as e:
                 print(f"  Warning: Could not create download path {self.BASE_DOWNLOAD_PATH}: {e}")
+                
+        # Create temp download path if configured
+        if self.TEMP_DOWNLOAD_PATH:
+            try:
+                os.makedirs(self.TEMP_DOWNLOAD_PATH, exist_ok=True)
+                print(f"  Temp SSD download path ready: {self.TEMP_DOWNLOAD_PATH}")
+            except Exception as e:
+                print(f"  Warning: Could not create temp download path {self.TEMP_DOWNLOAD_PATH}: {e}")
 
 settings = Settings()

@@ -967,6 +967,7 @@ function App() {
 function InitialSetupModal({ onComplete }: { onComplete: () => void }) {
   const [formData, setFormData] = useState<Partial<Config>>({
     base_download_path: '',
+    temp_download_path: '',
     audio_extract_mode: 'copy',
     max_extraction_workers: 4,
     batch_size: 200,
@@ -1013,18 +1014,35 @@ function InitialSetupModal({ onComplete }: { onComplete: () => void }) {
             {/* Required: Download Path */}
             <div className="border-2 border-blue-500 dark:border-blue-400 rounded-lg p-4 bg-blue-50 dark:bg-blue-900/20">
               <label className="block text-sm font-bold text-gray-900 dark:text-white mb-1">
-                Download Directory <span className="text-red-500">*</span>
+                Main Download Directory <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
                 value={formData.base_download_path || ''}
                 onChange={(e) => setFormData({ ...formData, base_download_path: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="E:\Music\Playlists"
+                placeholder="/downloads or E:\Music\Playlists"
                 required
               />
               <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                Full path where playlists will be downloaded (e.g., E:\Music\Playlists)
+                Final storage location for your playlists (e.g. 2TB External HDD or /downloads)
+              </p>
+            </div>
+
+            {/* Optional: Temp Download Buffer */}
+            <div className="border border-gray-300 dark:border-gray-600 rounded-lg p-4">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Temporary Processing Directory (Optional Fast SSD Buffer)
+              </label>
+              <input
+                type="text"
+                value={formData.temp_download_path || ''}
+                onChange={(e) => setFormData({ ...formData, temp_download_path: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="/downloads-temp (or leave empty to download directly to main storage)"
+              />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Fast SSD directory for fragment downloads and FFmpeg audio extraction before moving to main storage.
               </p>
             </div>
 
@@ -1262,6 +1280,10 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     if (formData.base_download_path) {
       validated.base_download_path = formData.base_download_path.trim()
     }
+
+    if (formData.temp_download_path !== undefined) {
+      validated.temp_download_path = formData.temp_download_path?.trim() || null
+    }
     
     if (formData.audio_extract_mode) {
       const validModes = ['copy', 'mp3_best', 'mp3_high', 'opus']
@@ -1368,6 +1390,44 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                   Note: Browser security limits folder selection. You may need to type the full path manually.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Temp Processing Directory (Optional Fast SSD Buffer)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={formData.temp_download_path || ''}
+                    onChange={(e) => setFormData({ ...formData, temp_download_path: e.target.value })}
+                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="/downloads-temp (or leave empty to download directly to main storage)"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const input = document.createElement('input')
+                      input.type = 'file'
+                      input.webkitdirectory = true
+                      input.onchange = (e: any) => {
+                        const files = e.target.files
+                        if (files && files.length > 0) {
+                          const path = files[0].webkitRelativePath.split('/')[0]
+                          setFormData({ ...formData, temp_download_path: path })
+                        }
+                      }
+                      input.click()
+                    }}
+                    className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 whitespace-nowrap flex items-center gap-2"
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    Browse
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Active downloads and FFmpeg audio extraction occur on this fast drive before moving to your main storage.
                 </p>
               </div>
 
