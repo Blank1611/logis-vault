@@ -74,8 +74,9 @@ async def get_config():
     )
 
 def _save_to_env(config: ConfigUpdate):
-    """Save configuration to .env file"""
-    env_path = Path(__file__).parent.parent.parent / ".env"
+    """Save configuration to active .env file"""
+    env_path = settings.get_env_file_path()
+    os.makedirs(env_path.parent, exist_ok=True)
     
     # Read existing .env content
     env_content = {}

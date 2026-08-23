@@ -9,7 +9,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Backend with Python
-FROM python:3.11-slim AS runner
+FROM python:3.14-slim AS runner
 WORKDIR /app/backend
 
 # Install ffmpeg
@@ -27,16 +27,28 @@ COPY backend/ ./
 # Copy compiled frontend static assets to backend/static
 COPY --from=frontend-builder /app/frontend/dist ./static
 
-# Create downloads and persistent data directory
-RUN mkdir -p /downloads /app/data
+# Create non-root appuser (UID 1000 / GID 1000) and state directories
+RUN groupadd -g 1000 appuser && \
+    useradd -u 1000 -g appuser -d /app -s /bin/sh appuser && \
+    mkdir -p /downloads /app/data && \
+    chown -R appuser:appuser /app /downloads && \
+    chmod 777 /downloads /app/data && \
+    chmod -R 775 /app
 
 # Expose unified port
 EXPOSE 8000
 
 # Default environment variables
-ENV BASE_DOWNLOAD_PATH=/downloads \
-    DATABASE_PATH=/app/data/yt_manager.db \
-    PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "run.py"]
+# Run container as unprivileged appuser (supports custom UID/GID or group_add override)
+USER appuser
 
+# Cloud-native entrypoint and default argument list
+ENTRYPOINT ["python", "run.py"]
+CMD [ \
+    "--config.file=/app/data/config.env", \
+    "--storage.db.path=/app/data/yt_manager.db", \
+    "--storage.downloads.path=/downloads", \
+    "--web.listen-address=0.0.0.0:8000" \
+]

@@ -27,65 +27,19 @@ from yt_dlp import YoutubeDL
 from yt_dlp.utils import ExtractorError
 
 # ====== CONFIGURATION SYSTEM ======
-# This module can work in two modes:
-# 1. Backend mode: Uses Pydantic settings from app.core.config (yt_serve)
-# 2. Standalone mode: Uses config.json (Tkinter version)
+from app.core.config import settings
 
-try:
-    from app.core.config import settings
-    _USE_BACKEND_SETTINGS = True
-except ImportError:
-    # Fallback for standalone usage (Tkinter version)
-    _USE_BACKEND_SETTINGS = False
-    settings = None
-
-def _load_config(config_path: str = "config.json") -> dict:
-    """Load configuration from JSON file (fallback for standalone mode)."""
-    if not os.path.isfile(config_path):
-        return {}
-    
-    with open(config_path, "r") as f:
-        return json.load(f)
-
-
-# Load config only if backend settings not available
-CONFIG = {} if _USE_BACKEND_SETTINGS else _load_config()
-
-# ====== USER CONFIG (DEFAULTS, CAN BE OVERRIDDEN BY GUI) ======
-
-if _USE_BACKEND_SETTINGS and settings:
-    # Backend mode: Use Pydantic settings from .env
-    BASE_DOWNLOAD_PATH = settings.BASE_DOWNLOAD_PATH
-    USE_BROWSER_COOKIES = settings.USE_BROWSER_COOKIES
-    BROWSER_NAME = settings.BROWSER_NAME
-    COOKIES_FILE = settings.COOKIES_FILE
-    AUDIO_EXTRACT_MODE = settings.AUDIO_EXTRACT_MODE
-    MAX_EXTRACTION_WORKERS = settings.MAX_CONCURRENT_EXTRACTIONS
-    # BATCH_SIZE is loaded dynamically - see _get_batch_size()
-    BATCH_DELAY = 300  # Default for backend
-else:
-    # Standalone mode: Use config.json
-    BASE_DOWNLOAD_PATH = CONFIG.get("base_download_path")
-    USE_BROWSER_COOKIES = CONFIG.get("use_browser_cookies", False)
-    BROWSER_NAME = CONFIG.get("browser_name", "chrome")
-    COOKIES_FILE = CONFIG.get("cookies_file")
-    AUDIO_EXTRACT_MODE = CONFIG.get("audio_extract_mode", "mp3_best")
-    MAX_EXTRACTION_WORKERS = CONFIG.get("max_extraction_workers", 4)
-    # BATCH_SIZE is loaded dynamically - see _get_batch_size()
-    BATCH_DELAY = CONFIG.get("batch_delay", 300)
-
+BASE_DOWNLOAD_PATH = settings.BASE_DOWNLOAD_PATH
+USE_BROWSER_COOKIES = settings.USE_BROWSER_COOKIES
+BROWSER_NAME = settings.BROWSER_NAME
+COOKIES_FILE = settings.COOKIES_FILE
+AUDIO_EXTRACT_MODE = settings.AUDIO_EXTRACT_MODE
+MAX_EXTRACTION_WORKERS = settings.MAX_CONCURRENT_EXTRACTIONS
+BATCH_DELAY = 300  # Default batch delay in seconds
 
 def _get_batch_size() -> int:
-    """Get current batch size from settings (dynamically loaded)."""
-    if _USE_BACKEND_SETTINGS:
-        # Create new Settings instance to reload from .env file
-        from app.core.config import Settings
-        fresh_settings = Settings()
-        return fresh_settings.BATCH_SIZE
-    else:
-        # Reload config.json for standalone mode
-        config = _load_config()
-        return config.get("batch_size", 200)
+    """Get current batch size from settings dynamically"""
+    return getattr(settings, "BATCH_SIZE", 200)
 
 USER_AGENT = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36"
 CONCURRENT_FRAGMENTS = 4

@@ -46,7 +46,7 @@ def _check_needs_setup() -> bool:
     
     # In container or production environments where BASE_DOWNLOAD_PATH is set (e.g. /downloads)
     # setup is not needed.
-    env_path = Path(__file__).parent.parent.parent.parent / ".env"
+    env_path = settings.get_env_file_path()
     if os.environ.get("BASE_DOWNLOAD_PATH") or env_path.exists():
         return False
         
@@ -74,10 +74,11 @@ async def get_config():
     )
 
 def _save_to_env(config: ConfigUpdate):
-    """Save configuration changes to .env file"""
-    env_path = Path(__file__).parent.parent.parent.parent / ".env"
+    """Save configuration to active .env file"""
+    env_path = settings.get_env_file_path()
+    os.makedirs(env_path.parent, exist_ok=True)
     
-    # Read existing .env content if it exists
+    # Read existing .env content
     env_content = {}
     if env_path.exists():
         with open(env_path, 'r', encoding='utf-8') as f:
@@ -228,7 +229,7 @@ async def update_ytdlp():
         return YtDlpUpdateResponse(
             success=False,
             message=f"Error updating yt-dlp: {str(e)}",
-        old_version=old_version,
+            old_version=old_version,
             new_version=old_version,
             output=str(e)
         )

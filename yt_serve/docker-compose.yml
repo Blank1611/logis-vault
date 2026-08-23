@@ -1,20 +1,20 @@
 version: '3.8'
 
 services:
-  youtube-manager:
+  yt_serve:
     build: .
-    container_name: youtube-playlist-manager
+    container_name: yt_serve
+    # Runs as unprivileged UID 1000 by default in Dockerfile.
+    # Optional: Map custom host UID:GID if not 1000
+    # user: "1005:1000"
+    # Optional: Add supplementary host storage group (e.g. 2000 for shared media/NAS folder)
+    # group_add:
+    #   - "2000"
     ports:
       - "8000:8000"
     volumes:
       - ./downloads:/downloads
       - ./data:/app/data
-    environment:
-      - BASE_DOWNLOAD_PATH=/downloads
-      - DATABASE_PATH=/app/data/yt_manager.db
-      - AUDIO_EXTRACT_MODE=copy
-      - MAX_CONCURRENT_EXTRACTIONS=4
-      - BATCH_SIZE=200
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\""]
@@ -22,5 +22,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
-
+    # Optional CLI flag overrides (Prometheus/Loki style):
+    # command:
+    #   - "--log.level=debug"
