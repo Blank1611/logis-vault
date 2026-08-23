@@ -84,7 +84,8 @@ CONCURRENT_FRAGMENTS=2
 
 # Automated Daily Background Refresh (24/7 Server Mode)
 ENABLE_DAILY_AUTO_REFRESH=true
-DAILY_REFRESH_INTERVAL_HOURS=24
+DAILY_REFRESH_TIME=04:00
+DAILY_REFRESH_TIMEZONE=Asia/Kolkata
 
 # Automated Git Metadata Sync & Versioning
 ENABLE_GIT_METADATA_SYNC=true
@@ -138,7 +139,8 @@ class Settings(BaseSettings):
     
     # Daily Scheduler
     ENABLE_DAILY_AUTO_REFRESH: bool = True
-    DAILY_REFRESH_INTERVAL_HOURS: int = 24
+    DAILY_REFRESH_TIME: str = "04:00"
+    DAILY_REFRESH_TIMEZONE: str = "Asia/Kolkata"
     
     # Git Metadata Sync
     ENABLE_GIT_METADATA_SYNC: bool = True

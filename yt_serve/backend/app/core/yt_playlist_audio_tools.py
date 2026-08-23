@@ -14,11 +14,13 @@ This version adds:
 """
 
 import os
+import sys
 import json
 import time
 import random
 import shutil
 import glob
+import threading
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -761,54 +763,68 @@ def _load_cached_playlist_info(playlist_folder: str) -> Optional[dict]:
         return None
 
 
+# Threading locks per playlist folder to prevent simultaneous file write/rotation collisions
+_PLAYLIST_FILE_LOCKS = {}
+_PLAYLIST_LOCKS_MUTEX = threading.Lock()
+
+def _get_playlist_file_lock(playlist_folder: str) -> threading.Lock:
+    """Get or create a dedicated threading Lock for a playlist folder"""
+    with _PLAYLIST_LOCKS_MUTEX:
+        if playlist_folder not in _PLAYLIST_FILE_LOCKS:
+            _PLAYLIST_FILE_LOCKS[playlist_folder] = threading.Lock()
+        return _PLAYLIST_FILE_LOCKS[playlist_folder]
+
 def _save_playlist_info_with_versioning(playlist_folder: str, info: dict, source: str = "ondemand"):
     """
     Save playlist_info.json to the playlist_info_snapshot subdirectory.
     If file already exists, rename old file with creation date before saving new one.
     Automatically stages and commits atomic Git versioning if changes are detected.
+    Protected with a per-playlist file lock to prevent concurrent write collisions.
     """
-    # Create snapshot subdirectory
-    snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-    os.makedirs(snapshot_dir, exist_ok=True)
-    
-    info_path = os.path.join(snapshot_dir, "playlist_info.json")
-    
-    # Load previous info before renaming to compute exact deltas for Git
-    old_info = None
-    if os.path.isfile(info_path):
-        try:
-            with open(info_path, "r", encoding="utf-8") as f:
-                old_info = json.load(f)
-        except Exception:
-            pass
+    folder_lock = _get_playlist_file_lock(playlist_folder)
+    with folder_lock:
+        # Create snapshot subdirectory
+        snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
+        os.makedirs(snapshot_dir, exist_ok=True)
+        
+        info_path = os.path.join(snapshot_dir, "playlist_info.json")
+        
+        # Load previous info before renaming to compute exact deltas for Git
+        old_info = None
+        if os.path.isfile(info_path):
+            try:
+                with open(info_path, "r", encoding="utf-8") as f:
+                    old_info = json.load(f)
+            except Exception:
+                pass
 
-    # If file exists, rename it with its creation date
-    if os.path.isfile(info_path):
-        try:
-            # Get file creation time
-            creation_time = os.path.getctime(info_path)
-            date_str = datetime.fromtimestamp(creation_time).strftime("%Y%m%d_%H%M%S")
-            
-            # Rename old file in same directory
-            old_name = os.path.join(snapshot_dir, f"playlist_info_{date_str}.json")
-            os.rename(info_path, old_name)
-            print(f"  Archived old playlist_info.json as: {os.path.basename(old_name)}")
-        except Exception as e:
-            print(f"  Warning: Could not archive old playlist_info.json: {e}")
-    
-    # Save new file
-    with open(info_path, "w", encoding="utf-8") as f:
-        json.dump(info, f, ensure_ascii=False, indent=2)
-    
-    print(f"  Saved playlist_info.json to: playlist_info_snapshot/")
+        # If file exists, rename it with its creation date
+        if os.path.isfile(info_path):
+            try:
+                # Get file creation time
+                creation_time = os.path.getctime(info_path)
+                date_str = datetime.fromtimestamp(creation_time).strftime("%Y%m%d_%H%M%S")
+                
+                # Rename old file in same directory
+                old_name = os.path.join(snapshot_dir, f"playlist_info_{date_str}.json")
+                os.rename(info_path, old_name)
+                print(f"  Archived old playlist_info.json as: {os.path.basename(old_name)}")
+            except Exception as e:
+                print(f"  Warning: Could not archive old playlist_info.json: {e}")
+        
+        # Save new file
+        with open(info_path, "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False, indent=2)
+        
+        print(f"  Saved playlist_info.json to: playlist_info_snapshot/")
 
-    # Git metadata versioning: stage & commit atomically for this playlist
-    try:
-        from app.utils.git_sync import commit_playlist_atomic
-        playlist_title = info.get("title") or os.path.basename(playlist_folder)
-        commit_playlist_atomic(playlist_folder, playlist_title, old_info, info, source=source)
-    except Exception as git_err:
-        print(f"  [GIT SYNC] Note: {git_err}")
+        # Git metadata versioning: stage & commit atomically for this playlist
+        try:
+            from app.utils.git_sync import commit_playlist_atomic
+            playlist_title = info.get("title") or os.path.basename(playlist_folder)
+            commit_playlist_atomic(playlist_folder, playlist_title, old_info, info, source=source)
+        except Exception as git_err:
+            print(f"  [GIT SYNC] Note: {git_err}")
 
 def _get_playlist_entries(url: str, playlist_folder: str, force_refresh: bool = False, source: str = "ondemand") -> List[dict]:
     """

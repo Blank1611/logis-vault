@@ -159,6 +159,22 @@ def _compute_video_deltas(old_info: Optional[Dict[str, Any]], new_info: Dict[str
     return added_ids, removed_ids, new_total
 
 
+# Global thread lock to serialize all Git repository operations and prevent .git/index.lock collisions
+_GIT_MUTEX = threading.Lock()
+
+def _cleanup_stale_git_lock(base_path: str):
+    """Clean up stale .git/index.lock if left over from an interrupted process"""
+    lock_file = os.path.join(base_path, ".git", "index.lock")
+    if os.path.isfile(lock_file):
+        try:
+            # If lock file is older than 60 seconds, it is stale from a crash
+            mtime = os.path.getmtime(lock_file)
+            if (datetime.now().timestamp() - mtime) > 60:
+                os.remove(lock_file)
+                print(f"[GIT SYNC] Removed stale Git index lock: {lock_file}")
+        except Exception as e:
+            print(f"[GIT SYNC] Warning: Could not inspect/remove stale lock: {e}")
+
 def commit_playlist_atomic(
     playlist_folder: str,
     playlist_title: str,
@@ -168,75 +184,79 @@ def commit_playlist_atomic(
 ) -> bool:
     """
     Stages ONLY this playlist's playlist_info.json and creates a concise atomic commit if changed.
-    Source can be: 'ondemand' (manual UI refresh/download), 'scheduled' (24/7 daily scheduler), or 'startup'.
+    Thread-safe: acquired via _GIT_MUTEX to prevent index.lock conflicts.
     """
     if not getattr(settings, "ENABLE_GIT_METADATA_SYNC", True):
         return False
 
     base_path = settings.BASE_DOWNLOAD_PATH
-    if not ensure_git_repo(base_path):
-        return False
 
-    # Path to the playlist_info.json relative to base_path
-    snapshot_json = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
-    if not os.path.isfile(snapshot_json):
-        # Fallback to playlist root if not in snapshot dir
-        snapshot_json = os.path.join(playlist_folder, "playlist_info.json")
-        if not os.path.isfile(snapshot_json):
+    with _GIT_MUTEX:
+        if not ensure_git_repo(base_path):
             return False
 
-    rel_path = os.path.relpath(snapshot_json, base_path)
+        _cleanup_stale_git_lock(base_path)
 
-    # Stage this specific file
-    code, _, stderr = _run_git_cmd(["add", rel_path], base_path)
-    if code != 0:
-        print(f"[GIT SYNC] Error staging {rel_path}: {stderr}")
-        return False
+        # Path to the playlist_info.json relative to base_path
+        snapshot_json = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
+        if not os.path.isfile(snapshot_json):
+            # Fallback to playlist root if not in snapshot dir
+            snapshot_json = os.path.join(playlist_folder, "playlist_info.json")
+            if not os.path.isfile(snapshot_json):
+                return False
 
-    # Check if there are staged changes (0 means NO changes)
-    code, _, _ = _run_git_cmd(["diff", "--cached", "--quiet", "--", rel_path], base_path)
-    if code == 0:
-        # No changes in this playlist's metadata -> skip commit
-        return False
+        rel_path = os.path.relpath(snapshot_json, base_path)
 
-    # Compute deltas for commit message
-    added_ids, removed_ids, total_count = _compute_video_deltas(old_info, new_info)
+        # Stage this specific file
+        code, _, stderr = _run_git_cmd(["add", rel_path], base_path)
+        if code != 0:
+            print(f"[GIT SYNC] Error staging {rel_path}: {stderr}")
+            return False
 
-    # Build concise commit message with IDs
-    parts = []
-    if added_ids and removed_ids:
-        parts.append(f"+{len(added_ids)} added, -{len(removed_ids)} removed/private")
-        sample_ids = [f"-{vid}" for vid in removed_ids[:3]] + [f"+{vid}" for vid in added_ids[:3]]
-        parts.append(f"[IDs: {', '.join(sample_ids)}]")
-    elif removed_ids:
-        parts.append(f"-{len(removed_ids)} removed/private")
-        sample_ids = [f"{vid}" for vid in removed_ids[:5]]
-        parts.append(f"[ID{'s' if len(sample_ids) > 1 else ''}: {', '.join(sample_ids)}]")
-    elif added_ids:
-        parts.append(f"+{len(added_ids)} added")
-        sample_ids = [f"{vid}" for vid in added_ids[:5]]
-        parts.append(f"[ID{'s' if len(sample_ids) > 1 else ''}: {', '.join(sample_ids)}]")
-    else:
-        parts.append("Metadata updated")
+        # Check if there are staged changes (0 means NO changes)
+        code, _, _ = _run_git_cmd(["diff", "--cached", "--quiet", "--", rel_path], base_path)
+        if code == 0:
+            # No changes in this playlist's metadata -> skip commit
+            return False
 
-    prefix_map = {
-        "scheduled": "[Daily Schedule]",
-        "ondemand": "[On-Demand]",
-        "manual": "[On-Demand]",
-        "startup": "[Startup Scan]",
-    }
-    tag = prefix_map.get(source.lower(), f"[{source.capitalize()}]")
-    commit_title = f"{tag} Update '{playlist_title}': {' '.join(parts)} (Total: {total_count})"
+        # Compute deltas for commit message
+        added_ids, removed_ids, total_count = _compute_video_deltas(old_info, new_info)
 
-    code, stdout, stderr = _run_git_cmd(["commit", "-m", commit_title, "--", rel_path], base_path)
-    if code == 0:
-        print(f"[GIT SYNC] ✓ Committed: {commit_title}")
-        # Asynchronously trigger push
-        push_to_remote_async()
-        return True
-    else:
-        print(f"[GIT SYNC] Commit failed: {stderr}")
-        return False
+        # Build concise commit message with IDs
+        parts = []
+        if added_ids and removed_ids:
+            parts.append(f"+{len(added_ids)} added, -{len(removed_ids)} removed/private")
+            sample_ids = [f"-{vid}" for vid in removed_ids[:3]] + [f"+{vid}" for vid in added_ids[:3]]
+            parts.append(f"[IDs: {', '.join(sample_ids)}]")
+        elif removed_ids:
+            parts.append(f"-{len(removed_ids)} removed/private")
+            sample_ids = [f"{vid}" for vid in removed_ids[:5]]
+            parts.append(f"[ID{'s' if len(sample_ids) > 1 else ''}: {', '.join(sample_ids)}]")
+        elif added_ids:
+            parts.append(f"+{len(added_ids)} added")
+            sample_ids = [f"{vid}" for vid in added_ids[:5]]
+            parts.append(f"[ID{'s' if len(sample_ids) > 1 else ''}: {', '.join(sample_ids)}]")
+        else:
+            parts.append("Metadata updated")
+
+        prefix_map = {
+            "scheduled": "[Daily Schedule]",
+            "ondemand": "[On-Demand]",
+            "manual": "[On-Demand]",
+            "startup": "[Startup Scan]",
+        }
+        tag = prefix_map.get(source.lower(), f"[{source.capitalize()}]")
+        commit_title = f"{tag} Update '{playlist_title}': {' '.join(parts)} (Total: {total_count})"
+
+        code, stdout, stderr = _run_git_cmd(["commit", "-m", commit_title, "--", rel_path], base_path)
+        if code == 0:
+            print(f"[GIT SYNC] ✓ Committed: {commit_title}")
+            # Asynchronously trigger push
+            push_to_remote_async()
+            return True
+        else:
+            print(f"[GIT SYNC] Commit failed: {stderr}")
+            return False
 
 
 def _get_authenticated_remote_url() -> Optional[str]:
@@ -264,21 +284,24 @@ def push_to_remote_sync() -> Tuple[bool, str]:
     if not remote_url:
         return True, "No remote URL configured (local commits only)"
 
-    # Set or update origin remote
-    _run_git_cmd(["remote", "remove", "origin"], base_path)
-    code, _, stderr = _run_git_cmd(["remote", "add", "origin", remote_url], base_path)
-    if code != 0 and "already exists" not in stderr:
-        return False, f"Failed to set remote origin: {stderr}"
+    with _GIT_MUTEX:
+        _cleanup_stale_git_lock(base_path)
 
-    # Push to remote branch
-    code, stdout, stderr = _run_git_cmd(["push", "-u", "origin", branch], base_path, timeout=60)
-    if code == 0:
-        return True, f"Successfully pushed metadata commits to {branch} on remote"
-    else:
-        # Mask token from error output
-        token = getattr(settings, "GIT_AUTH_TOKEN", "")
-        clean_err = stderr.replace(token, "******") if token else stderr
-        return False, f"Git push failed: {clean_err}"
+        # Set or update origin remote
+        _run_git_cmd(["remote", "remove", "origin"], base_path)
+        code, _, stderr = _run_git_cmd(["remote", "add", "origin", remote_url], base_path)
+        if code != 0 and "already exists" not in stderr:
+            return False, f"Failed to set remote origin: {stderr}"
+
+        # Push to remote branch
+        code, stdout, stderr = _run_git_cmd(["push", "-u", "origin", branch], base_path, timeout=60)
+        if code == 0:
+            return True, f"Successfully pushed metadata commits to {branch} on remote"
+        else:
+            # Mask token from error output
+            token = getattr(settings, "GIT_AUTH_TOKEN", "")
+            clean_err = stderr.replace(token, "******") if token else stderr
+            return False, f"Git push failed: {clean_err}"
 
 
 def push_to_remote_async():

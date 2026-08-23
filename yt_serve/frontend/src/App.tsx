@@ -158,6 +158,17 @@ function App() {
     refetchInterval: 2000, // Poll every 2 seconds
   })
 
+  // Fetch background scheduler execution state
+  const { data: schedulerStatusData } = useQuery({
+    queryKey: ['scheduler-status'],
+    queryFn: async () => {
+      const res = await configApi.getSchedulerStatus()
+      return res.data
+    },
+    refetchInterval: 4000, // Poll scheduler state every 4s
+  })
+  const schedulerStatus = schedulerStatusData
+
   // Track completed jobs to refetch playlists only once per completion
   const [completedJobIds, setCompletedJobIds] = useState<Set<number>>(new Set())
   
@@ -203,6 +214,10 @@ function App() {
     mutationFn: (id: number) => playlistsApi.refresh(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['playlists'] })
+    },
+    onError: (err: any) => {
+      const msg = err.response?.data?.detail || err.message
+      alert(`Cannot refresh playlist:\n\n${msg}`)
     },
   })
 
@@ -357,6 +372,28 @@ function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-8">
+        {/* Daily Background Scanner Active Banner */}
+        {schedulerStatus?.is_scanning && (
+          <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-xl flex items-center justify-between shadow-sm animate-pulse">
+            <div className="flex items-center gap-3.5">
+              <div className="w-9 h-9 rounded-lg bg-blue-600 text-white flex items-center justify-center flex-shrink-0 shadow-sm">
+                <RefreshCw className="w-5 h-5 animate-spin" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-blue-950 dark:text-blue-200">
+                  Daily Metadata Auto-Scan in Progress ({schedulerStatus.completed_count}/{schedulerStatus.total_count})
+                </h4>
+                <p className="text-xs text-blue-700 dark:text-blue-300 mt-0.5">
+                  Scanning: <span className="font-semibold">{schedulerStatus.current_playlist || 'Initializing...'}</span> (Manual refresh paused to prevent rate-limits)
+                </p>
+              </div>
+            </div>
+            <span className="hidden sm:inline-flex text-xs font-mono font-medium px-2.5 py-1 rounded bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-300">
+              Scheduled Auto-Scan
+            </span>
+          </div>
+        )}
+
         {activeTab === 'playlists' ? (
           <>
             {/* Add Playlist */}
@@ -388,183 +425,158 @@ function App() {
             <p className="mt-2 text-gray-600 dark:text-gray-400">Loading playlists...</p>
           </div>
         ) : viewMode === 'grid' ? (
-          /* Grid View */
+          /* Grid View - Clean Cards */
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {playlists
               ?.slice()
               .sort((a, b) => {
-                // Calculate pending downloads
                 const aPending = Math.max(0, a.playlist_count - a.local_count)
                 const bPending = Math.max(0, b.playlist_count - b.local_count)
-                // Sort by pending (descending) - playlists with more pending come first
                 return bPending - aPending
               })
               .map((playlist) => {
               const runningJob = getRunningJob(playlist.id)
-              const isCaughtUp = playlist.local_count >= playlist.playlist_count && playlist.playlist_count > 0
-              const hasPendingDownloads = playlist.local_count < playlist.playlist_count && playlist.playlist_count > 0
               
               return (
-                <div key={playlist.id} className={`rounded-lg shadow hover:shadow-lg transition-shadow playlist-card-light-hover playlist-card-dark-hover ${
-                  isCaughtUp 
-                    ? 'bg-green-50 dark:bg-green-900/20 border-2 border-green-200 dark:border-green-800 playlist-complete-glow' 
-                    : hasPendingDownloads
-                    ? 'bg-white dark:bg-gray-800 playlist-pending-glow'
-                    : 'bg-white dark:bg-gray-800'
-                }`}>
-                  <div className="p-6">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 
-                        className="text-lg font-semibold truncate text-gray-900 dark:text-white cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-all flex-1 mr-2 group"
-                        onClick={() => openFolder.mutate(playlist.id)}
-                        title="Open in explorer"
-                      >
-                        <span className="playlist-title-glow">
+                <div
+                  key={playlist.id}
+                  className="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow border border-gray-200 dark:border-gray-700 flex flex-col"
+                >
+                  <div className="p-6 flex-1 flex flex-col">
+                    {/* Header */}
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="flex-1">
+                        <h3 className="text-lg font-bold text-gray-900 dark:text-white line-clamp-2">
                           {playlist.title}
-                        </span>
-                        {isCaughtUp && <span className="ml-2 text-xs text-green-600 dark:text-green-400">✓ Caught up</span>}
-                      </h3>
+                        </h3>
+                        <a
+                          href={playlist.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 mt-1"
+                        >
+                          View on YouTube
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
+                      
+                      {/* Open Folder Button */}
                       <button
-                        onClick={() => window.open(playlist.url, '_blank')}
-                        className="p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
-                        title="Open playlist in browser"
+                        onClick={() => openFolder.mutate(playlist.id)}
+                        disabled={openFolder.isPending}
+                        className="p-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+                        title="Open folder in File Explorer"
                       >
-                        <ExternalLink className="w-4 h-4" />
+                        <FolderOpen className="w-4 h-4" />
                       </button>
                     </div>
-                    
+
                     {/* Stats */}
-                    <div className="grid grid-cols-3 gap-2 mb-4 text-sm">
-                      <div className="text-center p-2 bg-green-50 dark:bg-green-900/30 rounded">
-                        <div className="font-semibold text-green-700 dark:text-green-400">{playlist.local_count}</div>
-                        <div className="text-gray-600 dark:text-gray-400">Local</div>
+                    <div className="grid grid-cols-3 gap-4 mb-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+                          {playlist.local_count}
+                        </div>
+                        <div className="text-xs text-gray-600 dark:text-gray-400">Local Files</div>
                       </div>
-                      <div className="text-center p-2 bg-blue-50 dark:bg-blue-900/30 rounded">
-                        <div className="font-semibold text-blue-700 dark:text-blue-400">{playlist.playlist_count}</div>
-                        <div className="text-gray-600 dark:text-gray-400">Available</div>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                          {playlist.playlist_count}
+                        </div>
+                        <div className="text-xs text-gray-600 dark:text-gray-400">Available</div>
                       </div>
-                      <div className="text-center p-2 bg-red-50 dark:bg-red-900/30 rounded">
-                        <div className="font-semibold text-red-700 dark:text-red-400">{playlist.unavailable_count}</div>
-                        <div className="text-gray-600 dark:text-gray-400">Unavailable</div>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-red-600 dark:text-red-400">
+                          {playlist.unavailable_count}
+                        </div>
+                        <div className="text-xs text-gray-600 dark:text-gray-400">Unavailable</div>
                       </div>
                     </div>
 
-                    {/* Progress Bars */}
+                    {/* Status Message */}
+                    <div className="mb-4 text-sm font-medium">
+                      {playlist.local_count >= playlist.playlist_count && playlist.playlist_count > 0 ? (
+                        <span className="text-green-600 dark:text-green-400 flex items-center gap-1">
+                          ✓ Caught up
+                        </span>
+                      ) : (
+                        <span className="text-orange-600 dark:text-orange-400 flex items-center gap-1">
+                          ! {Math.max(0, playlist.playlist_count - playlist.local_count)} new videos
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Spacer */}
+                    <div className="flex-1" />
+
+                    {/* Running Job Status */}
                     {runningJob && (
-                      <div className="mb-4 space-y-3">
+                      <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/30 rounded border border-blue-200 dark:border-blue-800">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-medium text-blue-900 dark:text-blue-100 flex items-center gap-2">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            {runningJob.job_type === 'both' ? 'Downloading & Extracting' : 
+                             runningJob.job_type === 'download' ? 'Downloading' : 'Extracting'}
+                          </span>
+                          <span className="text-xs text-blue-700 dark:text-blue-300">
+                            Job #{runningJob.id}
+                          </span>
+                        </div>
+                        
                         {/* Download Progress */}
-                        {(runningJob.download_status === 'pending' || runningJob.download_status === 'running') && (
-                          <div>
-                            <div className="flex justify-between text-sm mb-1">
-                              <span className="text-gray-600 dark:text-gray-400">
-                                📥 {runningJob.download_status === 'pending' ? 'Preparing download...' : 'Downloading'}
-                              </span>
-                              <span className="font-semibold text-gray-900 dark:text-white">
-                                {runningJob.download_completed} / {runningJob.download_total}
-                              </span>
+                        {runningJob.job_type !== 'extract' && runningJob.download_total > 0 && (
+                          <div className="space-y-1 mb-2">
+                            <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400">
+                              <span>Downloading Videos</span>
+                              <span>{runningJob.download_completed} / {runningJob.download_total}</span>
                             </div>
-                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
                               <div
-                                className="bg-blue-600 dark:bg-blue-500 h-2 rounded-full transition-all"
-                                style={{ 
-                                  width: `${runningJob.download_total > 0 ? (runningJob.download_completed / runningJob.download_total * 100) : 0}%` 
-                                }}
+                                className="bg-blue-600 h-1.5 rounded-full transition-all duration-300"
+                                style={{ width: `${(runningJob.download_completed / runningJob.download_total) * 100}%` }}
                               />
                             </div>
-                            {runningJob.download_batch_info && (
-                              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                {runningJob.download_batch_info}
-                              </div>
-                            )}
                           </div>
                         )}
                         
                         {/* Extraction Progress */}
-                        {(runningJob.extract_status === 'pending' || runningJob.extract_status === 'running') && (
-                          <div>
-                            <div className="flex justify-between text-sm mb-1">
-                              <span className="text-gray-600 dark:text-gray-400">
-                                🎵 {runningJob.extract_status === 'pending' ? 'Preparing extraction...' : 'Extracting Audio'}
-                              </span>
-                              <span className="font-semibold text-gray-900 dark:text-white">
-                                {runningJob.extract_completed} / {runningJob.extract_total}
-                              </span>
+                        {runningJob.job_type !== 'download' && runningJob.extract_total > 0 && (
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400">
+                              <span>Extracting Audio</span>
+                              <span>{runningJob.extract_completed} / {runningJob.extract_total}</span>
                             </div>
-                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
                               <div
-                                className="bg-purple-600 dark:bg-purple-500 h-2 rounded-full transition-all"
-                                style={{ 
-                                  width: `${runningJob.extract_total > 0 ? (runningJob.extract_completed / runningJob.extract_total * 100) : 0}%` 
-                                }}
+                                className="bg-purple-600 h-1.5 rounded-full transition-all duration-300"
+                                style={{ width: `${(runningJob.extract_completed / runningJob.extract_total) * 100}%` }}
                               />
                             </div>
                           </div>
                         )}
                         
-                        {/* Show completion message if both are done */}
-                        {runningJob.download_status === 'completed' && runningJob.extract_status === 'completed' && (
-                          <div className="text-sm text-green-600 dark:text-green-400">
-                            ✓ Download and extraction completed
-                          </div>
-                        )}
-                        
-                        {/* View Logs Button */}
-                        <div className="mt-2">
-                          <button
-                            onClick={() => setViewingLogs(runningJob)}
-                            className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1"
-                          >
-                            <LogIcon className="w-3 h-3" />
-                            View Logs
-                          </button>
-                        </div>
                       </div>
                     )}
 
                     {/* Actions */}
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 mt-4">
                       {runningJob ? (
-                        // Only show cancel button when job is running
                         <button
-                          onClick={() => {
-                            if (confirm('Cancel this job? The current video download will complete first.')) {
-                              cancelJob.mutate(runningJob.id)
-                            }
-                          }}
+                          onClick={() => cancelJob.mutate(runningJob.id)}
                           disabled={cancelJob.isPending}
-                          className="flex-1 px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:bg-red-400 text-sm flex items-center justify-center gap-1"
+                          className="flex-1 px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm flex items-center justify-center gap-2"
                         >
-                          {cancelJob.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Cancel'}
+                          {cancelJob.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Cancel Job'}
                         </button>
                       ) : (
-                        // Show all buttons when no job is running
                         <>
-                          {/* Check if all videos are downloaded */}
-                          {(() => {
-                            const allDownloaded = playlist.local_count >= playlist.playlist_count && playlist.playlist_count > 0
-                            
-                            return (
-                              <>
-                                <button
-                                  onClick={() => startJob.mutate({ playlistId: playlist.id, jobType: 'both' })}
-                                  disabled={allDownloaded}
-                                  className={`flex-1 px-3 py-2 ${allDownloaded ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'} text-white rounded text-sm flex items-center justify-center gap-1`}
-                                  title={allDownloaded ? 'All videos downloaded' : 'Download & Extract'}
-                                >
-                                  <PlayCircle className="w-4 h-4" />
-                                  Download & Extract
-                                </button>
-                                <button
-                                  onClick={() => startJob.mutate({ playlistId: playlist.id, jobType: 'download' })}
-                                  disabled={allDownloaded}
-                                  className={`px-3 py-2 ${allDownloaded ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'} text-white rounded text-sm`}
-                                  title={allDownloaded ? 'All videos downloaded' : 'Download Only'}
-                                >
-                                  <Download className="w-4 h-4" />
-                                </button>
-                              </>
-                            )
-                          })()}
+                          <button
+                            onClick={() => startJob.mutate({ playlistId: playlist.id, jobType: 'both' })}
+                            className="flex-[2] px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm flex items-center justify-center gap-2"
+                          >
+                            <PlayCircle className="w-4 h-4" />
+                            Download
+                          </button>
                           <button
                             onClick={() => startJob.mutate({ playlistId: playlist.id, jobType: 'extract' })}
                             className="px-3 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 text-sm"
@@ -574,11 +586,11 @@ function App() {
                           </button>
                           <button
                             onClick={() => refreshPlaylist.mutate(playlist.id)}
-                            disabled={refreshPlaylist.isPending}
-                            className="px-3 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600 text-sm"
-                            title="Refresh Stats"
+                            disabled={refreshPlaylist.isPending || schedulerStatus?.is_scanning}
+                            className={`px-3 py-2 ${schedulerStatus?.is_scanning ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 cursor-not-allowed' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'} rounded text-sm`}
+                            title={schedulerStatus?.is_scanning ? 'Daily background auto-scan is currently in progress' : 'Refresh Stats'}
                           >
-                            <RefreshCw className={`w-4 h-4 ${refreshPlaylist.isPending ? 'animate-spin' : ''}`} />
+                            <RefreshCw className={`w-4 h-4 ${refreshPlaylist.isPending || (schedulerStatus?.is_scanning && schedulerStatus.current_playlist === playlist.title) ? 'animate-spin text-blue-500' : ''}`} />
                           </button>
                           <button
                             onClick={() => {
@@ -853,11 +865,12 @@ function App() {
                                         Extract
                                       </button>
                                       <button
-                                        onClick={() => refreshPlaylist.mutate(playlist.id)}
-                                        disabled={refreshPlaylist.isPending}
-                                        className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 dark:hover:bg-gray-600 text-sm flex items-center gap-1"
+                                         onClick={() => refreshPlaylist.mutate(playlist.id)}
+                                         disabled={refreshPlaylist.isPending || schedulerStatus?.is_scanning}
+                                         className={`px-4 py-2 ${schedulerStatus?.is_scanning ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 cursor-not-allowed' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'} rounded text-sm flex items-center gap-1`}
+                                         title={schedulerStatus?.is_scanning ? 'Daily background auto-scan is currently in progress' : 'Refresh Stats'}
                                       >
-                                        <RefreshCw className={`w-4 h-4 ${refreshPlaylist.isPending ? 'animate-spin' : ''}`} />
+                                        <RefreshCw className={`w-4 h-4 ${refreshPlaylist.isPending || (schedulerStatus?.is_scanning && schedulerStatus.current_playlist === playlist.title) ? 'animate-spin text-blue-500' : ''}`} />
                                         Refresh
                                       </button>
                                       {playlist.excluded_ids.length > 0 && (
@@ -1431,8 +1444,12 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       validated.enable_daily_auto_refresh = formData.enable_daily_auto_refresh
     }
 
-    if (formData.daily_refresh_interval_hours !== undefined) {
-      validated.daily_refresh_interval_hours = Number(formData.daily_refresh_interval_hours)
+    if (formData.daily_refresh_time !== undefined) {
+      validated.daily_refresh_time = formData.daily_refresh_time?.trim() || '04:00'
+    }
+
+    if (formData.daily_refresh_timezone !== undefined) {
+      validated.daily_refresh_timezone = formData.daily_refresh_timezone?.trim() || 'Asia/Kolkata'
     }
 
     if (formData.enable_git_metadata_sync !== undefined) {
@@ -1897,13 +1914,13 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                   </div>
 
                   {/* 24/7 Daily Background Metadata Scheduler */}
-                  <div className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 space-y-2">
+                  <div className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 space-y-3">
                     <FieldHeader
                       label="24/7 Daily Background Metadata Scheduler"
                       recommended="Recommended: Enabled"
-                      infoText="Automatically scans all playlists once every 24 hours in the background to detect newly added tracks, deleted videos, and silently privatized songs without requiring container restarts."
+                      infoText="Automatically scans all playlists at your configured overnight time in the background to detect newly added tracks, deleted videos, and silently privatized songs without requiring container restarts."
                     />
-                    <label className="flex items-center space-x-2 mt-1">
+                    <label className="flex items-center space-x-2">
                       <input
                         type="checkbox"
                         checked={formData.enable_daily_auto_refresh ?? true}
@@ -1912,6 +1929,64 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                       />
                       <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Enable Daily Auto-Scan</span>
                     </label>
+
+                    {formData.enable_daily_auto_refresh && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-gray-100 dark:border-gray-700/60">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Daily Trigger Time (24-Hour)
+                          </label>
+                          <input
+                            type="time"
+                            value={formData.daily_refresh_time || '04:00'}
+                            onChange={(e) => setFormData({ ...formData, daily_refresh_time: e.target.value })}
+                            className="w-full px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs font-mono"
+                          />
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between items-center mb-1">
+                            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300">
+                              Timezone (IANA)
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                try {
+                                  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+                                  if (tz) setFormData({ ...formData, daily_refresh_timezone: tz })
+                                } catch (e) {}
+                              }}
+                              className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
+                            >
+                              Auto-detect
+                            </button>
+                          </div>
+                          <input
+                            type="text"
+                            value={formData.daily_refresh_timezone || 'Asia/Kolkata'}
+                            onChange={(e) => setFormData({ ...formData, daily_refresh_timezone: e.target.value })}
+                            list="timezone-options"
+                            className="w-full px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs font-mono"
+                            placeholder="e.g. Asia/Kolkata or America/New_York"
+                          />
+                          <datalist id="timezone-options">
+                            <option value="Asia/Kolkata">Asia/Kolkata (IST +5:30)</option>
+                            <option value="UTC">UTC (+0:00)</option>
+                            <option value="America/New_York">America/New_York (EST/EDT)</option>
+                            <option value="America/Chicago">America/Chicago (CST/CDT)</option>
+                            <option value="America/Denver">America/Denver (MST/MDT)</option>
+                            <option value="America/Los_Angeles">America/Los_Angeles (PST/PDT)</option>
+                            <option value="Europe/London">Europe/London (GMT/BST)</option>
+                            <option value="Europe/Berlin">Europe/Berlin (CET/CEST)</option>
+                            <option value="Europe/Paris">Europe/Paris (CET/CEST)</option>
+                            <option value="Asia/Tokyo">Asia/Tokyo (JST +9:00)</option>
+                            <option value="Asia/Singapore">Asia/Singapore (SGT +8:00)</option>
+                            <option value="Australia/Sydney">Australia/Sydney (AEST/AEDT)</option>
+                          </datalist>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Automated Git Metadata Versioning & GitHub Sync */}

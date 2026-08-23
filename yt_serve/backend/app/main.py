@@ -9,7 +9,8 @@ from pathlib import Path
 import os
 import traceback
 
-from app.api import playlists, downloads, config, websocket
+from app.api.v1.router import router as api_v1_router
+from app.api import playlists, downloads, config, websocket, metrics
 from app.core.config import settings
 
 app = FastAPI(
@@ -118,9 +119,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-from app.api.v1.router import router as api_v1_router
-from app.api import metrics
 
 # Include API routers FIRST
 app.include_router(api_v1_router, prefix="/api/v1")

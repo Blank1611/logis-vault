@@ -1,7 +1,7 @@
 """
 Configuration API endpoints
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional, List
 import os
@@ -23,7 +23,8 @@ class ConfigResponse(BaseModel):
     sleep_interval_max: int = 5
     concurrent_fragments: int = 2
     enable_daily_auto_refresh: bool = True
-    daily_refresh_interval_hours: int = 24
+    daily_refresh_time: str = "04:00"
+    daily_refresh_timezone: str = "Asia/Kolkata"
     enable_git_metadata_sync: bool = True
     git_remote_url: Optional[str] = None
     git_auth_token: Optional[str] = None
@@ -47,7 +48,8 @@ class ConfigUpdate(BaseModel):
     sleep_interval_max: Optional[int] = None
     concurrent_fragments: Optional[int] = None
     enable_daily_auto_refresh: Optional[bool] = None
-    daily_refresh_interval_hours: Optional[int] = None
+    daily_refresh_time: Optional[str] = None
+    daily_refresh_timezone: Optional[str] = None
     enable_git_metadata_sync: Optional[bool] = None
     git_remote_url: Optional[str] = None
     git_auth_token: Optional[str] = None
@@ -90,7 +92,8 @@ async def get_config():
         sleep_interval_max=getattr(settings, "SLEEP_INTERVAL_MAX", 5),
         concurrent_fragments=getattr(settings, "CONCURRENT_FRAGMENTS", 2),
         enable_daily_auto_refresh=getattr(settings, "ENABLE_DAILY_AUTO_REFRESH", True),
-        daily_refresh_interval_hours=getattr(settings, "DAILY_REFRESH_INTERVAL_HOURS", 24),
+        daily_refresh_time=getattr(settings, "DAILY_REFRESH_TIME", "04:00") or "04:00",
+        daily_refresh_timezone=getattr(settings, "DAILY_REFRESH_TIMEZONE", "Asia/Kolkata") or "Asia/Kolkata",
         enable_git_metadata_sync=getattr(settings, "ENABLE_GIT_METADATA_SYNC", True),
         git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
         git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
@@ -139,8 +142,10 @@ def _save_to_env(config: ConfigUpdate):
         env_content['CONCURRENT_FRAGMENTS'] = str(config.concurrent_fragments)
     if config.enable_daily_auto_refresh is not None:
         env_content['ENABLE_DAILY_AUTO_REFRESH'] = 'true' if config.enable_daily_auto_refresh else 'false'
-    if config.daily_refresh_interval_hours is not None:
-        env_content['DAILY_REFRESH_INTERVAL_HOURS'] = str(config.daily_refresh_interval_hours)
+    if config.daily_refresh_time is not None:
+        env_content['DAILY_REFRESH_TIME'] = config.daily_refresh_time
+    if config.daily_refresh_timezone is not None:
+        env_content['DAILY_REFRESH_TIMEZONE'] = config.daily_refresh_timezone
     if config.enable_git_metadata_sync is not None:
         env_content['ENABLE_GIT_METADATA_SYNC'] = 'true' if config.enable_git_metadata_sync else 'false'
     if config.git_remote_url is not None:
@@ -192,8 +197,10 @@ async def update_config(config: ConfigUpdate):
         settings.CONCURRENT_FRAGMENTS = config.concurrent_fragments
     if config.enable_daily_auto_refresh is not None:
         settings.ENABLE_DAILY_AUTO_REFRESH = config.enable_daily_auto_refresh
-    if config.daily_refresh_interval_hours is not None:
-        settings.DAILY_REFRESH_INTERVAL_HOURS = config.daily_refresh_interval_hours
+    if config.daily_refresh_time is not None:
+        settings.DAILY_REFRESH_TIME = config.daily_refresh_time
+    if config.daily_refresh_timezone is not None:
+        settings.DAILY_REFRESH_TIMEZONE = config.daily_refresh_timezone
     if config.enable_git_metadata_sync is not None:
         settings.ENABLE_GIT_METADATA_SYNC = config.enable_git_metadata_sync
     if config.git_remote_url is not None:
@@ -227,7 +234,8 @@ async def update_config(config: ConfigUpdate):
         sleep_interval_max=getattr(settings, "SLEEP_INTERVAL_MAX", 5),
         concurrent_fragments=getattr(settings, "CONCURRENT_FRAGMENTS", 2),
         enable_daily_auto_refresh=getattr(settings, "ENABLE_DAILY_AUTO_REFRESH", True),
-        daily_refresh_interval_hours=getattr(settings, "DAILY_REFRESH_INTERVAL_HOURS", 24),
+        daily_refresh_time=getattr(settings, "DAILY_REFRESH_TIME", "04:00") or "04:00",
+        daily_refresh_timezone=getattr(settings, "DAILY_REFRESH_TIMEZONE", "Asia/Kolkata") or "Asia/Kolkata",
         enable_git_metadata_sync=getattr(settings, "ENABLE_GIT_METADATA_SYNC", True),
         git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
         git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
@@ -377,11 +385,24 @@ async def test_git_sync():
     success, msg = push_to_remote_sync()
     return GitSyncTestResponse(success=success, message=msg)
 
+class SchedulerStatusResponse(BaseModel):
+    is_scanning: bool
+    current_playlist: Optional[str] = None
+    completed_count: int = 0
+    total_count: int = 0
+    last_scan_at: Optional[str] = None
+    next_scan_at: Optional[str] = None
+    last_scan_summary: Optional[str] = None
+
+@router.get("/scheduler-status", response_model=SchedulerStatusResponse)
+async def get_scheduler_status():
+    """Get current daily background scheduler execution state and progress"""
+    from app.services.scheduler import get_scheduler_state
+    return SchedulerStatusResponse(**get_scheduler_state())
+
 # ============================================================================
 # COOKIES MANAGEMENT & EXPIRATION DETECTION
 # ============================================================================
-
-from fastapi import UploadFile, File
 
 class CookieStatusResponse(BaseModel):
     is_installed: bool

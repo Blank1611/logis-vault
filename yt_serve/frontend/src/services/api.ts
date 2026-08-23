@@ -73,7 +73,8 @@ export interface Config {
   sleep_interval_max?: number
   concurrent_fragments?: number
   enable_daily_auto_refresh?: boolean
-  daily_refresh_interval_hours?: number
+  daily_refresh_time?: string
+  daily_refresh_timezone?: string
   enable_git_metadata_sync?: boolean
   git_remote_url?: string | null
   git_auth_token?: string | null
@@ -84,6 +85,16 @@ export interface Config {
   enable_stream_integrity_check?: boolean
   flaresolverr_url?: string | null
   needs_setup: boolean
+}
+
+export interface SchedulerStatus {
+  is_scanning: boolean
+  current_playlist?: string | null
+  completed_count: number
+  total_count: number
+  last_scan_at?: string | null
+  next_scan_at?: string | null
+  last_scan_summary?: string | null
 }
 
 export interface CookieStatus {
@@ -101,6 +112,7 @@ export interface CookieStatus {
 export const configApi = {
   get: () => api.get<Config>('/config'),
   update: (config: Partial<Config>) => api.put<Config>('/config', config),
+  getSchedulerStatus: () => api.get<SchedulerStatus>('/config/scheduler-status'),
   getYtdlpVersion: () => api.get<{ version: string }>('/config/ytdlp-version'),
   updateYtdlp: () => api.post<{
     success: boolean
