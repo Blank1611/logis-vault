@@ -19,6 +19,9 @@ class ConfigResponse(BaseModel):
     max_extraction_workers: int
     max_concurrent_downloads: int
     batch_size: int
+    sleep_interval_min: int = 1
+    sleep_interval_max: int = 5
+    concurrent_fragments: int = 2
     cookies_file: Optional[str]
     use_browser_cookies: bool
     browser_name: str
@@ -34,6 +37,9 @@ class ConfigUpdate(BaseModel):
     max_extraction_workers: Optional[int] = None
     max_concurrent_downloads: Optional[int] = None
     batch_size: Optional[int] = None
+    sleep_interval_min: Optional[int] = None
+    sleep_interval_max: Optional[int] = None
+    concurrent_fragments: Optional[int] = None
     cookies_file: Optional[str] = None
     use_browser_cookies: Optional[bool] = None
     browser_name: Optional[str] = None
@@ -68,6 +74,9 @@ async def get_config():
         max_extraction_workers=settings.MAX_CONCURRENT_EXTRACTIONS,
         max_concurrent_downloads=settings.MAX_CONCURRENT_DOWNLOADS,
         batch_size=settings.BATCH_SIZE,
+        sleep_interval_min=getattr(settings, "SLEEP_INTERVAL_MIN", 1),
+        sleep_interval_max=getattr(settings, "SLEEP_INTERVAL_MAX", 5),
+        concurrent_fragments=getattr(settings, "CONCURRENT_FRAGMENTS", 2),
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
@@ -104,6 +113,12 @@ def _save_to_env(config: ConfigUpdate):
         env_content['MAX_CONCURRENT_DOWNLOADS'] = str(config.max_concurrent_downloads)
     if config.batch_size is not None:
         env_content['BATCH_SIZE'] = str(config.batch_size)
+    if config.sleep_interval_min is not None:
+        env_content['SLEEP_INTERVAL_MIN'] = str(config.sleep_interval_min)
+    if config.sleep_interval_max is not None:
+        env_content['SLEEP_INTERVAL_MAX'] = str(config.sleep_interval_max)
+    if config.concurrent_fragments is not None:
+        env_content['CONCURRENT_FRAGMENTS'] = str(config.concurrent_fragments)
     if config.cookies_file is not None:
         env_content['COOKIES_FILE'] = config.cookies_file if config.cookies_file else ''
     if config.use_browser_cookies is not None:
@@ -139,6 +154,12 @@ async def update_config(config: ConfigUpdate):
         settings.MAX_CONCURRENT_DOWNLOADS = config.max_concurrent_downloads
     if config.batch_size is not None:
         settings.BATCH_SIZE = config.batch_size
+    if config.sleep_interval_min is not None:
+        settings.SLEEP_INTERVAL_MIN = config.sleep_interval_min
+    if config.sleep_interval_max is not None:
+        settings.SLEEP_INTERVAL_MAX = config.sleep_interval_max
+    if config.concurrent_fragments is not None:
+        settings.CONCURRENT_FRAGMENTS = config.concurrent_fragments
     if config.cookies_file is not None:
         settings.COOKIES_FILE = config.cookies_file
     if config.use_browser_cookies is not None:
@@ -160,6 +181,9 @@ async def update_config(config: ConfigUpdate):
         max_extraction_workers=settings.MAX_CONCURRENT_EXTRACTIONS,
         max_concurrent_downloads=settings.MAX_CONCURRENT_DOWNLOADS,
         batch_size=settings.BATCH_SIZE,
+        sleep_interval_min=getattr(settings, "SLEEP_INTERVAL_MIN", 1),
+        sleep_interval_max=getattr(settings, "SLEEP_INTERVAL_MAX", 5),
+        concurrent_fragments=getattr(settings, "CONCURRENT_FRAGMENTS", 2),
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,

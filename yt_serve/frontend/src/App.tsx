@@ -4,7 +4,8 @@ import { playlistsApi, jobsApi, configApi, type Config } from './services/api'
 import { 
   PlayCircle, Download, Music, Trash2, RefreshCw, Plus, Loader2, Moon, Sun, 
   Settings, FolderOpen, FileText, Edit3, X, FileText as LogIcon, Grid3x3, List, 
-  ExternalLink, Search, Terminal, Copy, Check, DownloadCloud, RotateCcw, Activity 
+  ExternalLink, Search, Terminal, Copy, Check, DownloadCloud, RotateCcw, Activity,
+  Info, Zap, Sparkles
 } from 'lucide-react'
 import type { Playlist, Job } from './services/types'
 import { useWebSocketEvents } from './hooks/useWebSocket'
@@ -963,6 +964,115 @@ function App() {
   )
 }
 
+// Helper Component for interactive field headers with recommendations and toggleable info
+function FieldHeader({
+  label,
+  required = false,
+  recommended,
+  infoText,
+  id
+}: {
+  label: string
+  required?: boolean
+  recommended?: string
+  infoText?: string
+  id?: string
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mb-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <label htmlFor={id} className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-1.5 flex-wrap">
+          <span>{label}</span>
+          {required && <span className="text-rose-500 font-bold">*</span>}
+          {recommended && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+              {recommended}
+            </span>
+          )}
+        </label>
+        {infoText && (
+          <button
+            type="button"
+            onClick={() => setOpen(!open)}
+            className={`px-2 py-0.5 rounded text-xs transition-colors flex items-center gap-1 shrink-0 ${
+              open 
+                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-200' 
+                : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
+            }`}
+            title="Click to toggle explanation"
+          >
+            <Info className="w-3.5 h-3.5" />
+            <span className="text-[11px] font-medium">{open ? 'Hide info' : 'Info'}</span>
+          </button>
+        )}
+      </div>
+      {open && infoText && (
+        <div className="mt-1.5 p-2.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/80 rounded-lg text-xs text-blue-950 dark:text-blue-200 leading-relaxed shadow-sm">
+          {infoText}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Helper Component for dynamic Audio Extraction Mode preview card
+function AudioModeCard({ mode }: { mode: string }) {
+  if (mode === 'copy') {
+    return (
+      <div className="mt-2 p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-lg text-xs space-y-1">
+        <div className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+          <Zap className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          Direct Stream Copy (Lossless & Instantaneous)
+        </div>
+        <p className="text-emerald-700 dark:text-emerald-300/90 leading-relaxed">
+          Extracts YouTube's original native audio track (<code className="font-mono bg-emerald-100 dark:bg-emerald-900/60 px-1 py-0.5 rounded">.m4a</code> for AAC, <code className="font-mono bg-emerald-100 dark:bg-emerald-900/60 px-1 py-0.5 rounded">.opus</code> for Opus) without transcoding. Takes ~0.2s per song with zero CPU load and zero acoustic compression loss.
+        </p>
+      </div>
+    )
+  }
+  if (mode === 'mp3_best') {
+    return (
+      <div className="mt-2 p-3 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 rounded-lg text-xs space-y-1">
+        <div className="font-semibold text-indigo-800 dark:text-indigo-300 flex items-center gap-1.5">
+          <Music className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+          MP3 Best Quality (VBR ~250–320 kbps)
+        </div>
+        <p className="text-indigo-700 dark:text-indigo-300/90 leading-relaxed">
+          Re-encodes audio to universal MP3 at maximum variable bitrate (<code className="font-mono bg-indigo-100 dark:bg-indigo-900/60 px-1 py-0.5 rounded">libmp3lame -q:a 0</code>). 100% compatible with older car stereos and legacy MP3 players.
+        </p>
+      </div>
+    )
+  }
+  if (mode === 'mp3_high') {
+    return (
+      <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/60 rounded-lg text-xs space-y-1">
+        <div className="font-semibold text-blue-800 dark:text-blue-300 flex items-center gap-1.5">
+          <Music className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          MP3 High Quality (VBR ~190–250 kbps)
+        </div>
+        <p className="text-blue-700 dark:text-blue-300/90 leading-relaxed">
+          Standard high-quality MP3 encoding (<code className="font-mono bg-blue-100 dark:bg-blue-900/60 px-1 py-0.5 rounded">libmp3lame -q:a 2</code>). Great balance of smaller file sizes and high audio fidelity.
+        </p>
+      </div>
+    )
+  }
+  if (mode === 'opus') {
+    return (
+      <div className="mt-2 p-3 bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/60 rounded-lg text-xs space-y-1">
+        <div className="font-semibold text-purple-800 dark:text-purple-300 flex items-center gap-1.5">
+          <Sparkles className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+          Opus Codec (128 kbps)
+        </div>
+        <p className="text-purple-700 dark:text-purple-300/90 leading-relaxed">
+          Uses the next-generation open Opus audio codec. Delivers crystal-clear acoustic transparency at half the file size of traditional MP3s.
+        </p>
+      </div>
+    )
+  }
+  return null
+}
+
 // Initial Setup Modal Component
 function InitialSetupModal({ onComplete }: { onComplete: () => void }) {
   const [formData, setFormData] = useState<Partial<Config>>({
@@ -1001,169 +1111,158 @@ function InitialSetupModal({ onComplete }: { onComplete: () => void }) {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-gray-700">
         <div className="p-6">
-          <div className="mb-6">
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Initial Setup</h2>
-            <p className="text-gray-600 dark:text-gray-400">
-              Welcome! Please configure the required settings to get started.
+          <div className="mb-6 pb-4 border-b border-gray-200 dark:border-gray-700">
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-1 flex items-center gap-2">
+              <Sparkles className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+              Initial Setup
+            </h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Configure your storage and download preferences to get started. You can change these anytime in Settings.
             </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-5">
             {/* Required: Download Path */}
-            <div className="border-2 border-blue-500 dark:border-blue-400 rounded-lg p-4 bg-blue-50 dark:bg-blue-900/20">
-              <label className="block text-sm font-bold text-gray-900 dark:text-white mb-1">
-                Main Download Directory <span className="text-red-500">*</span>
-              </label>
+            <div className="border-2 border-blue-500/80 dark:border-blue-400/80 rounded-xl p-4 bg-blue-50/50 dark:bg-blue-900/10">
+              <FieldHeader
+                label="Main Download Directory"
+                required={true}
+                infoText="The permanent storage destination for your music and playlists (e.g. your 2TB external HDD mounted at /downloads or E:\Music\Playlists)."
+              />
               <input
                 type="text"
                 value={formData.base_download_path || ''}
                 onChange={(e) => setFormData({ ...formData, base_download_path: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                 placeholder="/downloads or E:\Music\Playlists"
                 required
               />
-              <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                Final storage location for your playlists (e.g. 2TB External HDD or /downloads)
+              <p className="text-xs text-gray-600 dark:text-gray-400 mt-1.5">
+                Target location where completed playlists and audio albums are saved.
               </p>
             </div>
 
             {/* Optional: Temp Download Buffer */}
-            <div className="border border-gray-300 dark:border-gray-600 rounded-lg p-4">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Temporary Processing Directory (Optional Fast SSD Buffer)
-              </label>
+            <div className="border border-gray-300 dark:border-gray-600 rounded-xl p-4 bg-gray-50/40 dark:bg-gray-800/40">
+              <FieldHeader
+                label="Temporary Processing Directory"
+                recommended="Optional: Fast SSD Buffer"
+                infoText="Uses a fast internal SSD directory (e.g. /downloads-temp) to buffer active multi-fragment chunk downloads and FFmpeg audio extractions. Once verified non-empty, files are moved atomically in a single fast sequential write to your main HDD."
+              />
               <input
                 type="text"
                 value={formData.temp_download_path || ''}
                 onChange={(e) => setFormData({ ...formData, temp_download_path: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="/downloads-temp (or leave empty to download directly to main storage)"
+                className="w-full px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="/downloads-temp (leave empty to download directly to main storage)"
               />
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Fast SSD directory for fragment downloads and FFmpeg audio extraction before moving to main storage.
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">
+                Leave blank if you prefer downloading directly to your main storage drive.
               </p>
             </div>
 
-            {/* Optional: Cookies */}
-            <div className="border border-gray-300 dark:border-gray-600 rounded-lg p-4">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Authentication (Optional)
-              </label>
-              
-              <label className="flex items-center space-x-2 mb-3">
-                <input
-                  type="checkbox"
-                  checked={formData.use_browser_cookies || false}
-                  onChange={(e) => setFormData({ ...formData, use_browser_cookies: e.target.checked })}
-                  className="rounded"
-                />
-                <span className="text-sm text-gray-700 dark:text-gray-300">Use Browser Cookies</span>
-              </label>
-
-              {formData.use_browser_cookies && (
-                <div>
-                  <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
-                    Browser
-                  </label>
-                  <select
-                    value={formData.browser_name || 'chrome'}
-                    onChange={(e) => setFormData({ ...formData, browser_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="chrome">Chrome</option>
-                    <option value="firefox">Firefox</option>
-                    <option value="edge">Edge</option>
-                    <option value="safari">Safari</option>
-                  </select>
-                </div>
-              )}
-
-              {!formData.use_browser_cookies && (
-                <div>
-                  <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
-                    Cookies File Path (optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.cookies_file || ''}
-                    onChange={(e) => setFormData({ ...formData, cookies_file: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="path/to/cookies.txt"
-                  />
-                </div>
-              )}
-              
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                Required for age-restricted or private videos
-              </p>
+            {/* Audio Extract Mode */}
+            <div className="border border-gray-300 dark:border-gray-600 rounded-xl p-4 bg-gray-50/40 dark:bg-gray-800/40">
+              <FieldHeader
+                label="Audio Extraction Mode"
+                recommended="Recommended: copy"
+                infoText="Specifies whether to stream copy native YouTube audio (lossless, instant) or transcode to MP3/Opus."
+              />
+              <select
+                value={formData.audio_extract_mode || 'copy'}
+                onChange={(e) => setFormData({ ...formData, audio_extract_mode: e.target.value })}
+                className="w-full px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              >
+                <option value="copy">Copy (Direct Stream Copy - Fastest & Lossless)</option>
+                <option value="mp3_best">MP3 Best Quality (VBR ~250–320 kbps)</option>
+                <option value="mp3_high">MP3 High Quality (VBR ~190–250 kbps)</option>
+                <option value="opus">Opus (128 kbps)</option>
+              </select>
+              <AudioModeCard mode={formData.audio_extract_mode || 'copy'} />
             </div>
 
             {/* Advanced Settings (Collapsed) */}
-            <details className="border border-gray-300 dark:border-gray-600 rounded-lg p-4">
-              <summary className="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Advanced Settings (Optional)
+            <details className="border border-gray-300 dark:border-gray-600 rounded-xl p-4 bg-gray-50/20 dark:bg-gray-800/20">
+              <summary className="cursor-pointer text-sm font-semibold text-gray-800 dark:text-gray-200">
+                Advanced Performance & Authentication Settings
               </summary>
               
-              <div className="space-y-3 mt-3">
+              <div className="space-y-4 mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
                 <div>
-                  <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
-                    Audio Extract Mode
-                  </label>
-                  <select
-                    value={formData.audio_extract_mode || 'copy'}
-                    onChange={(e) => setFormData({ ...formData, audio_extract_mode: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="copy">Copy (fastest, no re-encoding)</option>
-                    <option value="mp3_best">MP3 Best Quality</option>
-                    <option value="mp3_high">MP3 High Quality</option>
-                    <option value="opus">Opus</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
-                    Max Concurrent Extractions (1-16)
-                  </label>
+                  <FieldHeader
+                    label="Max Concurrent Extractions"
+                    recommended="Recommended: 4"
+                    infoText="Number of parallel CPU worker threads used to extract and verify audio tracks simultaneously (1–16 workers)."
+                  />
                   <input
                     type="number"
                     min="1"
                     max="16"
                     value={formData.max_extraction_workers || 4}
                     onChange={(e) => setFormData({ ...formData, max_extraction_workers: parseInt(e.target.value) })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    className="w-full px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1">
-                    Batch Size (videos per day, 1-1000)
-                  </label>
+                  <FieldHeader
+                    label="Batch Size (Videos per run)"
+                    recommended="Recommended: 200"
+                    infoText="Maximum number of videos to download in a single batch. Prevents YouTube anti-bot rate-limiting on large playlists."
+                  />
                   <input
                     type="number"
                     min="1"
                     max="1000"
                     value={formData.batch_size || 200}
                     onChange={(e) => setFormData({ ...formData, batch_size: parseInt(e.target.value) })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    className="w-full px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                   />
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Limit downloads per day to avoid platform rate limiting
-                  </p>
+                </div>
+
+                <div>
+                  <FieldHeader
+                    label="Browser Profile Extraction (Advanced / Headless)"
+                    infoText="Reads login cookies directly from a mounted browser profile directory (Chrome, Firefox, Edge, Safari). Useful for headless browser setups. You can also upload a cookies.txt file at any time from Settings."
+                  />
+                  <label className="flex items-center space-x-2 mt-1">
+                    <input
+                      type="checkbox"
+                      checked={formData.use_browser_cookies || false}
+                      onChange={(e) => setFormData({ ...formData, use_browser_cookies: e.target.checked })}
+                      className="rounded text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Enable Browser Profile Extraction</span>
+                  </label>
+
+                  {formData.use_browser_cookies && (
+                    <div className="mt-2">
+                      <select
+                        value={formData.browser_name || 'chrome'}
+                        onChange={(e) => setFormData({ ...formData, browser_name: e.target.value })}
+                        className="w-full px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      >
+                        <option value="chrome">Chrome</option>
+                        <option value="firefox">Firefox</option>
+                        <option value="edge">Edge</option>
+                        <option value="safari">Safari</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
               </div>
             </details>
 
-            <div className="flex gap-2 pt-4">
+            <div className="flex gap-2 pt-2">
               <button
                 type="submit"
                 disabled={updateConfig.isPending || !formData.base_download_path?.trim()}
-                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 flex items-center justify-center gap-2 font-medium"
+                className="flex-1 px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 flex items-center justify-center gap-2 font-semibold shadow-sm transition-colors"
               >
                 {updateConfig.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-                Complete Setup
+                Complete Setup & Start
               </button>
             </div>
           </form>
@@ -1354,16 +1453,18 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Base Download Path
-                </label>
+                <FieldHeader
+                  label="Base Download Path"
+                  required={true}
+                  infoText="Root destination directory on your main storage drive (e.g. 2TB external HDD or /downloads) where all completed playlists and audio albums are stored."
+                />
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={formData.base_download_path || ''}
                     onChange={(e) => setFormData({ ...formData, base_download_path: e.target.value })}
-                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="E:\\Music\\Playlists"
+                    className="flex-1 px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="E:\\Music\\Playlists or /downloads"
                   />
                   <button
                     type="button"
@@ -1374,9 +1475,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                       input.onchange = (e: any) => {
                         const files = e.target.files
                         if (files && files.length > 0) {
-                          // Get the directory path from the first file
                           const path = files[0].webkitRelativePath.split('/')[0]
-                          // On Windows, we need the full path - user will need to type it or we show a note
                           setFormData({ ...formData, base_download_path: path })
                         }
                       }
@@ -1389,21 +1488,23 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                   </button>
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Note: Browser security limits folder selection. You may need to type the full path manually.
+                  Note: Browser security limits full path picking. You may type or paste the exact absolute path manually.
                 </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Temp Processing Directory (Optional Fast SSD Buffer)
-                </label>
+                <FieldHeader
+                  label="Temp Processing Directory"
+                  recommended="Optional: Fast SSD Buffer"
+                  infoText="Active multi-fragment chunk downloads and FFmpeg audio extraction occur on this fast SSD directory before being moved in a single sequential write to your main storage."
+                />
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={formData.temp_download_path || ''}
                     onChange={(e) => setFormData({ ...formData, temp_download_path: e.target.value })}
-                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="/downloads-temp (or leave empty to download directly to main storage)"
+                    className="flex-1 px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="/downloads-temp (leave empty to download directly to main storage)"
                   />
                   <button
                     type="button"
@@ -1427,248 +1528,330 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                   </button>
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Active downloads and FFmpeg audio extraction occur on this fast drive before moving to your main storage.
+                  Leave empty if you do not have a separate SSD temp drive.
                 </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Audio Extract Mode
-                </label>
+                <FieldHeader
+                  label="Audio Extract Mode"
+                  recommended="Recommended: copy"
+                  infoText="Selects whether to directly extract native streams without re-encoding (instant, lossless) or transcode to MP3/Opus."
+                />
                 <select
                   value={formData.audio_extract_mode || 'copy'}
                   onChange={(e) => setFormData({ ...formData, audio_extract_mode: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  className="w-full px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 >
-                  <option value="copy">Copy (fastest, no re-encoding)</option>
-                  <option value="mp3_best">MP3 Best Quality</option>
-                  <option value="mp3_high">MP3 High Quality</option>
-                  <option value="opus">Opus</option>
+                  <option value="copy">Copy (Direct Stream Copy - Fastest & Lossless)</option>
+                  <option value="mp3_best">MP3 Best Quality (VBR ~250–320 kbps)</option>
+                  <option value="mp3_high">MP3 High Quality (VBR ~190–250 kbps)</option>
+                  <option value="opus">Opus (128 kbps)</option>
                 </select>
+                <AudioModeCard mode={formData.audio_extract_mode || 'copy'} />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Max Concurrent Extractions (1-16)
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="16"
-                  value={formData.max_extraction_workers || 4}
-                  onChange={(e) => setFormData({ ...formData, max_extraction_workers: parseInt(e.target.value) })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Batch Size (videos per day, 1-1000)
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="1000"
-                  value={formData.batch_size || 200}
-                  onChange={(e) => setFormData({ ...formData, batch_size: parseInt(e.target.value) })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Limit downloads per day to avoid platform rate limiting
-                </p>
-              </div>
-
-              <div>
-                <label className="flex items-center space-x-2">
-                  <input
-                    type="checkbox"
-                    checked={formData.use_browser_cookies || false}
-                    onChange={(e) => setFormData({ ...formData, use_browser_cookies: e.target.checked })}
-                    className="rounded"
-                  />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">Use Browser Cookies</span>
-                </label>
-              </div>
-
-              {formData.use_browser_cookies && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Browser Name
-                  </label>
-                  <select
-                    value={formData.browser_name || 'chrome'}
-                    onChange={(e) => setFormData({ ...formData, browser_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="chrome">Chrome</option>
-                    <option value="firefox">Firefox</option>
-                    <option value="edge">Edge</option>
-                    <option value="safari">Safari</option>
-                  </select>
-                </div>
-              )}
-
-              {!formData.use_browser_cookies && (
-                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-3">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h4 className="text-sm font-semibold text-gray-900 dark:text-white">YouTube Authentication & Cookies</h4>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                        Required for age-restricted or private playlists. Public tracks use mobile client emulation.
-                      </p>
-                    </div>
-                    {/* Status Badge */}
-                    <div>
-                      {cookieStatus?.status === 'valid' && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                          Active (Expires in {cookieStatus.days_remaining}d)
-                        </span>
-                      )}
-                      {cookieStatus?.status === 'expiring_soon' && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                          Expiring Soon ({cookieStatus.days_remaining}d left)
-                        </span>
-                      )}
-                      {cookieStatus?.status === 'expired' && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300">
-                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
-                          Expired ({cookieStatus.earliest_expiration})
-                        </span>
-                      )}
-                      {cookieStatus?.status === 'not_installed' && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-300">
-                          Mobile Emulation Active
-                        </span>
-                      )}
-                      {cookieStatus?.status === 'invalid' && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300">
-                          Invalid / Anonymous
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Status Message / Expiry info */}
-                  {cookieStatus?.status_message && (
-                    <p className="text-xs font-mono text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700">
-                      {cookieStatus.status_message}
+              {/* Primary Authentication: Upload cookies.txt & live status */}
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4 border border-gray-200 dark:border-gray-600 space-y-3">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-1.5">
+                      <span>YouTube Authentication & Session Cookies</span>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+                        Recommended
+                      </span>
+                    </h4>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      Required for age-restricted or private playlists. Public tracks use mobile client emulation.
                     </p>
-                  )}
+                  </div>
+                  {/* Status Badge */}
+                  <div>
+                    {cookieStatus?.status === 'valid' && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                        Active (Expires in {cookieStatus.days_remaining}d)
+                      </span>
+                    )}
+                    {cookieStatus?.status === 'expiring_soon' && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                        Expiring Soon ({cookieStatus.days_remaining}d left)
+                      </span>
+                    )}
+                    {cookieStatus?.status === 'expired' && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300">
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                        Expired ({cookieStatus.earliest_expiration})
+                      </span>
+                    )}
+                    {cookieStatus?.status === 'not_installed' && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-300">
+                        Mobile Emulation Active
+                      </span>
+                    )}
+                    {cookieStatus?.status === 'invalid' && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300">
+                        Invalid / Anonymous
+                      </span>
+                    )}
+                  </div>
+                </div>
 
-                  {/* Upload and Delete Action Buttons */}
-                  <div className="flex gap-2 items-center pt-1">
+                {/* Status Message / Expiry info */}
+                {cookieStatus?.status_message && (
+                  <p className="text-xs font-mono text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700">
+                    {cookieStatus.status_message}
+                  </p>
+                )}
+
+                {formData.use_browser_cookies && (
+                  <div className="p-2.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-lg text-xs text-amber-800 dark:text-amber-200">
+                    ⚠️ <strong>Notice:</strong> Browser Profile Extraction is currently enabled in Advanced Settings and will override this uploaded cookies file.
+                  </div>
+                )}
+
+                {/* Upload and Delete Action Buttons */}
+                <div className="flex gap-2 items-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const input = document.createElement('input')
+                      input.type = 'file'
+                      input.accept = '.txt'
+                      input.onchange = (e: any) => {
+                        const file = e.target.files?.[0]
+                        if (file) {
+                          uploadCookiesMutation.mutate(file)
+                        }
+                      }
+                      input.click()
+                    }}
+                    disabled={uploadCookiesMutation.isPending}
+                    className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 disabled:bg-gray-400"
+                  >
+                    {uploadCookiesMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Uploading...
+                      </>
+                    ) : (
+                      <>
+                        <FileText className="w-3.5 h-3.5" />
+                        Upload cookies.txt
+                      </>
+                    )}
+                  </button>
+
+                  {cookieStatus?.is_installed && (
                     <button
                       type="button"
                       onClick={() => {
-                        const input = document.createElement('input')
-                        input.type = 'file'
-                        input.accept = '.txt'
-                        input.onchange = (e: any) => {
-                          const file = e.target.files?.[0]
-                          if (file) {
-                            uploadCookiesMutation.mutate(file)
-                          }
+                        if (confirm('Are you sure you want to remove the installed cookies?')) {
+                          deleteCookiesMutation.mutate()
                         }
-                        input.click()
                       }}
-                      disabled={uploadCookiesMutation.isPending}
-                      className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 disabled:bg-gray-400"
+                      disabled={deleteCookiesMutation.isPending}
+                      className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 dark:bg-rose-900/30 dark:hover:bg-rose-900/50 dark:text-rose-300 text-xs font-medium rounded-lg flex items-center gap-1.5"
                     >
-                      {uploadCookiesMutation.isPending ? (
-                        <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          Uploading...
-                        </>
+                      {deleteCookiesMutation.isPending ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       ) : (
-                        <>
-                          <FileText className="w-3.5 h-3.5" />
-                          Upload cookies.txt
-                        </>
+                        'Remove Cookies'
                       )}
                     </button>
+                  )}
+                </div>
 
-                    {cookieStatus?.is_installed && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (confirm('Are you sure you want to remove the installed cookies?')) {
-                            deleteCookiesMutation.mutate()
-                          }
-                        }}
-                        disabled={deleteCookiesMutation.isPending}
-                        className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 dark:bg-rose-900/30 dark:hover:bg-rose-900/50 dark:text-rose-300 text-xs font-medium rounded-lg flex items-center gap-1.5"
-                      >
-                        {deleteCookiesMutation.isPending ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          'Remove Cookies'
-                        )}
-                      </button>
+                <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                  💡 <strong>Tip:</strong> Export cookies with a 1-click browser extension (e.g. <em>Get cookies.txt LOCALLY</em>) using a secondary account.
+                </p>
+              </div>
+
+              {/* Collapsed Advanced & Experimental Settings */}
+              <details className="border border-gray-300 dark:border-gray-600 rounded-xl p-4 bg-gray-50/20 dark:bg-gray-800/20">
+                <summary className="cursor-pointer text-sm font-semibold text-gray-800 dark:text-gray-200">
+                  Advanced & Experimental Settings (Workers, Batching, Headless Browser, Proxy)
+                </summary>
+                
+                <div className="space-y-4 mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <FieldHeader
+                        label="Max Concurrent Extractions"
+                        recommended="Recommended: 4"
+                        infoText="Number of parallel CPU worker threads used to extract and encode audio tracks simultaneously (1–16 workers)."
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        max="16"
+                        value={formData.max_extraction_workers || 4}
+                        onChange={(e) => setFormData({ ...formData, max_extraction_workers: parseInt(e.target.value) })}
+                        className="w-full px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldHeader
+                        label="Batch Size (Videos / run)"
+                        recommended="Recommended: 200"
+                        infoText="Maximum number of videos to download in a single batch to avoid platform rate-limiting and temporary IP blocks."
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        max="1000"
+                        value={formData.batch_size || 200}
+                        onChange={(e) => setFormData({ ...formData, batch_size: parseInt(e.target.value) })}
+                        className="w-full px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <FieldHeader
+                        label="Anti-Rate-Limit Delay (Min/Max s)"
+                        recommended="Recommended: 1s – 5s"
+                        infoText="Random delay pause (jitter) introduced between consecutive video downloads. Mimics human behavior to avoid temporary HTTP 429 bans on large playlists."
+                      />
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          max="30"
+                          value={formData.sleep_interval_min ?? 1}
+                          onChange={(e) => setFormData({ ...formData, sleep_interval_min: parseInt(e.target.value) || 0 })}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                          placeholder="Min (1s)"
+                        />
+                        <span className="text-gray-400 dark:text-gray-500 font-medium">–</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="60"
+                          value={formData.sleep_interval_max ?? 5}
+                          onChange={(e) => setFormData({ ...formData, sleep_interval_max: parseInt(e.target.value) || 0 })}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                          placeholder="Max (5s)"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <FieldHeader
+                        label="Concurrent DASH Fragments"
+                        recommended="Recommended: 2"
+                        infoText="Number of multi-threaded DASH video stream chunks downloaded concurrently per video. Higher values increase speed but can trigger IP blocks if set above 4."
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        max="16"
+                        value={formData.concurrent_fragments ?? 2}
+                        onChange={(e) => setFormData({ ...formData, concurrent_fragments: parseInt(e.target.value) || 1 })}
+                        className="w-full px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Browser Profile Extraction */}
+                  <div className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 space-y-2">
+                    <FieldHeader
+                      label="Browser Profile Extraction (Headless / Mounted Directory)"
+                      infoText="Extracts cookies directly from a browser database directory (Chrome, Firefox, Edge, Safari). Useful for headless browser setups with mounted profile folders. If active, this is prioritized over cookies.txt."
+                    />
+                    <label className="flex items-center space-x-2 mt-1">
+                      <input
+                        type="checkbox"
+                        checked={formData.use_browser_cookies || false}
+                        onChange={(e) => setFormData({ ...formData, use_browser_cookies: e.target.checked })}
+                        className="rounded text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-gray-700 dark:text-gray-300">Enable Browser Profile Extraction</span>
+                    </label>
+
+                    {formData.use_browser_cookies && (
+                      <div className="mt-2 space-y-2">
+                        <label className="block text-xs font-medium text-gray-700 dark:text-gray-300">
+                          Browser Engine Profile
+                        </label>
+                        <select
+                          value={formData.browser_name || 'chrome'}
+                          onChange={(e) => setFormData({ ...formData, browser_name: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                        >
+                          <option value="chrome">Chrome</option>
+                          <option value="firefox">Firefox</option>
+                          <option value="edge">Edge</option>
+                          <option value="safari">Safari</option>
+                        </select>
+                        <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                          ⚠️ Note: In Docker, ensure your browser profile volume is mounted into the container.
+                        </p>
+                      </div>
                     )}
                   </div>
 
-                  <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                    💡 <strong>Tip:</strong> Export cookies from a free secondary / throwaway Google account to keep your personal account completely safe.
-                  </p>
-                </div>
-              )}
+                  {/* Experimental Stream Integrity Safeguard */}
+                  <div className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 space-y-1">
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        id="enable_stream_integrity_check"
+                        checked={formData.enable_stream_integrity_check || false}
+                        onChange={(e) => setFormData({ ...formData, enable_stream_integrity_check: e.target.checked })}
+                        className="mt-1 w-4 h-4 text-blue-600 rounded border-gray-300 dark:border-gray-600"
+                      />
+                      <div>
+                        <label htmlFor="enable_stream_integrity_check" className="text-sm font-semibold text-gray-900 dark:text-white cursor-pointer">
+                          Experimental Stream Integrity Verification (ffprobe)
+                        </label>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                          Inspects downloaded video containers for valid audio & video streams. Falls back gracefully if inspection fails.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
 
-              {/* Experimental Stream Integrity Safeguard */}
-              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-2">
-                <div className="flex items-start gap-3">
-                  <input
-                    type="checkbox"
-                    id="enable_stream_integrity_check"
-                    checked={formData.enable_stream_integrity_check || false}
-                    onChange={(e) => setFormData({ ...formData, enable_stream_integrity_check: e.target.checked })}
-                    className="mt-1 w-4 h-4 text-blue-600 rounded border-gray-300 dark:border-gray-600"
-                  />
-                  <div>
-                    <label htmlFor="enable_stream_integrity_check" className="text-sm font-semibold text-gray-900 dark:text-white cursor-pointer">
-                      Experimental Stream Integrity Verification (ffprobe)
-                    </label>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                      Inspects downloaded video containers for valid audio & video streams. Falls back gracefully if inspection fails.
+                  {/* FlareSolverr Homelab Proxy */}
+                  <div className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 space-y-2">
+                    <FieldHeader
+                      label="FlareSolverr Proxy URL"
+                      recommended="Optional Homelab Proxy"
+                      infoText="Connects to a local FlareSolverr Docker container (e.g. http://localhost:8191/v1) to bypass Cloudflare protection if downloading from external websites."
+                    />
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={formData.flaresolverr_url || ''}
+                        onChange={(e) => setFormData({ ...formData, flaresolverr_url: e.target.value })}
+                        className="flex-1 px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                        placeholder="http://localhost:8191/v1"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => testFlareSolverrMutation.mutate(formData.flaresolverr_url || undefined)}
+                        disabled={testFlareSolverrMutation.isPending}
+                        className="px-3 py-2 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-700 disabled:bg-gray-400 flex items-center gap-1.5 whitespace-nowrap"
+                      >
+                        {testFlareSolverrMutation.isPending ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Testing...
+                          </>
+                        ) : (
+                          'Test Connection'
+                        )}
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Connect your homelab FlareSolverr container to bypass anti-bot challenges and solve session cookies.
                     </p>
                   </div>
                 </div>
-              </div>
-
-              {/* FlareSolverr Homelab Proxy */}
-              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-2">
-                <label className="block text-sm font-semibold text-gray-900 dark:text-white mb-1">
-                  FlareSolverr Proxy URL (Optional)
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={formData.flaresolverr_url || ''}
-                    onChange={(e) => setFormData({ ...formData, flaresolverr_url: e.target.value })}
-                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                    placeholder="http://localhost:8191/v1"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => testFlareSolverrMutation.mutate(formData.flaresolverr_url || undefined)}
-                    disabled={testFlareSolverrMutation.isPending}
-                    className="px-3 py-2 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-700 disabled:bg-gray-400 flex items-center gap-1.5 whitespace-nowrap"
-                  >
-                    {testFlareSolverrMutation.isPending ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        Testing...
-                      </>
-                    ) : (
-                      'Test Connection'
-                    )}
-                  </button>
-                </div>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  Connect your homelab FlareSolverr container to bypass anti-bot challenges and solve session cookies.
-                </p>
-              </div>
+              </details>
 
               {/* yt-dlp updater box */}
               <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-2">

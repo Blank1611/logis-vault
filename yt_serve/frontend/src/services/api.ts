@@ -69,6 +69,9 @@ export interface Config {
   max_extraction_workers: number
   max_concurrent_downloads: number
   batch_size: number
+  sleep_interval_min?: number
+  sleep_interval_max?: number
+  concurrent_fragments?: number
   cookies_file: string | null
   use_browser_cookies: boolean
   browser_name: string

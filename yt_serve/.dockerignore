@@ -9,6 +9,9 @@ build
 *.exe
 .git
 .vscode
+.agents
+GEMINI.md
+AGENTS.md
 __pycache__
 *.pyc
 *.pyo

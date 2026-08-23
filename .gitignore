@@ -28,9 +28,12 @@ env/
 logs/
 *.log
 
-# IDE
+# IDE & Agent Configs
 .vscode/
 .idea/
+.agents/
+GEMINI.md
+AGENTS.md
 
 # Node.js / Frontend
 node_modules/

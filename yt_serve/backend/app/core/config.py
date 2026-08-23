@@ -75,6 +75,13 @@ BATCH_SIZE=200
 # Experimental stream integrity validation via FFprobe (true/false)
 ENABLE_STREAM_INTEGRITY_CHECK=false
 
+# Anti-rate-limit sleep delay jitter (seconds between video downloads)
+SLEEP_INTERVAL_MIN=1
+SLEEP_INTERVAL_MAX=5
+
+# Concurrent DASH video stream fragments per download (1-16)
+CONCURRENT_FRAGMENTS=2
+
 # Optional FlareSolverr Proxy URL (e.g. http://flaresolverr:8191/v1)
 # FLARESOLVERR_URL=http://flaresolverr:8191/v1
 """
@@ -113,8 +120,11 @@ class Settings(BaseSettings):
     # Audio settings
     AUDIO_EXTRACT_MODE: str = "copy"  # copy, mp3_best, mp3_high, opus
     
-    # Batch settings
+    # Batch & Rate-Limiting Settings
     BATCH_SIZE: int = 200
+    SLEEP_INTERVAL_MIN: int = 1
+    SLEEP_INTERVAL_MAX: int = 5
+    CONCURRENT_FRAGMENTS: int = 2
     
     # Cookies
     COOKIES_FILE: Optional[str] = None

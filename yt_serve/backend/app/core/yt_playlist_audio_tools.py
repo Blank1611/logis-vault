@@ -28,6 +28,7 @@ from yt_dlp.utils import ExtractorError
 
 # ====== CONFIGURATION SYSTEM ======
 from app.core.config import settings
+from app.utils.ytdlp_opts import build_ytdlp_options
 
 BASE_DOWNLOAD_PATH = settings.BASE_DOWNLOAD_PATH
 USE_BROWSER_COOKIES = settings.USE_BROWSER_COOKIES
@@ -699,22 +700,7 @@ def _get_playlist_info(url: str, force_refresh: bool = False) -> dict:
     if not force_refresh and url in PLAYLIST_INFO_CACHE:
         return PLAYLIST_INFO_CACHE[url]
 
-    ydl_opts_info = {
-        "quiet": True,
-        "skip_download": True,
-        "extract_flat": "in_playlist",
-        "js_runtimes": {
-        'node': {} 
-    },
-        # "js_runtimes": {"node": "C:\Program Files\nodejs\node.exe"}
-    }
-    if USE_BROWSER_COOKIES and _check_browser_cookies_available():
-        ydl_opts_info["cookies_from_browser"] = (BROWSER_NAME,)
-    elif COOKIES_FILE and os.path.isfile(COOKIES_FILE):
-        # yt-dlp Python API expects "cookiefile" for a cookies.txt path
-        ydl_opts_info["cookiefile"] = COOKIES_FILE
-    if USER_AGENT:
-        ydl_opts_info["user_agent"] = USER_AGENT
+    ydl_opts_info = build_ytdlp_options(mode="info")
 
     try:
         with YoutubeDL(ydl_opts_info) as ydl:
@@ -873,34 +859,6 @@ def _build_playlist_paths(title: str, create_folders: bool = True) -> Tuple[str,
         os.makedirs(snapshot_folder, exist_ok=True)
 
     return playlist_folder, archive_file, audio_folder
-
-
-def _base_speed_opts() -> dict:
-    return {
-        "concurrent_fragment_downloads": max(1, CONCURRENT_FRAGMENTS // 2),  # Reduce concurrent fragments to avoid 403s
-        "continuedl": True,
-        "retries": 10,  # Increase retries for transient errors
-        "fragment_retries": 10,  # Increase fragment retries
-        "retry_sleep_functions": {
-            "http": lambda n: min(4 ** n, 60),  # Exponential backoff for HTTP errors
-            "fragment": lambda n: min(2 ** n, 30),  # Exponential backoff for fragments
-        },
-        "noprogress": False,
-        "sleep_interval": 1,  # Add delay between downloads
-        "max_sleep_interval": 5,  # Maximum sleep interval
-        "sleep_interval_subtitles": 0,
-        'verbose': True,
-        # Add specific handling for 403 errors
-        "extractor_retries": 3,
-        "file_access_retries": 3,
-        "js_runtimes": {'node':{}}
-        # Add JavaScript runtime support for YouTube's new requirements
-        # "extractor_args": {
-        #     "youtube": {
-        #         "js_runtimes": ['node:C:\Program Files\nodejs\node.EXE']  # Use Node.js for JavaScript execution
-        #     }
-        # }
-    }
 
 
 # ====== UNAVAILABLE ENTRY DETECTION ======
@@ -1091,125 +1049,6 @@ def _slow_down_hook(d):
 
 
 # ====== MODE 2: DOWNLOAD + EXTRACT ======
-
-# def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True) -> Set[str]:
-#     """
-#     MODE 2:
-#       - Downloads bestvideo+bestaudio/best for a playlist/single video.
-#       - Uses download_archive to only get new videos.
-#       - If as_mp3 is True, extracts MP3 into audio subfolder.
-#     Returns:
-#       FAILED_VIDEO_IDS: set of failed/unavailable IDs for this run.
-#     """
-#     global SKIPPED_VIDEOS_ARCHIVE, FAILED_VIDEO_IDS
-#     SKIPPED_VIDEOS_ARCHIVE = []
-#     FAILED_VIDEO_IDS = set()
-
-#     print("Fetching playlist information...")
-#     try:
-#         title = _get_playlist_info_title(url)
-#     except Exception as e:
-#         print(f"Could not fetch playlist info ({e}), using generic name.")
-#         title = "playlist"
-
-#     playlist_folder, archive_file, audio_folder = _build_playlist_paths(title)
-
-#     print(f"\nBase path      : {BASE_DOWNLOAD_PATH}")
-#     print(f"Playlist title : {title}")
-#     print(f"Playlist folder: {playlist_folder}")
-#     print(f"Archive file   : {archive_file}")
-#     print(f"Audio folder   : {audio_folder}")
-
-#     common_opts = {
-#         "outtmpl": os.path.join(playlist_folder, "%(title)s.%(ext)s"),
-#         "ignoreerrors": True,
-#         "download_archive": archive_file,
-#         "quiet": False,
-#         "no_warnings": True,
-#         "progress_hooks": [_progress_hook_archive, _slow_down_hook],
-#     }
-
-#     if USE_BROWSER_COOKIES:
-#         common_opts["cookies_from_browser"] = (BROWSER_NAME,)
-#     else:
-#         if COOKIES_FILE and os.path.isfile(COOKIES_FILE):
-#             common_opts["cookies"] = COOKIES_FILE
-
-#     if USER_AGENT:
-#         common_opts["user_agent"] = USER_AGENT
-#     common_opts.update(_base_speed_opts())
-
-#     ydl_opts = {
-#         "format": "bestvideo+bestaudio/best",
-#         "merge_output_format": "mp4",
-#     }
-#     ydl_opts.update(common_opts)
-
-#     # First try to enumerate playlist entries (uses cached _get_playlist_entries)
-#     entries = []
-#     try:
-#         entries = _get_playlist_entries(url, playlist_folder)
-#     except Exception as e:
-#         # _get_playlist_entries may raise on transient failures; fall back to direct download below
-#         print(f"Warning: failed to enumerate playlist entries ({e}), will fall back to downloading the playlist URL.")
-
-#     video_urls: List[str] = []
-#     if entries:
-#         print(f"Found {len(entries)} entries; filtering unavailable/private items...")
-#         for e in entries:
-#             if not e:
-#                 continue
-#             # skip entries detected as unavailable/private by heuristic
-#             if is_entry_unavailable(e):
-#                 vid = e.get("id") or e.get("url") or "unknown"
-#                 print(f"  Skipping unavailable/private: {e.get('title') or vid} [{vid}]")
-#                 # mark in FAILED_VIDEO_IDS so stats reflect it
-#                 if e.get("id"):
-#                     FAILED_VIDEO_IDS.add(e.get("id"))
-#                 continue
-
-#             # build full watch URL where necessary
-#             vid = e.get("id") or e.get("url")
-#             if not vid:
-#                 continue
-#             if str(vid).startswith("http"):
-#                 video_urls.append(str(vid))
-#             else:
-#                 video_urls.append(f"https://www.youtube.com/watch?v={vid}")
-
-#         if not video_urls:
-#             print("No available videos to download after filtering; nothing to do.")
-#     else:
-#         # entries empty => fall back to playlist URL (single video or yt-dlp will expand)
-#         print("Could not get entries list; falling back to downloading the provided URL.")
-
-#     # Start download: prefer list of filtered URLs when available
-#     print("\nStarting download...")
-#     try:
-#         with YoutubeDL(ydl_opts) as ydl:
-#             if video_urls:
-#                 ydl.download(video_urls)
-#             else:
-#                 ydl.download([url])
-#     except Exception as e:
-#         # ensure we capture any failed IDs already added by progress hook; re-raise if needed
-#         print(f"[ERROR] Download run raised an exception: {e}")
-
-#     if SKIPPED_VIDEOS_ARCHIVE:
-#         print("\nVideos skipped (already in archive or on disk):")
-#         for v in SKIPPED_VIDEOS_ARCHIVE:
-#             print(f"  - {v.get('title') or 'Unknown'} [{v.get('id')}] — {v['reason']}")
-#     else:
-#         print("\nNo videos were skipped due to archive.")
-
-#     if as_mp3:
-#         print("\nExtracting audio to MP3 from downloaded videos...")
-#         extract_audio_for_existing_playlist_folder(playlist_folder, audio_folder)
-
-#     print(f"\nDone. Video files in:\n{playlist_folder}")
-#     print(f"MP3 files in:\n{audio_folder}")
-
-#     return FAILED_VIDEO_IDS
 
 def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, excluded_ids: Set[str] | None = None) -> Set[str]:
     """
@@ -1427,51 +1266,12 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
             # Download all videos in one go
             current_batch = videos_to_download
 
-        # Prepare yt-dlp options WITHOUT download_archive (we manage it ourselves)
-        temp_dir = getattr(settings, "TEMP_DOWNLOAD_PATH", None)
-        paths_config = {"home": playlist_folder}
-        if temp_dir and temp_dir.strip():
-            temp_playlist_folder = os.path.join(temp_dir.strip(), os.path.basename(playlist_folder))
-            os.makedirs(temp_playlist_folder, exist_ok=True)
-            paths_config["temp"] = temp_playlist_folder
-
-        common_opts = {
-            "paths": paths_config,
-            "outtmpl": "%(title|channel|Unknown)s [%(id)s].%(ext)s",
-            "ignoreerrors": False,
-            # NO download_archive - we manage it ourselves
-            "quiet": False,
-            "no_warnings": True,
-            "progress_hooks": [_progress_hook_custom, _slow_down_hook],  # Keep hook to catch yt-dlp errors
-        }
-
-        if USE_BROWSER_COOKIES:
-            print(f"✓ Loading cookies from {BROWSER_NAME} (browser is running)")
-            common_opts["cookies_from_browser"] = (BROWSER_NAME,)
-        elif COOKIES_FILE and os.path.isfile(COOKIES_FILE):
-            print(f"✓ Loading cookies from file: {COOKIES_FILE}")
-            common_opts["cookiefile"] = COOKIES_FILE
-        else:
-            print("⚠️  Warning: No valid cookies found. Age-restricted videos will likely fail.")
-
-        if USER_AGENT:
-            common_opts["user_agent"] = USER_AGENT
-        common_opts["overwrites"] = True
-        common_opts["continuedl"] = False
-        common_opts["retries"] = 10
-        common_opts["fragment_retries"] = 10
-        common_opts["extractor_args"] = {
-            "youtube": {
-                "player_client": ["android", "ios", "web_creator", "mweb", "web"],
-                "player_skip": ["configs", "webpage_signature"]
-            }
-        }
-
-        ydl_opts = {
-            "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
-        }
-        ydl_opts.update(common_opts)
+        # Prepare unified yt-dlp options
+        ydl_opts = build_ytdlp_options(
+            mode="download",
+            playlist_folder=playlist_folder,
+            progress_hooks=[_progress_hook_custom, _slow_down_hook]
+        )
 
         print(f"\nStarting download of {len(current_batch)} videos in this batch...")
         
