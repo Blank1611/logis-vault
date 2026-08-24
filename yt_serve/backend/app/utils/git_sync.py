@@ -44,9 +44,18 @@ BASE_DOWNLOAD_GITIGNORE = """# YouTube Playlist Manager - Metadata Whitelist .gi
 *.temp
 """
 
-def _run_git_cmd(args: List[str], cwd: str, timeout: int = 30) -> Tuple[int, str, str]:
+def _run_git_cmd(
+    args: List[str],
+    cwd: str,
+    timeout: int = 30,
+    env_vars: Optional[Dict[str, str]] = None
+) -> Tuple[int, str, str]:
     """Execute a git command with timeout and return (returncode, stdout, stderr)"""
     try:
+        env = os.environ.copy()
+        if env_vars:
+            env.update(env_vars)
+
         proc = subprocess.run(
             ["git"] + args,
             cwd=cwd,
@@ -54,7 +63,8 @@ def _run_git_cmd(args: List[str], cwd: str, timeout: int = 30) -> Tuple[int, str
             text=True,
             timeout=timeout,
             encoding="utf-8",
-            errors="replace"
+            errors="replace",
+            env=env
         )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
     except Exception as e:
@@ -90,9 +100,11 @@ def ensure_git_repo(base_path: str) -> bool:
                 print(f"[GIT SYNC] Failed to git init in {base_path}: {stderr}")
                 return False
 
-        # Set local committer identity if not set globally
-        _run_git_cmd(["config", "user.name", "YouTube Playlist Manager"], base_path)
-        _run_git_cmd(["config", "user.email", "yt-manager@homelab.local"], base_path)
+        # Set fallback committer identity only if not already configured globally or locally
+        code_name, out_name, _ = _run_git_cmd(["config", "user.name"], base_path)
+        if code_name != 0 or not out_name.strip():
+            _run_git_cmd(["config", "user.name", "YouTube Playlist Manager"], base_path)
+            _run_git_cmd(["config", "user.email", "yt-manager@homelab.local"], base_path)
 
         # Initial commit with .gitignore
         _run_git_cmd(["add", ".gitignore"], base_path)
