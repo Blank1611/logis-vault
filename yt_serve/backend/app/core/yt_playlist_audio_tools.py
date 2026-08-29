@@ -68,10 +68,12 @@ EXTRACTED_AUDIO: List[Dict] = []
 
 GLOBAL_PROGRESS_CALLBACK = None  # set by GUI (legacy, for backward compatibility)
 GLOBAL_DOWNLOAD_PROGRESS_CALLBACK = None  # separate callback for download progress
+GLOBAL_INFLIGHT_PROGRESS_CALLBACK = None  # callback for in-flight active track byte progress (video_id, title, bytes_done, bytes_total, speed, eta)
 GLOBAL_EXTRACT_PROGRESS_CALLBACK = None   # separate callback for extraction progress
 GLOBAL_VIDEO_DOWNLOADED_CALLBACK = None   # callback when a video is successfully downloaded
 GLOBAL_LOG_CALLBACK = None       # callback for log messages
 GLOBAL_RUNSTATE = None           # SimpleNamespace(cancelled=bool) set by GUI
+_LAST_INFLIGHT_TICK_TIME: float = 0.0
 
 FAILED_VIDEO_IDS: Set[str] = set()  # IDs that failed in last download run
 PLAYLIST_INFO_CACHE: Dict[str, dict] = {} # Cache for playlist info extracted via yt-dlp.extract_info()
@@ -1043,10 +1045,9 @@ def _add_excluded_id_to_gui_config(playlist_url: str, vid: str, error_message: s
 def _progress_hook_custom(d):
     """
     Track download progress and errors.
-    Note: With custom archive logic, we don't rely on this for skipped videos,
-    but we still use it to catch errors reported by yt-dlp's hook system.
+    Captures throttled in-flight byte progress, speed (bytes/sec), ETA, and errors.
     """
-    global FAILED_VIDEO_IDS, GLOBAL_CURRENT_PLAYLIST_URL
+    global FAILED_VIDEO_IDS, GLOBAL_CURRENT_PLAYLIST_URL, GLOBAL_INFLIGHT_PROGRESS_CALLBACK, _LAST_INFLIGHT_TICK_TIME
 
     status = d.get("status")
     info = d.get("info_dict") or {}
@@ -1054,6 +1055,34 @@ def _progress_hook_custom(d):
         return
 
     vid = info.get("id")
+
+    if status == "downloading" and GLOBAL_INFLIGHT_PROGRESS_CALLBACK is not None:
+        now = time.time()
+        # 200ms throttle to prevent UI thread thrashing
+        if now - _LAST_INFLIGHT_TICK_TIME >= 0.2:
+            _LAST_INFLIGHT_TICK_TIME = now
+            downloaded = d.get("downloaded_bytes") or 0
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            speed = d.get("speed") or 0.0
+            eta = d.get("eta") or 0
+            title = info.get("title") or (os.path.splitext(os.path.basename(d.get("filename") or ""))[0] if d.get("filename") else vid or "Downloading...")
+            try:
+                GLOBAL_INFLIGHT_PROGRESS_CALLBACK(
+                    vid or "",
+                    str(title),
+                    int(downloaded),
+                    int(total),
+                    float(speed) if speed else 0.0,
+                    int(eta) if eta else 0
+                )
+            except Exception as cb_err:
+                pass
+
+    elif status in ["finished", "error"] and GLOBAL_INFLIGHT_PROGRESS_CALLBACK is not None:
+        try:
+            GLOBAL_INFLIGHT_PROGRESS_CALLBACK(vid or "", "", 0, 0, 0.0, 0)
+        except Exception:
+            pass
 
     if status == "error":
         err = d.get("error")

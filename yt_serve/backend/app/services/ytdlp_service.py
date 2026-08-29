@@ -51,7 +51,8 @@ class DownloadService:
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
         video_downloaded_callback: Optional[Callable] = None,
-        cancel_token: Optional[CancellationToken] = None
+        cancel_token: Optional[CancellationToken] = None,
+        inflight_progress_callback: Optional[Callable] = None
     ) -> Set[str]:
         """
         Download playlist with progress and log callbacks
@@ -63,6 +64,7 @@ class DownloadService:
             log_callback: Async function(message) for log messages
             video_downloaded_callback: Async function(video_path) called when a video is downloaded
             cancel_token: Optional thread-safe CancellationToken for cooperative cancellation
+            inflight_progress_callback: Async function(vid, title, bytes_done, bytes_total, speed, eta) for in-flight byte telemetry
         
         Returns:
             Set of failed video IDs
@@ -93,6 +95,18 @@ class DownloadService:
                     print(f"Progress callback error: {e}")
             
             tools.GLOBAL_DOWNLOAD_PROGRESS_CALLBACK = sync_progress
+
+        if inflight_progress_callback:
+            def sync_inflight(vid: str, title: str, bytes_done: int, bytes_total: int, speed: float, eta: int):
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        inflight_progress_callback(vid, title, bytes_done, bytes_total, speed, eta),
+                        main_loop
+                    )
+                except Exception as e:
+                    pass
+            
+            tools.GLOBAL_INFLIGHT_PROGRESS_CALLBACK = sync_inflight
         
         if video_downloaded_callback:
             def sync_video_downloaded(video_path: str):
@@ -140,6 +154,7 @@ class DownloadService:
         finally:
             download_executor.shutdown(wait=False)
             tools.GLOBAL_DOWNLOAD_PROGRESS_CALLBACK = None
+            tools.GLOBAL_INFLIGHT_PROGRESS_CALLBACK = None
             tools.GLOBAL_VIDEO_DOWNLOADED_CALLBACK = None
             tools.GLOBAL_LOG_CALLBACK = None
             tools.GLOBAL_VIDEO_DOWNLOADED_CALLBACK = None

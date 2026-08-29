@@ -33,6 +33,14 @@ export interface Job {
   extract_completed: number
   extract_failed: number
   
+  // In-flight active track telemetry (Dual-Tier progress)
+  current_video_title?: string | null
+  current_video_id?: string | null
+  current_video_bytes_downloaded?: number | null
+  current_video_bytes_total?: number | null
+  current_video_speed?: number | null
+  current_video_eta?: number | null
+  
   created_at: string
   started_at: string | null
   completed_at: string | null

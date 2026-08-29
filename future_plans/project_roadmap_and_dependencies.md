@@ -62,10 +62,10 @@ Building the roadmap in this sequence eliminates architectural rework and guaran
    - Fixed `AttributeError` in `job_manager.py` by implementing `cancel_current_job()`.
    - Built thread-safe `CancellationToken` in `cancellation.py` and integrated into worker loops to eliminate zombie background threads.
    - Hooked `yt-dlp` progress events with `DownloadCancelled` for instant ($<50\text{ ms}$) stream abort and automatic `.part` file cleanup and terminate active FFmpeg child processes.
-3. **[#13: Smooth Dual-Tier Progress Bar Engine](https://github.com/Blank1611/yt_playlist_dnlder/issues/13)**:
+3. **[#13: Smooth Dual-Tier Progress Bar Engine](https://github.com/Blank1611/yt_playlist_dnlder/issues/13)**: ✅ *(Completed)*
    - Dual-tier progress bar: Overall playlist items (`16/50`) + In-flight active track bytes (`68% @ 6.4 MB/s • ETA: 08s`).
-   - Wire `yt-dlp` progress hooks with a 200ms throttler.
-   - Distinct progress tracking for parallel FFmpeg extractions.
+   - Hooked `yt-dlp` progress events with a 200ms throttler.
+   - Dual-protocol streaming: Global WebSocket event bus (`broadcast_event("job_progress")`) + `/api/downloads/jobs/{id}/stream` SSE stream with automatic reconnection.
    - Auto-reconnect state recovery hook to prevent frozen bars on tab switch or laptop sleep.
 4. **[#2: Multi-Handler Logging & Observability Engine](https://github.com/Blank1611/yt_playlist_dnlder/issues/2)**:
    - Implement `logging_engine.py` routing simultaneously to rotating files, in-memory ring buffers, SSE (`GET /api/logs/stream`), and WebSocket broadcasts.

@@ -10,7 +10,7 @@ import os
 import traceback
 
 from app.api.v1.router import router as api_v1_router
-from app.api import playlists, downloads, config, websocket, metrics
+from app.api import playlists, downloads, config, websocket, metrics, sse
 from app.core.config import settings
 
 app = FastAPI(
@@ -125,6 +125,7 @@ app.include_router(api_v1_router, prefix="/api/v1")
 app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
 app.include_router(downloads.router, prefix="/api/downloads", tags=["downloads"])
 app.include_router(config.router, prefix="/api/config", tags=["config"])
+app.include_router(sse.router, prefix="/api", tags=["sse"])
 app.include_router(websocket.router, prefix="/ws", tags=["websocket"])
 app.include_router(metrics.router, tags=["metrics"])
 

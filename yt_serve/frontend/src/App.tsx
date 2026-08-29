@@ -73,6 +73,27 @@ function AppContent() {
       addActivityLog('WebSocket', 'connected', 'Connected to real-time events stream', 'success')
     } else if (type === 'job_status') {
       addActivityLog('JobQueue', 'status_change', `Job #${data?.job_id} status changed to ${data?.status}`, 'info')
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    } else if (type === 'job_progress' && data?.job_id) {
+      queryClient.setQueryData<Job[]>(['jobs'], (oldJobs) => {
+        if (!oldJobs) return oldJobs
+        return oldJobs.map((j) => {
+          if (j.id === data.job_id) {
+            return {
+              ...j,
+              current_video_id: data.current_video_id,
+              current_video_title: data.current_video_title,
+              current_video_bytes_downloaded: data.bytes_downloaded,
+              current_video_bytes_total: data.bytes_total,
+              current_video_speed: data.speed,
+              current_video_eta: data.eta,
+              download_completed: data.download_completed ?? j.download_completed,
+              download_total: data.download_total ?? j.download_total,
+            }
+          }
+          return j
+        })
+      })
     }
   }, [queryClient, addActivityLog])
 

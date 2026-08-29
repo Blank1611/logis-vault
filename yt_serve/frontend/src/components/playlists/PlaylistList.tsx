@@ -1,7 +1,7 @@
 import React from 'react'
 import type { Playlist, Job } from '../../services/types'
 import { PlaylistActions } from './PlaylistActions'
-import { ProgressBar } from '../ui/ProgressBar'
+import { ProgressBar, DualTierProgressBar } from '../ui/ProgressBar'
 import { ExternalLink, FileText as LogIcon } from 'lucide-react'
 
 export interface PlaylistListProps {
@@ -158,19 +158,18 @@ export const PlaylistList: React.FC<PlaylistListProps> = ({
                     <div className="space-y-3">
                       {runningJob.download_status && runningJob.download_status !== 'completed' && (
                         <div>
-                          <ProgressBar
-                            completed={runningJob.download_completed}
-                            total={runningJob.download_total}
+                          <DualTierProgressBar
+                            itemCompleted={runningJob.download_completed}
+                            itemTotal={runningJob.download_total}
+                            itemLabel="📥 Downloading Videos"
+                            batchInfo={runningJob.download_batch_info}
+                            currentTitle={runningJob.current_video_title}
+                            bytesDownloaded={runningJob.current_video_bytes_downloaded}
+                            bytesTotal={runningJob.current_video_bytes_total}
+                            speed={runningJob.current_video_speed}
+                            eta={runningJob.current_video_eta}
                             variant="blue"
-                            height="md"
-                            showLabel={true}
-                            label="📥 Downloading Videos"
                           />
-                          {runningJob.download_batch_info && (
-                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                              {runningJob.download_batch_info}
-                            </div>
-                          )}
                         </div>
                       )}
 

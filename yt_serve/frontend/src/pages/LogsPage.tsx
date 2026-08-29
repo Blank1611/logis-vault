@@ -4,7 +4,7 @@ import { jobsApi } from '../services/api'
 import type { Playlist, Job } from '../services/types'
 import { Button } from '../components/ui/Button'
 import { StatusBadge } from '../components/ui/StatusBadge'
-import { ProgressBar } from '../components/ui/ProgressBar'
+import { ProgressBar, DualTierProgressBar } from '../components/ui/ProgressBar'
 import { 
   Terminal, RotateCcw, Copy, Check, DownloadCloud, Trash2, Search, Loader2, Activity 
 } from 'lucide-react'
@@ -298,20 +298,24 @@ export const LogsPage: React.FC<LogsPageProps> = ({
             {/* Progress Bars */}
             <div className="flex items-center gap-6 text-xs font-medium flex-wrap">
               {selectedJob.job_type !== 'extract' && (
-                <div className="min-w-[140px]">
-                  <ProgressBar
-                    completed={selectedJob.download_completed}
-                    total={selectedJob.download_total}
+                <div className="min-w-[240px]">
+                  <DualTierProgressBar
+                    itemCompleted={selectedJob.download_completed}
+                    itemTotal={selectedJob.download_total}
+                    itemLabel="Download Progress"
+                    batchInfo={selectedJob.download_batch_info}
+                    currentTitle={selectedJob.current_video_title}
+                    bytesDownloaded={selectedJob.current_video_bytes_downloaded}
+                    bytesTotal={selectedJob.current_video_bytes_total}
+                    speed={selectedJob.current_video_speed}
+                    eta={selectedJob.current_video_eta}
                     variant="blue"
-                    height="sm"
-                    showLabel={true}
-                    label="Download Progress"
                   />
                 </div>
               )}
 
               {selectedJob.job_type !== 'download' && (
-                <div className="min-w-[140px]">
+                <div className="min-w-[180px]">
                   <ProgressBar
                     completed={selectedJob.extract_completed}
                     total={selectedJob.extract_total}

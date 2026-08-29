@@ -1,7 +1,7 @@
 import React from 'react'
 import type { Playlist, Job } from '../../services/types'
 import { PlaylistActions } from './PlaylistActions'
-import { ProgressBar } from '../ui/ProgressBar'
+import { ProgressBar, DualTierProgressBar } from '../ui/ProgressBar'
 import { FolderOpen, ExternalLink, Edit3, Loader2 } from 'lucide-react'
 
 export interface PlaylistCardProps {
@@ -127,13 +127,17 @@ export const PlaylistCard: React.FC<PlaylistCardProps> = ({
             {/* Download Progress */}
             {runningJob.job_type !== 'extract' && runningJob.download_total > 0 && (
               <div className="mb-2">
-                <ProgressBar
-                  completed={runningJob.download_completed}
-                  total={runningJob.download_total}
+                <DualTierProgressBar
+                  itemCompleted={runningJob.download_completed}
+                  itemTotal={runningJob.download_total}
+                  itemLabel="Downloading Videos"
+                  batchInfo={runningJob.download_batch_info}
+                  currentTitle={runningJob.current_video_title}
+                  bytesDownloaded={runningJob.current_video_bytes_downloaded}
+                  bytesTotal={runningJob.current_video_bytes_total}
+                  speed={runningJob.current_video_speed}
+                  eta={runningJob.current_video_eta}
                   variant="blue"
-                  height="sm"
-                  showLabel={true}
-                  label="Downloading Videos"
                 />
               </div>
             )}

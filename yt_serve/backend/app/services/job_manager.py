@@ -263,6 +263,33 @@ class JobManager:
                 if progress_callback:
                     await progress_callback(job_id, None, current, total)
             
+            async def inflight_progress_wrapper(vid: str, title: str, bytes_done: int, bytes_total: int, speed: float, eta: int):
+                if (cancel_token and cancel_token.is_cancelled) or self.cancel_flags.get(job_id):
+                    return
+                
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if job:
+                    job.current_video_id = vid
+                    job.current_video_title = title
+                    job.current_video_bytes_downloaded = bytes_done
+                    job.current_video_bytes_total = bytes_total
+                    job.current_video_speed = speed
+                    job.current_video_eta = eta
+                    db.commit()
+                
+                from app.api.websocket import broadcast_event
+                await broadcast_event("job_progress", {
+                    "job_id": job_id,
+                    "current_video_id": vid,
+                    "current_video_title": title,
+                    "bytes_downloaded": bytes_done,
+                    "bytes_total": bytes_total,
+                    "speed": speed,
+                    "eta": eta,
+                    "download_completed": job.download_completed if job else 0,
+                    "download_total": job.download_total if job else 0
+                })
+
             async def log_wrapper(message):
                 self._write_log(job_id, message)
                 if log_callback:
@@ -283,7 +310,8 @@ class JobManager:
                         set(playlist.excluded_ids or []),
                         progress_callback=download_progress_wrapper,
                         log_callback=log_wrapper,
-                        cancel_token=cancel_token
+                        cancel_token=cancel_token,
+                        inflight_progress_callback=inflight_progress_wrapper
                     )
                 
                 playlist_obj.last_download = datetime.utcnow()
@@ -293,6 +321,10 @@ class JobManager:
                 
                 job.download_status = "completed"
                 job.download_failed = len(failed_ids)
+                job.current_video_title = None
+                job.current_video_id = None
+                job.current_video_speed = 0.0
+                job.current_video_eta = 0
                 db.commit()
                 
                 await log_wrapper(f"Download completed. Failed: {len(failed_ids)}")
@@ -329,7 +361,7 @@ class JobManager:
                     self._run_download_phase(
                         job_id, playlist_obj, download_service,
                         download_progress_wrapper, log_wrapper, db,
-                        cancel_token
+                        cancel_token, inflight_progress_wrapper
                     )
                 )
                 
@@ -429,7 +461,8 @@ class JobManager:
         progress_callback: Callable,
         log_callback: Callable,
         db,
-        cancel_token: Optional[CancellationToken] = None
+        cancel_token: Optional[CancellationToken] = None,
+        inflight_progress_callback: Optional[Callable] = None
     ):
         """Run download phase and publish downloaded videos to extraction queue"""
         try:
@@ -455,7 +488,8 @@ class JobManager:
                     progress_callback=progress_callback,
                     log_callback=log_callback,
                     video_downloaded_callback=video_downloaded_callback,
-                    cancel_token=cancel_token
+                    cancel_token=cancel_token,
+                    inflight_progress_callback=inflight_progress_callback
                 )
             
             # Signal that download is complete (send None as sentinel)

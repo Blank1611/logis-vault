@@ -1,7 +1,7 @@
 """
 Database models using SQLAlchemy
 """
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Text, JSON, Boolean
+from sqlalchemy import create_engine, Column, Integer, BigInteger, String, DateTime, Float, Text, JSON, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -79,6 +79,14 @@ class Job(Base):
     extract_completed = Column(Integer, default=0)
     extract_failed = Column(Integer, default=0)
     
+    # In-flight active video byte stream telemetry (Dual-Tier progress)
+    current_video_title = Column(String, nullable=True)
+    current_video_id = Column(String, nullable=True)
+    current_video_bytes_downloaded = Column(BigInteger, default=0)
+    current_video_bytes_total = Column(BigInteger, default=0)
+    current_video_speed = Column(Float, default=0.0)  # bytes per second
+    current_video_eta = Column(Integer, default=0)  # seconds remaining
+    
     error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
@@ -86,6 +94,32 @@ class Job(Base):
 
 # Create tables
 Base.metadata.create_all(bind=engine)
+
+def _auto_migrate_sqlite_columns():
+    """Ensure newly added columns exist in existing SQLite database tables."""
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            # Check existing columns in jobs table
+            result = conn.execute(text("PRAGMA table_info(jobs)"))
+            existing_cols = {row[1] for row in result.fetchall()}
+            
+            new_columns = [
+                ("current_video_title", "VARCHAR"),
+                ("current_video_id", "VARCHAR"),
+                ("current_video_bytes_downloaded", "BIGINT DEFAULT 0"),
+                ("current_video_bytes_total", "BIGINT DEFAULT 0"),
+                ("current_video_speed", "FLOAT DEFAULT 0.0"),
+                ("current_video_eta", "INTEGER DEFAULT 0"),
+            ]
+            for col_name, col_type in new_columns:
+                if col_name not in existing_cols:
+                    conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_type}"))
+                    conn.commit()
+    except Exception as e:
+        print(f"[DB] Auto-migration check note: {e}")
+
+_auto_migrate_sqlite_columns()
 
 # Dependency
 def get_db():
@@ -95,3 +129,4 @@ def get_db():
         yield db
     finally:
         db.close()
+
