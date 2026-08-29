@@ -1,74 +1,50 @@
 # YouTube Playlist Manager
 
-Download and manage YouTube playlists with automatic audio extraction.
+Download and manage YouTube playlists with automatic audio extraction, metadata syncing, and archive tracking.
 
-## Two Versions Available
+---
 
-### 1. 🖥️ Tkinter Desktop App (Classic)
+## 📦 Projects in this Repository
 
-**Location:** This directory  
-**Files:** `yt_playlist_manager_gui_final.py`
+This repository contains two independent, standalone implementations:
 
-**Run:**
-```bash
-python yt_playlist_manager_gui_final.py
-```
+### 1. 🌐 Web Version (Modern Full-Stack)
+* **Location:** [`yt_serve/`](file:///yt_serve/)
+* **Tech Stack:** React (TypeScript + Vite + Tailwind CSS) + FastAPI + SQLAlchemy + WebSockets + Docker
+* **Documentation:** [`yt_serve/DOCS/`](file:///yt_serve/DOCS/)
+* **Quickstart:**
+  ```powershell
+  cd yt_serve
+  # See yt_serve/README.md for backend and frontend launch instructions
+  ```
 
-**Features:**
-- Classic desktop GUI
-- Proven and stable
-- Simple interface
-- All core features
+### 2. 🖥️ Desktop Tkinter Version (Lightweight Classic)
+* **Location:** [`tkinter_gui/`](file:///tkinter_gui/)
+* **Tech Stack:** Python standard `tkinter` + `yt-dlp`
+* **Documentation:** [`tkinter_gui/docs/`](file:///tkinter_gui/docs/)
+* **Quickstart:**
+  ```powershell
+  cd tkinter_gui
+  pip install -r requirements.txt
+  python yt_playlist_manager_gui_final.py
+  ```
 
-### 2. 🌐 Web Version (Modern)
+---
 
-**Location:** `yt_serve/` directory  
-**Tech:** React + FastAPI
+## ⚖️ Comparison
 
-**Run:**
-```bash
-cd yt_serve
-# See yt_serve/README.md for details
-```
+| Feature | 🌐 Web Version (`yt_serve`) | 🖥️ Desktop Version (`tkinter_gui`) |
+| :--- | :--- | :--- |
+| **Interface** | Responsive Web Application | Native Tkinter Desktop Window |
+| **Architecture** | Client/Server (FastAPI + React) | Standalone Python Process |
+| **Database** | SQLite + SQLAlchemy ORM | JSON config & filesystem metadata |
+| **Monitoring** | Prometheus / Grafana / Metrics API | Local log rotation & buffer |
+| **Dependencies** | FastAPI, Uvicorn, React, Node.js 18+ | `yt-dlp` only |
+| **Docker Support** | ✅ Full Compose & Dockerfile | N/A |
 
-**Features:**
-- Modern web interface
-- Real-time updates
-- Dark mode
-- Better performance
-- Professional UI
+---
 
-## Quick Start
+## 📄 License
 
-### Tkinter Version
-```bash
-python yt_playlist_manager_gui_final.py
-```
+MIT License - see [LICENSE](file:///LICENSE) for details.
 
-### Web Version
-```bash
-cd yt_serve
-LAUNCH_APP.bat  # or see yt_serve/README.md
-```
-
-## Documentation
-
-- **Tkinter Version:** See markdown files in this directory
-- **Web Version:** See `yt_serve/DOCS/`
-
-## Choose Your Version
-
-| Feature | Tkinter | Web |
-|---------|---------|-----|
-| Interface | Desktop GUI | Web Browser |
-| Setup | Simple | Moderate |
-| Performance | Good | Excellent |
-| UI | Classic | Modern |
-| Real-time | No | Yes |
-| Mobile | No | Yes |
-
-Both versions use the same core download logic and are fully compatible!
-
-## License
-
-[Your License]

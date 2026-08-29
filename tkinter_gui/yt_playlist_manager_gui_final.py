@@ -219,7 +219,7 @@ class TeeLogger:
 
 # ---------- CONFIG STORAGE ----------
 
-CONFIG_FILE = "yt_playlist_gui_config.json"
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yt_playlist_gui_config.json")
 
 default_config = {
     "base_path": tools.BASE_DOWNLOAD_PATH,

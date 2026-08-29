@@ -1,0 +1,2 @@
+# Minimal dependencies for Tkinter Desktop GUI
+yt-dlp>=2024.12.13

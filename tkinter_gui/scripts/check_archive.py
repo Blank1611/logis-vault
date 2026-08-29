@@ -1,6 +1,14 @@
 import os
+import sys
 import json
 from glob import glob
+from pathlib import Path
+
+# Add parent directory to sys.path if not present
+parent_dir = str(Path(__file__).resolve().parent.parent)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 import yt_playlist_audio_tools as tools
 import unicodedata
 
