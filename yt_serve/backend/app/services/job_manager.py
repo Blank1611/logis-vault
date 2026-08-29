@@ -90,6 +90,19 @@ class JobManager:
                 
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(f"[{timestamp}] [{level}] {message}\n")
+        
+        # Route to central logging engine
+        job_logger = logging.getLogger(f"app.jobs.job_{job_id}")
+        lvl_name = "INFO"
+        if level == "WARN":
+            lvl_name = "WARNING"
+        elif level == "ERROR":
+            lvl_name = "ERROR"
+        elif level == "DEBUG":
+            lvl_name = "DEBUG"
+        
+        log_method = getattr(job_logger, lvl_name.lower(), job_logger.info)
+        log_method(message, extra={"job_id": job_id, "source": "job_manager"})
     
     async def create_download_job(
         self,

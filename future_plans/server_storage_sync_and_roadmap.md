@@ -123,7 +123,7 @@ services:
 
 #### 📊 Column 2: Logging, Observability & Frontend Architecture (High Priority)
 - [x] **[#14: Frontend Modularization: Split Monolithic App.tsx & Extract Reusable UI Widgets](https://github.com/Blank1611/yt_playlist_dnlder/issues/14)**: *(Completed)* Split 2,894-line `App.tsx` into modular `pages/` (`PlaylistsPage.tsx`, `LogsPage.tsx`), `context/` (`ThemeContext.tsx`), and extract pixel-perfect reusable widgets (`Button`, `Modal`, `ProgressBar`, `StatusBadge`, `PlaylistActions`) into `src/components/ui/`.
-- [ ] **[#2: Multi-Handler Logging & Observability Engine: SSE, WebSockets, Ring Buffers & Loki/Prometheus (v2.1)](https://github.com/Blank1611/yt_playlist_dnlder/issues/2)**: Rotating file logger, in-memory ring buffer, Server-Sent Events (SSE) stream, WebSocket broadcaster, and structured Loki/Prometheus JSON formatting.
+- [x] **[#2: Multi-Handler Logging & Observability Engine: SSE, WebSockets, Ring Buffers & Loki/Prometheus (v2.1)](https://github.com/Blank1611/yt_playlist_dnlder/issues/2)**: *(Completed)* Multi-handler logging (Console, 10MB rotating file, in-memory ring buffer, SSE `/api/logs/stream`, WebSocket broadcast), Loki/Prometheus JSON formatting, and `/metrics` endpoint.
 - [ ] **Enhanced Metrics Dashboard**: Real-time download throughput (MB/s), error breakdown, and playlist health stats.
 
 #### 🧹 Column 3: Housekeeping & Storage Optimization

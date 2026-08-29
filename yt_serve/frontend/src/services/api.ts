@@ -62,6 +62,24 @@ export const jobsApi = {
     }>('/downloads/test-integrity', params),
 }
 
+export interface ServerLogEntry {
+  id: string
+  timestamp: string
+  level: string
+  logger: string
+  message: string
+  source?: string
+  job_id?: number | null
+  exception?: string | null
+}
+
+export const logsApi = {
+  getRecent: (params?: { limit?: number; level?: string; source?: string; job_id?: number; search?: string }) =>
+    api.get<ServerLogEntry[]>('/logs/recent', { params }),
+  clear: () => api.delete<{ status: string; message: string }>('/logs/clear'),
+  getLogFileUrl: () => '/api/logs/file',
+}
+
 export interface Config {
   base_download_path: string
   temp_download_path?: string | null

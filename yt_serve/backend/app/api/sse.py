@@ -135,3 +135,56 @@ async def stream_job_events(job_id: int, request: Request, db: Session = Depends
             "X-Accel-Buffering": "no",
         }
     )
+
+
+async def server_logs_generator(request: Request, min_level: Optional[str] = None) -> AsyncGenerator[str, None]:
+    """
+    Yields live Server-Sent Events for all server activity logs.
+    """
+    from app.core.logging_engine import register_sse_queue, unregister_sse_queue, get_recent_logs
+    
+    queue: asyncio.Queue = asyncio.Queue()
+    register_sse_queue(queue)
+
+    level_order = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "WARN": 30, "ERROR": 40, "CRITICAL": 50}
+    target_val = level_order.get((min_level or "").upper(), 0)
+
+    try:
+        # Initial push: recent 50 logs
+        recent = get_recent_logs(limit=50, min_level=min_level)
+        for item in reversed(recent):
+            yield f"event: log\ndata: {json.dumps(item)}\n\n"
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            try:
+                entry = await asyncio.wait_for(queue.get(), timeout=15.0)
+                if min_level and level_order.get(entry.get("level", ""), 0) < target_val:
+                    continue
+                yield f"event: log\ndata: {json.dumps(entry)}\n\n"
+            except asyncio.TimeoutError:
+                # Keep-alive heartbeat ping
+                yield f": ping {datetime.utcnow().isoformat()}\n\n"
+
+    except asyncio.CancelledError:
+        pass
+    finally:
+        unregister_sse_queue(queue)
+
+
+@router.get("/logs/stream")
+async def stream_server_logs(request: Request, level: Optional[str] = None):
+    """
+    Stream live server-wide stdout/logs via Server-Sent Events (SSE).
+    """
+    return StreamingResponse(
+        server_logs_generator(request, min_level=level),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )

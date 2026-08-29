@@ -67,9 +67,9 @@ Building the roadmap in this sequence eliminates architectural rework and guaran
    - Hooked `yt-dlp` progress events with a 200ms throttler.
    - Dual-protocol streaming: Global WebSocket event bus (`broadcast_event("job_progress")`) + `/api/downloads/jobs/{id}/stream` SSE stream with automatic reconnection.
    - Auto-reconnect state recovery hook to prevent frozen bars on tab switch or laptop sleep.
-4. **[#2: Multi-Handler Logging & Observability Engine](https://github.com/Blank1611/yt_playlist_dnlder/issues/2)**:
-   - Implement `logging_engine.py` routing simultaneously to rotating files, in-memory ring buffers, SSE (`GET /api/logs/stream`), and WebSocket broadcasts.
-   - Add structured Loki/Prometheus JSON formatting and Prometheus `/metrics` endpoint.
+4. **[#2: Multi-Handler Logging & Observability Engine](https://github.com/Blank1611/yt_playlist_dnlder/issues/2)**: ✅ *(Completed)*
+   - Implemented `logging_engine.py` routing simultaneously to rotating files, in-memory ring buffers (`deque(1000)`), SSE (`GET /api/logs/stream`), and WebSocket broadcasts.
+   - Structured JSON format for Grafana Loki / Promtail / Vector and Prometheus `/metrics` exporter.
 
 ---
 

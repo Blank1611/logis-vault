@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { jobsApi } from '../services/api'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { jobsApi, logsApi, type ServerLogEntry } from '../services/api'
 import type { Playlist, Job } from '../services/types'
 import { Button } from '../components/ui/Button'
 import { StatusBadge } from '../components/ui/StatusBadge'
 import { ProgressBar, DualTierProgressBar } from '../components/ui/ProgressBar'
 import { 
-  Terminal, RotateCcw, Copy, Check, DownloadCloud, Trash2, Search, Loader2, Activity 
+  Terminal, RotateCcw, Copy, Check, DownloadCloud, Trash2, Search, Loader2, Activity, Server 
 } from 'lucide-react'
 
 export interface ActivityLog {
@@ -31,6 +31,7 @@ export const LogsPage: React.FC<LogsPageProps> = ({
   activityLogs,
   onClearActivity,
 }) => {
+  const queryClient = useQueryClient()
   const [selectedSource, setSelectedSource] = useState<string>(() => {
     const running = jobs.find(j => j.status === 'running' || j.status === 'pending')
     if (running) return `job_${running.id}`
@@ -53,6 +54,7 @@ export const LogsPage: React.FC<LogsPageProps> = ({
   }, [jobs, selectedSource])
 
   const isJobSource = selectedSource.startsWith('job_')
+  const isSystemSource = selectedSource === 'system'
   const selectedJobId = isJobSource ? parseInt(selectedSource.replace('job_', ''), 10) : null
   const selectedJob = jobs.find(j => j.id === selectedJobId)
   const selectedPlaylist = selectedJob ? playlists.find(p => p.id === selectedJob.playlist_id) : null
@@ -69,12 +71,45 @@ export const LogsPage: React.FC<LogsPageProps> = ({
     refetchInterval: selectedJob?.status === 'running' ? 1500 : false,
   })
 
+  // Fetch central ring buffer server logs if system source is selected
+  const { data: serverLogs = [] } = useQuery({
+    queryKey: ['server-logs'],
+    queryFn: async () => {
+      const res = await logsApi.getRecent({ limit: 500 })
+      return res.data
+    },
+    enabled: isSystemSource,
+    staleTime: 5000,
+  })
+
+  // Live SSE stream for server logs
+  useEffect(() => {
+    if (!isSystemSource) return
+
+    const es = new EventSource('/api/logs/stream')
+    es.addEventListener('log', (event: MessageEvent) => {
+      try {
+        const item: ServerLogEntry = JSON.parse(event.data)
+        queryClient.setQueryData<ServerLogEntry[]>(['server-logs'], (prev = []) => {
+          if (prev.some(p => p.id === item.id)) return prev
+          return [item, ...prev].slice(0, 500)
+        })
+      } catch (err) {
+        console.error('[SSE Logs] Error parsing record:', err)
+      }
+    })
+
+    return () => {
+      es.close()
+    }
+  }, [isSystemSource, queryClient])
+
   // Auto scroll to bottom
   useEffect(() => {
     if (autoScroll) {
       logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [jobLogs, activityLogs, autoScroll])
+  }, [jobLogs, serverLogs, activityLogs, autoScroll])
 
   // Parse lines
   const parsedJobLogs = (jobLogs || []).map(entry => {
@@ -83,7 +118,6 @@ export const LogsPage: React.FC<LogsPageProps> = ({
     let timestamp = ''
     let body = text
 
-    // Parse [YYYY-MM-DD HH:MM:SS] [LEVEL] msg
     const match = text.match(/^\[(.*?)\]\s*(?:\[(.*?)\])?\s*(.*)$/)
     if (match) {
       timestamp = match[1]
@@ -108,6 +142,21 @@ export const LogsPage: React.FC<LogsPageProps> = ({
     return true
   })
 
+  const filteredServerLogs = serverLogs.filter(log => {
+    if (selectedLevel !== 'ALL') {
+      const lvl = log.level.toUpperCase()
+      if (selectedLevel === 'ERROR' && lvl !== 'ERROR' && lvl !== 'CRITICAL') return false
+      if (selectedLevel === 'WARN' && lvl !== 'WARN' && lvl !== 'WARNING') return false
+      if (selectedLevel === 'INFO' && lvl !== 'INFO') return false
+      if (selectedLevel === 'SUCCESS' && lvl !== 'SUCCESS') return false
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      return log.message.toLowerCase().includes(q) || (log.source && log.source.toLowerCase().includes(q))
+    }
+    return true
+  })
+
   const filteredActivityLogs = activityLogs.filter(log => {
     if (selectedLevel !== 'ALL') {
       if (selectedLevel === 'ERROR' && log.level !== 'error') return false
@@ -116,7 +165,8 @@ export const LogsPage: React.FC<LogsPageProps> = ({
       if (selectedLevel === 'INFO' && log.level !== 'info') return false
     }
     if (searchQuery.trim()) {
-      return log.message.toLowerCase().includes(searchQuery.toLowerCase()) || log.source.toLowerCase().includes(searchQuery.toLowerCase())
+      const q = searchQuery.toLowerCase()
+      return log.message.toLowerCase().includes(q) || log.source.toLowerCase().includes(q)
     }
     return true
   })
@@ -125,8 +175,10 @@ export const LogsPage: React.FC<LogsPageProps> = ({
     let content = ''
     if (isJobSource) {
       content = filteredJobLogs.map(l => l.raw).join('\n')
+    } else if (isSystemSource) {
+      content = filteredServerLogs.map(l => `[${l.timestamp}] [${l.level}] [${l.source || l.logger}] ${l.message}`).join('\n')
     } else {
-      content = filteredActivityLogs.map(l => `[${l.timestamp}] [${l.level.toUpperCase()}] [${l.source}] ${l.message}`).join('\n')
+      content = activityLogs.map(l => `[${l.timestamp}] [${l.level.toUpperCase()}] [${l.source}] ${l.message}`).join('\n')
     }
     navigator.clipboard.writeText(content)
     setCopied(true)
@@ -179,9 +231,12 @@ export const LogsPage: React.FC<LogsPageProps> = ({
                 })}
               </optgroup>
 
-              <optgroup label="🌐 Live System & Events">
+              <optgroup label="🌐 Live System & Observability">
                 <option value="system">
-                  🌐 System & WebSocket Live Activity ({activityLogs.length} events)
+                  📡 Central Server Logs (SSE Stream & In-Memory Ring Buffer)
+                </option>
+                <option value="activity">
+                  ⚡ UI & WebSocket Live Activity ({activityLogs.length} events)
                 </option>
               </optgroup>
             </select>
@@ -222,7 +277,34 @@ export const LogsPage: React.FC<LogsPageProps> = ({
               </a>
             )}
 
-            {!isJobSource && (
+            {isSystemSource && (
+              <a
+                href={logsApi.getLogFileUrl()}
+                download="yt_manager.log"
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                <DownloadCloud className="w-3.5 h-3.5" />
+                Download Server Log
+              </a>
+            )}
+
+            {isSystemSource && (
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={async () => {
+                  await logsApi.clear()
+                  queryClient.invalidateQueries({ queryKey: ['server-logs'] })
+                }}
+                icon={<Trash2 className="w-3.5 h-3.5" />}
+              >
+                Clear Buffer
+              </Button>
+            )}
+
+            {!isJobSource && !isSystemSource && (
               <Button
                 variant="danger"
                 size="sm"
@@ -238,21 +320,23 @@ export const LogsPage: React.FC<LogsPageProps> = ({
         {/* Filters and Search Bar */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-gray-100 dark:border-gray-700">
           {/* Level Filter Buttons */}
-          <div className="flex items-center gap-1.5 flex-wrap w-full sm:w-auto">
+          <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
             {(['ALL', 'ERROR', 'WARN', 'SUCCESS', 'INFO'] as const).map(lvl => (
               <button
                 key={lvl}
                 onClick={() => setSelectedLevel(lvl)}
-                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
                   selectedLevel === lvl
                     ? lvl === 'ERROR'
-                      ? 'bg-rose-600 text-white'
+                      ? 'bg-rose-600 text-white shadow-sm'
                       : lvl === 'WARN'
-                      ? 'bg-amber-500 text-white'
+                      ? 'bg-amber-500 text-white shadow-sm'
                       : lvl === 'SUCCESS'
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : lvl === 'INFO'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'bg-gray-800 text-white dark:bg-gray-200 dark:text-gray-900 shadow-sm'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
                 }`}
               >
                 {lvl}
@@ -262,7 +346,7 @@ export const LogsPage: React.FC<LogsPageProps> = ({
 
           {/* Search Box */}
           <div className="relative w-full sm:w-72">
-            <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-gray-400" />
             <input
               type="text"
               value={searchQuery}
@@ -380,6 +464,50 @@ export const LogsPage: React.FC<LogsPageProps> = ({
             <div className="text-center py-20 text-gray-500">
               <Terminal className="w-8 h-8 mx-auto mb-2 opacity-50" />
               No logs matched your current filters.
+            </div>
+          )
+        ) : isSystemSource ? (
+          filteredServerLogs.length > 0 ? (
+            <div className="space-y-1">
+              {filteredServerLogs.map(log => {
+                const lvl = log.level.toUpperCase()
+                return (
+                  <div key={log.id} className="flex items-start gap-2.5 hover:bg-gray-900/60 px-2 py-0.5 rounded transition-colors break-all">
+                    <span className="text-gray-500 select-none whitespace-nowrap text-[11px]">
+                      {log.timestamp.replace('T', ' ').replace('Z', '')}
+                    </span>
+                    <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold select-none whitespace-nowrap ${
+                      lvl === 'ERROR' || lvl === 'CRITICAL'
+                        ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                        : lvl === 'WARN' || lvl === 'WARNING'
+                        ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                        : lvl === 'SUCCESS'
+                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                        : 'bg-cyan-950 text-cyan-300 border border-cyan-800'
+                    }`}>
+                      {lvl}
+                    </span>
+                    <span className="px-1.5 py-0.2 rounded text-[10px] text-gray-400 bg-gray-900 border border-gray-800 font-mono select-none">
+                      {log.source || log.logger}
+                    </span>
+                    <span className={`flex-1 whitespace-pre-wrap ${
+                      lvl === 'ERROR' || lvl === 'CRITICAL'
+                        ? 'text-rose-300 font-semibold'
+                        : lvl === 'WARN' || lvl === 'WARNING'
+                        ? 'text-amber-200'
+                        : 'text-gray-300'
+                    }`}>
+                      {log.message}
+                    </span>
+                  </div>
+                )
+              })}
+              <div ref={logsEndRef} />
+            </div>
+          ) : (
+            <div className="text-center py-20 text-gray-500">
+              <Server className="w-8 h-8 mx-auto mb-2 opacity-50" />
+              No server logs in ring buffer yet.
             </div>
           )
         ) : (

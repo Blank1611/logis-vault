@@ -10,8 +10,11 @@ import os
 import traceback
 
 from app.api.v1.router import router as api_v1_router
-from app.api import playlists, downloads, config, websocket, metrics, sse
+from app.api import playlists, downloads, config, websocket, metrics, sse, logs
 from app.core.config import settings
+from app.core.logging_engine import setup_logging, get_logger
+
+logger = get_logger("app.main")
 
 app = FastAPI(
     title="YouTube Playlist Manager API",
@@ -22,9 +25,10 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup_event():
     """Check for interrupted jobs and refresh playlist stats on server startup"""
-    print("\n" + "="*60)
-    print("Playlist Manager - Server Startup")
-    print("="*60)
+    setup_logging()
+    logger.info("=" * 60)
+    logger.info("Playlist Manager - Server Startup")
+    logger.info("=" * 60)
     
     from app.models.database import SessionLocal, Playlist, Job
     from app.services.ytdlp_service import DownloadService
@@ -125,6 +129,7 @@ app.include_router(api_v1_router, prefix="/api/v1")
 app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
 app.include_router(downloads.router, prefix="/api/downloads", tags=["downloads"])
 app.include_router(config.router, prefix="/api/config", tags=["config"])
+app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
 app.include_router(sse.router, prefix="/api", tags=["sse"])
 app.include_router(websocket.router, prefix="/ws", tags=["websocket"])
 app.include_router(metrics.router, tags=["metrics"])

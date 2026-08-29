@@ -93,6 +93,27 @@ def generate_prometheus_metrics() -> str:
             lines.append(f'yt_serve_jobs_total{{job_type="{j_type}",status="{status}"}} {count}')
         lines.append("")
 
+        # 4. Observability & Logging metrics
+        from app.core.logging_engine import _ring_buffer, _buffer_lock
+        with _buffer_lock:
+            buf_len = len(_ring_buffer)
+            counts = {"DEBUG": 0, "INFO": 0, "WARNING": 0, "ERROR": 0, "CRITICAL": 0}
+            for item in _ring_buffer:
+                lvl = item.get("level", "INFO")
+                if lvl in counts:
+                    counts[lvl] += 1
+
+        lines.append("# HELP yt_serve_log_ring_buffer_size Current number of in-memory buffered log entries")
+        lines.append("# TYPE yt_serve_log_ring_buffer_size gauge")
+        lines.append(f"yt_serve_log_ring_buffer_size {buf_len}")
+        lines.append("")
+
+        lines.append("# HELP yt_serve_log_entries_buffered Number of buffered log entries by level")
+        lines.append("# TYPE yt_serve_log_entries_buffered gauge")
+        for lvl, cnt in counts.items():
+            lines.append(f'yt_serve_log_entries_buffered{{level="{lvl.lower()}"}} {cnt}')
+        lines.append("")
+
     except Exception as e:
         lines.append(f"# ERROR generating metrics: {e}")
     finally:
