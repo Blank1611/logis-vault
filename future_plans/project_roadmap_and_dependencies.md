@@ -55,9 +55,9 @@ Building the roadmap in this sequence eliminates architectural rework and guaran
 ### 🚀 Phase 1: Core Engine Stability, Observability & Frontend Modularization
 > **Focus**: Ensure rock-solid background thread execution, instant stream cancellation, smooth non-freezing progress reporting, centralized logging, and high-performance modular frontend architecture.
 
-1. **[#14: Frontend Modularization: Split Monolithic App.tsx & Extract Reusable UI Widgets](https://github.com/Blank1611/yt_playlist_dnlder/issues/14)**:
-   - Extract modals, views, and pixel-perfect atomic widgets (`Button`, `Modal`, `ProgressBar`, `StatusBadge`, `PlaylistActions`) into `src/components/ui/`, `pages/`, `context/`, and `components/`.
-   - Remove unused empty `features/` directory and eliminate ~600+ lines of duplicate JSX.
+1. **[#14: Frontend Modularization: Split Monolithic App.tsx & Extract Reusable UI Widgets](https://github.com/Blank1611/yt_playlist_dnlder/issues/14)**: ✅ *(Completed)*
+   - Extracted modals, views, and pixel-perfect atomic widgets (`Button`, `Modal`, `ProgressBar`, `StatusBadge`, `PlaylistActions`) into `src/components/ui/`, `pages/`, `context/`, and `components/`.
+   - Reduced `App.tsx` from 2,894 lines down to ~250 clean lines with 0 TypeScript build errors.
 2. **[#12: Robust Cancellation Engine](https://github.com/Blank1611/yt_playlist_dnlder/issues/12)**:
    - Fix `AttributeError` in `job_manager.py`.
    - Pass `CancellationToken` into worker loops to eliminate zombie background threads.

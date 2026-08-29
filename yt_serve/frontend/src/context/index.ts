@@ -1,2 +1,1 @@
-// Export all context providers
-// Example: export { AuthProvider, useAuth } from './AuthContext'
+export * from './ThemeContext'

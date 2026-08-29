@@ -1,2 +1,2 @@
-// Export all page components
-// Example: export { Home } from './Home'
+export * from './PlaylistsPage'
+export * from './LogsPage'
