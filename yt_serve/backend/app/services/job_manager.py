@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.database import Job, Playlist
 from app.services.ytdlp_service import DownloadService
 from app.core.config import settings
+from app.core.cancellation import CancellationToken
 
 class JobManager:
     """Manages background jobs"""
@@ -17,6 +18,7 @@ class JobManager:
     def __init__(self):
         self.active_jobs: Dict[int, asyncio.Task] = {}
         self.cancel_flags: Dict[int, bool] = {}
+        self.cancel_tokens: Dict[int, CancellationToken] = {}
         self.download_services: Dict[int, DownloadService] = {}  # Track services for cancellation
         
         # Video extraction queue system (pub-sub)
@@ -81,7 +83,7 @@ class JobManager:
                 level = "WARN"
             elif "✗" in message or "error" in msg_lower or "failed" in msg_lower:
                 level = "ERROR"
-            elif "✓" in message or "completed" in msg_lower or "success" in msg_lower or "verified" in msg_lower:
+            elif "✓" in message or "complete" in msg_lower or "success" in msg_lower or "verified" in msg_lower:
                 level = "SUCCESS"
             else:
                 level = "INFO"
@@ -100,27 +102,13 @@ class JobManager:
     ) -> int:
         """
         Create and start a download job
-        
-        Args:
-            db: Database session
-            playlist_id: Playlist ID
-            job_type: "download", "extract", or "both"
-            download_service: Download service instance
-            log_callback: Async function(job_id, message) for logs
-            progress_callback: Async function(job_id, progress, completed, total) for progress
-        
-        Returns:
-            Job ID
         """
-        # Get playlist
         playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
         if not playlist:
             raise ValueError(f"Playlist {playlist_id} not found")
         
-        # Periodic log cleanup
         self._cleanup_old_logs()
         
-        # Create job with initialized status fields
         job = Job(
             playlist_id=playlist_id,
             job_type=job_type,
@@ -136,7 +124,11 @@ class JobManager:
         db.commit()
         db.refresh(job)
         
-        # Start job task
+        cancel_token = CancellationToken()
+        self.cancel_tokens[job.id] = cancel_token
+        self.cancel_flags[job.id] = False
+        self.download_services[job.id] = download_service
+        
         task = asyncio.create_task(
             self._run_job(
                 job.id,
@@ -144,12 +136,11 @@ class JobManager:
                 job_type,
                 download_service,
                 log_callback,
-                progress_callback
+                progress_callback,
+                cancel_token
             )
         )
         self.active_jobs[job.id] = task
-        self.cancel_flags[job.id] = False
-        self.download_services[job.id] = download_service  # Store for cancellation
         
         return job.id
 
@@ -194,6 +185,11 @@ class JobManager:
                     "total": total
                 }, j_id)
             
+            cancel_token = CancellationToken()
+            self.cancel_tokens[job.id] = cancel_token
+            self.cancel_flags[job.id] = False
+            self.download_services[job.id] = download_service
+            
             task = asyncio.create_task(
                 self._run_job(
                     job.id,
@@ -201,12 +197,11 @@ class JobManager:
                     job.job_type,
                     download_service,
                     log_callback,
-                    progress_callback
+                    progress_callback,
+                    cancel_token
                 )
             )
             self.active_jobs[job.id] = task
-            self.cancel_flags[job.id] = False
-            self.download_services[job.id] = download_service
             return job.id
         finally:
             db.close()
@@ -219,73 +214,61 @@ class JobManager:
         job_type: str,
         download_service: DownloadService,
         log_callback: Optional[Callable],
-        progress_callback: Optional[Callable]
+        progress_callback: Optional[Callable],
+        cancel_token: Optional[CancellationToken] = None
     ):
         """Run a job with separate download and extraction progress"""
         from app.models.database import SessionLocal
         db = SessionLocal()
         
         try:
-            # Query playlist once from this session and reuse it
             playlist_obj = db.query(Playlist).filter(Playlist.id == playlist.id).first()
             if not playlist_obj:
                 raise Exception(f"Playlist {playlist.id} not found")
             
-            # Update job status
             job = db.query(Job).filter(Job.id == job_id).first()
             job.status = "running"
             job.started_at = datetime.utcnow()
             db.commit()
             
-            # Log start
             if log_callback:
                 await log_callback(job_id, f"Starting {job_type} for playlist: {playlist.title}")
             
-            # Create download progress wrapper
             async def download_progress_wrapper(total, current, batch_info=None):
-                if self.cancel_flags.get(job_id):
+                if (cancel_token and cancel_token.is_cancelled) or self.cancel_flags.get(job_id):
                     raise asyncio.CancelledError("Job cancelled")
                 
-                # Update job download progress
                 job = db.query(Job).filter(Job.id == job_id).first()
-                job.download_total = total
-                job.download_completed = current
-                job.download_batch_info = batch_info
-                job.download_status = "running"
-                db.commit()
+                if job:
+                    job.download_total = total
+                    job.download_completed = current
+                    job.download_batch_info = batch_info
+                    job.download_status = "running"
+                    db.commit()
                 
-                # Callback
                 if progress_callback:
                     await progress_callback(job_id, None, current, total)
             
-            # Create extraction progress wrapper
             async def extract_progress_wrapper(total, current):
-                if self.cancel_flags.get(job_id):
+                if (cancel_token and cancel_token.is_cancelled) or self.cancel_flags.get(job_id):
                     raise asyncio.CancelledError("Job cancelled")
                 
-                # Update job extraction progress
                 job = db.query(Job).filter(Job.id == job_id).first()
-                job.extract_total = total
-                job.extract_completed = current
-                job.extract_status = "running"
-                db.commit()
+                if job:
+                    job.extract_total = total
+                    job.extract_completed = current
+                    job.extract_status = "running"
+                    db.commit()
                 
-                # Callback
                 if progress_callback:
                     await progress_callback(job_id, None, current, total)
             
-            # Create log wrapper
             async def log_wrapper(message):
-                # Write to file
                 self._write_log(job_id, message)
-                
-                # Send to WebSocket
                 if log_callback:
                     await log_callback(job_id, message)
             
-            # Execute job based on type
             if job_type == "download":
-                # Download only
                 job.download_status = "pending"
                 db.commit()
                 
@@ -299,16 +282,14 @@ class JobManager:
                         playlist.url,
                         set(playlist.excluded_ids or []),
                         progress_callback=download_progress_wrapper,
-                        log_callback=log_wrapper
+                        log_callback=log_wrapper,
+                        cancel_token=cancel_token
                     )
                 
-                # Update playlist
-                playlist.last_download = datetime.utcnow()
-                
-                # Add failed IDs to exclusions
+                playlist_obj.last_download = datetime.utcnow()
                 if failed_ids:
-                    existing = set(playlist.excluded_ids or [])
-                    playlist.excluded_ids = list(existing.union(failed_ids))
+                    existing = set(playlist_obj.excluded_ids or [])
+                    playlist_obj.excluded_ids = list(existing.union(failed_ids))
                 
                 job.download_status = "completed"
                 job.download_failed = len(failed_ids)
@@ -317,7 +298,6 @@ class JobManager:
                 await log_wrapper(f"Download completed. Failed: {len(failed_ids)}")
             
             elif job_type == "extract":
-                # Extract only
                 job.extract_status = "pending"
                 db.commit()
                 
@@ -329,49 +309,42 @@ class JobManager:
                     log_callback=log_wrapper
                 )
                 
-                # Update playlist
-                playlist.last_extract = datetime.utcnow()
+                playlist_obj.last_extract = datetime.utcnow()
                 job.extract_status = "completed"
                 db.commit()
                 
                 await log_wrapper("Audio extraction completed")
             
             elif job_type == "both":
-                # Download and extract in parallel
                 job.download_status = "pending"
                 job.extract_status = "pending"
                 db.commit()
                 
                 await log_wrapper("Starting download and extraction...")
                 
-                # CREATE EXTRACTION QUEUE FIRST - Must happen before download starts
-                # This prevents race condition where download publishes to queue before it exists
                 self.extraction_queues[job_id] = asyncio.Queue()
                 await log_wrapper("Extraction queue created")
                 
-                # Start download task
                 download_task = asyncio.create_task(
                     self._run_download_phase(
                         job_id, playlist_obj, download_service,
-                        download_progress_wrapper, log_wrapper, db
+                        download_progress_wrapper, log_wrapper, db,
+                        cancel_token
                     )
                 )
                 
-                # Start extraction task (will wait for videos to be available)
                 extract_task = asyncio.create_task(
                     self._run_extraction_phase(
                         job_id, playlist_obj, download_service,
-                        extract_progress_wrapper, log_wrapper, db
+                        extract_progress_wrapper, log_wrapper, db,
+                        cancel_token
                     )
                 )
                 
-                # Wait for both to complete
                 await asyncio.gather(download_task, extract_task)
             
-            # Final stats refresh after job completion
             await log_wrapper("Refreshing final stats...")
             try:
-                # Refresh stats on the same playlist object
                 local_count, available_count, unavailable_count = await download_service.get_playlist_stats(
                     playlist_obj.title,
                     playlist_obj.url,
@@ -384,9 +357,7 @@ class JobManager:
                 db.commit()
                 
                 await log_wrapper(f"Final stats: {local_count} local, {available_count} available, {unavailable_count} unavailable")
-                await log_wrapper(f"Database updated for playlist ID {playlist_obj.id}")
                 
-                # Broadcast playlist update event via WebSocket
                 from app.api.websocket import broadcast_event
                 await broadcast_event("playlist_updated", {
                     "playlist_id": playlist_obj.id,
@@ -396,46 +367,57 @@ class JobManager:
                 })
             except Exception as e:
                 await log_wrapper(f"Error refreshing final stats: {str(e)}")
-                import traceback
-                await log_wrapper(f"Traceback: {traceback.format_exc()}")
             
-            # Update job status
             job = db.query(Job).filter(Job.id == job_id).first()
-            job.status = "completed"
-            job.completed_at = datetime.utcnow()
-            db.commit()
+            if job and job.status != "cancelled":
+                job.status = "completed"
+                job.completed_at = datetime.utcnow()
+                db.commit()
             
             await log_wrapper("Job completed successfully")
             
         except asyncio.CancelledError:
-            # Job was cancelled
             job = db.query(Job).filter(Job.id == job_id).first()
-            job.status = "cancelled"
-            job.completed_at = datetime.utcnow()
-            db.commit()
+            if job:
+                job.status = "cancelled"
+                if job.download_status == "running":
+                    job.download_status = "cancelled"
+                if job.extract_status == "running":
+                    job.extract_status = "cancelled"
+                job.completed_at = datetime.utcnow()
+                db.commit()
             
             if log_callback:
                 await log_callback(job_id, "Job cancelled by user")
+                
+            from app.api.websocket import broadcast_event
+            await broadcast_event("job_status", {
+                "job_id": job_id,
+                "status": "cancelled"
+            })
         
         except Exception as e:
-            # Job failed
             job = db.query(Job).filter(Job.id == job_id).first()
-            job.status = "failed"
-            job.error = str(e)
-            job.completed_at = datetime.utcnow()
-            db.commit()
+            if job:
+                job.status = "failed"
+                job.error = str(e)
+                job.completed_at = datetime.utcnow()
+                db.commit()
             
             if log_callback:
                 await log_callback(job_id, f"Job failed: {str(e)}")
         
         finally:
-            # Cleanup
             if job_id in self.active_jobs:
                 del self.active_jobs[job_id]
             if job_id in self.cancel_flags:
                 del self.cancel_flags[job_id]
+            if job_id in self.cancel_tokens:
+                del self.cancel_tokens[job_id]
             if job_id in self.download_services:
                 del self.download_services[job_id]
+            if job_id in self.extraction_queues:
+                del self.extraction_queues[job_id]
             
             db.close()
     
@@ -446,7 +428,8 @@ class JobManager:
         download_service: DownloadService,
         progress_callback: Callable,
         log_callback: Callable,
-        db
+        db,
+        cancel_token: Optional[CancellationToken] = None
     ):
         """Run download phase and publish downloaded videos to extraction queue"""
         try:
@@ -471,14 +454,15 @@ class JobManager:
                     set(playlist.excluded_ids or []),
                     progress_callback=progress_callback,
                     log_callback=log_callback,
-                    video_downloaded_callback=video_downloaded_callback
+                    video_downloaded_callback=video_downloaded_callback,
+                    cancel_token=cancel_token
                 )
             
             # Signal that download is complete (send None as sentinel)
             if job_id in self.extraction_queues:
                 await self.extraction_queues[job_id].put(None)
             
-            # Update playlist metadata (playlist object is already from this session)
+            # Update playlist metadata
             playlist.last_download = datetime.utcnow()
             
             # Add failed IDs to exclusions
@@ -501,16 +485,28 @@ class JobManager:
             except Exception as e:
                 await log_callback(f"Warning: Could not refresh stats: {str(e)}")
             
-            job.download_status = "completed"
-            job.download_failed = len(failed_ids)
-            db.commit()
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job and job.download_status != "cancelled":
+                job.download_status = "completed"
+                job.download_failed = len(failed_ids)
+                db.commit()
             
             await log_callback(f"Download phase completed. Failed: {len(failed_ids)}")
             
         except Exception as e:
+            if isinstance(e, asyncio.CancelledError) or (cancel_token and cancel_token.is_cancelled):
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if job:
+                    job.download_status = "cancelled"
+                    db.commit()
+                if job_id in self.extraction_queues:
+                    await self.extraction_queues[job_id].put(None)
+                raise
+                
             job = db.query(Job).filter(Job.id == job_id).first()
-            job.download_status = "failed"
-            db.commit()
+            if job:
+                job.download_status = "failed"
+                db.commit()
             
             # Signal extraction to stop
             if job_id in self.extraction_queues:
@@ -526,41 +522,37 @@ class JobManager:
         download_service: DownloadService,
         progress_callback: Callable,
         log_callback: Callable,
-        db
+        db,
+        cancel_token: Optional[CancellationToken] = None
     ):
         """Run extraction phase using queue-based pub-sub system with thread pool"""
         from concurrent.futures import ThreadPoolExecutor
         from app.core import yt_playlist_audio_tools as tools
         
         try:
-            # Create extraction queue for this job if it doesn't exist
-            # (It may already exist if this is part of a "both" job type)
             if job_id not in self.extraction_queues:
                 self.extraction_queues[job_id] = asyncio.Queue()
             
             job = db.query(Job).filter(Job.id == job_id).first()
-            job.extract_status = "running"
-            db.commit()
+            if job:
+                job.extract_status = "running"
+                db.commit()
             
             await log_callback("Starting extraction phase (queue-based)...")
             
-            # Get playlist folder - use same path construction as standalone extract
             safe_title = tools._sanitize_title(playlist.title)
             playlist_folder = os.path.join(download_service.base_path, safe_title)
-            audio_folder = os.path.join(playlist_folder, safe_title)  # Match extract_audio_for_existing_playlist
+            audio_folder = os.path.join(playlist_folder, safe_title)
             os.makedirs(audio_folder, exist_ok=True)
             
-            # Find ffmpeg
             ffmpeg_path = tools._find_ffmpeg()
             if not ffmpeg_path:
                 raise RuntimeError("FFmpeg not found")
             
-            # Track extraction results
             extracted_videos = set()
             failed_videos = set()
             total_videos = 0
             
-            # Create thread pool for parallel extraction
             max_workers = min(tools.MAX_EXTRACTION_WORKERS, 4)
             executor = ThreadPoolExecutor(
                 max_workers=max_workers,
@@ -569,12 +561,18 @@ class JobManager:
             
             await log_callback(f"Extraction thread pool ready with {max_workers} workers")
             
-            # Active extraction tasks
             active_tasks = set()
             download_complete = False
             
             try:
                 while not download_complete or active_tasks:
+                    # Check cancellation
+                    if (cancel_token and cancel_token.is_cancelled) or self.cancel_flags.get(job_id):
+                        await log_callback("Extraction cancelled by user. Cancelling active tasks...")
+                        for task in active_tasks:
+                            task.cancel()
+                        break
+
                     # Process completed tasks first
                     done_tasks = [task for task in active_tasks if task.done()]
                     for task in done_tasks:
@@ -590,13 +588,13 @@ class JobManager:
                                 failed_videos.add(vid_path)
                                 await log_callback(f"✗ Failed: {os.path.basename(vid_path)}")
                             
-                            # Update progress
                             completed = len(extracted_videos)
                             job = db.query(Job).filter(Job.id == job_id).first()
-                            job.extract_total = total_videos
-                            job.extract_completed = completed
-                            job.extract_failed = len(failed_videos)
-                            db.commit()
+                            if job:
+                                job.extract_total = total_videos
+                                job.extract_completed = completed
+                                job.extract_failed = len(failed_videos)
+                                db.commit()
                             
                             if progress_callback:
                                 await progress_callback(total_videos, completed)
@@ -604,19 +602,15 @@ class JobManager:
                         except Exception as e:
                             await log_callback(f"Error processing extraction result: {str(e)}")
                     
-                    # If download not complete, try to get more videos from queue
                     if not download_complete:
                         try:
-                            # Non-blocking queue check
                             video_path = self.extraction_queues[job_id].get_nowait()
                             
-                            # None is sentinel value indicating download is complete
                             if video_path is None:
                                 download_complete = True
                                 await log_callback("Download complete signal received, waiting for remaining extractions...")
                                 continue
                             
-                            # Check if audio already exists
                             base_name = os.path.splitext(os.path.basename(video_path))[0]
                             audio_path = os.path.join(audio_folder, base_name + ".mp3")
                             
@@ -625,10 +619,8 @@ class JobManager:
                                 extracted_videos.add(video_path)
                                 continue
                             
-                            # Increment total count
                             total_videos += 1
                             
-                            # Submit extraction task to thread pool
                             loop = asyncio.get_event_loop()
                             future = loop.run_in_executor(
                                 executor,
@@ -644,79 +636,90 @@ class JobManager:
                             await log_callback(f"Queued for extraction ({len(active_tasks)} active): {os.path.basename(video_path)}")
                             
                         except asyncio.QueueEmpty:
-                            # No videos in queue, wait a bit before checking again
                             if active_tasks:
-                                # If we have active tasks, wait for at least one to complete
-                                done, pending = await asyncio.wait(active_tasks, return_when=asyncio.FIRST_COMPLETED)
-                                # Don't process results here, let the main loop handle them
+                                done, pending = await asyncio.wait(active_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.2)
                             else:
-                                # No active tasks and no videos in queue, wait briefly
                                 await asyncio.sleep(0.1)
                     else:
-                        # Download complete, just wait for remaining extractions
                         if active_tasks:
-                            done, pending = await asyncio.wait(active_tasks, return_when=asyncio.FIRST_COMPLETED)
+                            done, pending = await asyncio.wait(active_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.2)
                         else:
                             break
                 
-                # Wait for all remaining extraction tasks to complete
-                if active_tasks:
-                    await log_callback(f"Waiting for {len(active_tasks)} remaining extraction(s)...")
-                    results = await asyncio.gather(*active_tasks, return_exceptions=True)
-                    
-                    for result in results:
-                        if isinstance(result, Exception):
-                            await log_callback(f"Extraction error: {str(result)}")
-                            continue
+                # If not cancelled, wait for remaining tasks
+                if not ((cancel_token and cancel_token.is_cancelled) or self.cancel_flags.get(job_id)):
+                    if active_tasks:
+                        await log_callback(f"Waiting for {len(active_tasks)} remaining extraction(s)...")
+                        results = await asyncio.gather(*active_tasks, return_exceptions=True)
                         
-                        vid_path = result.get("video")
-                        if result["status"] == "success" or result["status"] == "skipped":
-                            extracted_videos.add(vid_path)
-                        else:
-                            failed_videos.add(vid_path)
+                        for result in results:
+                            if isinstance(result, Exception):
+                                await log_callback(f"Extraction error: {str(result)}")
+                                continue
+                            
+                            vid_path = result.get("video")
+                            if result["status"] == "success" or result["status"] == "skipped":
+                                extracted_videos.add(vid_path)
+                            else:
+                                failed_videos.add(vid_path)
+                        
+                        job = db.query(Job).filter(Job.id == job_id).first()
+                        if job:
+                            job.extract_total = total_videos
+                            job.extract_completed = len(extracted_videos)
+                            job.extract_failed = len(failed_videos)
+                            db.commit()
+                        
+                        if progress_callback:
+                            await progress_callback(total_videos, len(extracted_videos))
                     
-                    # Final progress update
-                    job = db.query(Job).filter(Job.id == job_id).first()
-                    job.extract_total = total_videos
-                    job.extract_completed = len(extracted_videos)
-                    job.extract_failed = len(failed_videos)
-                    db.commit()
-                    
-                    if progress_callback:
-                        await progress_callback(total_videos, len(extracted_videos))
-                
-                await log_callback(f"Extraction complete: {len(extracted_videos)} extracted, {len(failed_videos)} failed")
+                    await log_callback(f"Extraction complete: {len(extracted_videos)} extracted, {len(failed_videos)} failed")
                 
             finally:
-                # Cleanup thread pool
                 executor.shutdown(wait=False)
             
-            # Update playlist (playlist object is already from this session)
+            if (cancel_token and cancel_token.is_cancelled) or self.cancel_flags.get(job_id):
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if job:
+                    job.extract_status = "cancelled"
+                    db.commit()
+                return
+
             playlist.last_extract = datetime.utcnow()
             
-            job.extract_status = "completed"
-            db.commit()
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job and job.extract_status != "cancelled":
+                job.extract_status = "completed"
+                db.commit()
             
             await log_callback("Extraction phase completed")
             
         except Exception as e:
+            if isinstance(e, asyncio.CancelledError) or (cancel_token and cancel_token.is_cancelled):
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if job:
+                    job.extract_status = "cancelled"
+                    db.commit()
+                raise
+                
             job = db.query(Job).filter(Job.id == job_id).first()
-            job.extract_status = "failed"
-            db.commit()
+            if job:
+                job.extract_status = "failed"
+                db.commit()
             await log_callback(f"Extraction phase failed: {str(e)}")
             raise
         
         finally:
-            # Cleanup queue
             if job_id in self.extraction_queues:
                 del self.extraction_queues[job_id]
     
     async def cancel_job(self, job_id: int):
-        """Cancel a running job"""
-        if job_id in self.cancel_flags:
-            self.cancel_flags[job_id] = True
+        """Cancel a running job immediately"""
+        self.cancel_flags[job_id] = True
         
-        # Cancel the download service's current job
+        if job_id in self.cancel_tokens:
+            self.cancel_tokens[job_id].cancel()
+        
         if job_id in self.download_services:
             self.download_services[job_id].cancel_current_job()
         
@@ -731,10 +734,6 @@ class JobManager:
     def get_job_logs(self, job_id: int, lines: Optional[int] = None) -> list:
         """
         Get job logs from file
-        
-        Args:
-            job_id: Job ID
-            lines: Number of lines to return (from end), None for all
         """
         log_file = self._get_log_file_path(job_id)
         if not os.path.exists(log_file):
@@ -757,6 +756,8 @@ class JobManager:
             for job_id in list(self.active_jobs.keys()):
                 print(f"[JobManager] Cancelling active job #{job_id}")
                 self.cancel_flags[job_id] = True
+                if job_id in self.cancel_tokens:
+                    self.cancel_tokens[job_id].cancel()
                 if job_id in self.download_services:
                     self.download_services[job_id].cancel_current_job()
                 task = self.active_jobs.get(job_id)

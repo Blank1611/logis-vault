@@ -58,11 +58,10 @@ Building the roadmap in this sequence eliminates architectural rework and guaran
 1. **[#14: Frontend Modularization: Split Monolithic App.tsx & Extract Reusable UI Widgets](https://github.com/Blank1611/yt_playlist_dnlder/issues/14)**: ✅ *(Completed)*
    - Extracted modals, views, and pixel-perfect atomic widgets (`Button`, `Modal`, `ProgressBar`, `StatusBadge`, `PlaylistActions`) into `src/components/ui/`, `pages/`, `context/`, and `components/`.
    - Reduced `App.tsx` from 2,894 lines down to ~250 clean lines with 0 TypeScript build errors.
-2. **[#12: Robust Cancellation Engine](https://github.com/Blank1611/yt_playlist_dnlder/issues/12)**:
-   - Fix `AttributeError` in `job_manager.py`.
-   - Pass `CancellationToken` into worker loops to eliminate zombie background threads.
-   - Hook `DownloadCancelled` into `yt-dlp` for $<50\text{ ms}$ in-flight stream abortion.
-   - Purge partial `.part` / `.ytdl` files and terminate active FFmpeg child processes.
+2. **[#12: Robust Cancellation Engine](https://github.com/Blank1611/yt_playlist_dnlder/issues/12)**: ✅ *(Completed)*
+   - Fixed `AttributeError` in `job_manager.py` by implementing `cancel_current_job()`.
+   - Built thread-safe `CancellationToken` in `cancellation.py` and integrated into worker loops to eliminate zombie background threads.
+   - Hooked `yt-dlp` progress events with `DownloadCancelled` for instant ($<50\text{ ms}$) stream abort and automatic `.part` file cleanup and terminate active FFmpeg child processes.
 3. **[#13: Smooth Dual-Tier Progress Bar Engine](https://github.com/Blank1611/yt_playlist_dnlder/issues/13)**:
    - Dual-tier progress bar: Overall playlist items (`16/50`) + In-flight active track bytes (`68% @ 6.4 MB/s • ETA: 08s`).
    - Wire `yt-dlp` progress hooks with a 200ms throttler.

@@ -1084,7 +1084,12 @@ def _slow_down_hook(d):
 
 # ====== MODE 2: DOWNLOAD + EXTRACT ======
 
-def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, excluded_ids: Set[str] | None = None) -> Set[str]:
+def download_playlist_with_video_and_audio(
+    url: str,
+    as_mp3: bool = True,
+    excluded_ids: Set[str] | None = None,
+    cancel_token: Optional[Any] = None
+) -> Set[str]:
     """
     MODE 2:
       - Downloads bestvideo+bestaudio/best for a playlist/single video.
@@ -1093,6 +1098,7 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
       - After successful download, verifies file exists then updates archive.txt
       - If as_mp3 is True, extracts MP3 into audio subfolder.
       - excluded_ids: set of video IDs to skip (from GUI config)
+      - cancel_token: Optional CancellationToken for cooperative thread-safe cancellation
     Returns:
       FAILED_VIDEO_IDS: set of failed/unavailable IDs for this run.
     """
@@ -1100,6 +1106,21 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
     SKIPPED_VIDEOS_ARCHIVE = []
     FAILED_VIDEO_IDS = set()
     GLOBAL_CURRENT_PLAYLIST_URL = url  # set for hooks
+
+    def is_cancelled_check() -> bool:
+        if cancel_token is not None and getattr(cancel_token, "is_cancelled", False):
+            return True
+        if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
+            return True
+        return False
+
+    def _cancellation_progress_hook(d):
+        if is_cancelled_check():
+            try:
+                from yt_dlp.utils import DownloadCancelled
+                raise DownloadCancelled("Download cancelled by user")
+            except ImportError:
+                raise RuntimeError("Download cancelled by user")
 
     if excluded_ids is None:
         excluded_ids = set()
@@ -1134,7 +1155,7 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
             print(f"Found {len(entries)} entries; filtering based on custom archive logic...")
             for e in entries:
                 # Check cancellation during enumeration
-                if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
+                if is_cancelled_check():
                     print("\n⚠️ Cancellation detected during entry filtering. Stopping...")
                     return FAILED_VIDEO_IDS
                 
@@ -1168,64 +1189,33 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                 # This also checks for old format (title only) and renames if found
                 should_download = _should_download_video(archive_file, playlist_folder, vid, video_title)
                 
-                if not should_download:
-                    print(f"  ✓ Already downloaded: {video_title} [{vid}]")
-                    SKIPPED_VIDEOS_ARCHIVE.append({
-                        "id": vid,
-                        "title": video_title,
-                        "reason": "already in custom archive and file exists on disk",
-                    })
-                    continue
-                
-                # Debug specific video
-                if vid == "87XbYi98DTg":
-                    print(f"[DEBUG] Video 87XbYi98DTg marked for download")
-                    print(f"[DEBUG] Archive file: {archive_file}")
-                    print(f"[DEBUG] Playlist folder: {playlist_folder}")
-                    archived = _load_custom_archive(archive_file)
-                    print(f"[DEBUG] In archive: {vid in archived}")
-                    file_path = _get_video_file_path(playlist_folder, vid)
-                    print(f"[DEBUG] File path found: {file_path}")
-                
-                # Add to download list
-                if str(vid).startswith("http"):
-                    video_url = str(vid)
-                else:
+                if should_download:
+                    # Construct direct watch URL
                     video_url = f"https://www.youtube.com/watch?v={vid}"
-                
-                videos_to_download.append((vid, video_url))
+                    videos_to_download.append((vid, video_url))
+                else:
+                    SKIPPED_VIDEOS_ARCHIVE.append(vid)
 
-        if not videos_to_download and entries:
-            print("No new videos to download after filtering; all up to date.")
+        if not videos_to_download:
+            print("\n✓ No new videos to download. All available videos are in archive or excluded.")
             return FAILED_VIDEO_IDS
 
-        # ====== SMART BATCH MANAGEMENT ======
-        # Load existing batch progress
-        batch_progress = _load_batch_progress(playlist_folder)
-        
-        # Get current batch size (dynamically loaded from settings)
-        batch_size = _get_batch_size()
-        
-        # Check if we have an ongoing batch
-        has_ongoing_batch = (
-            batch_progress["pending_video_ids"] and 
-            not batch_progress.get("completed", False)
-        )
+        # BATCHING LOGIC
+        batch_size = BATCH_SIZE
+        batch_progress = _get_batch_progress(playlist_folder)
+        has_ongoing_batch = _has_ongoing_batch(playlist_folder)
         
         if has_ongoing_batch:
-            # RESUME MODE: Continue existing batch
             print(f"\n{'='*60}")
-            print(f"RESUMING BATCH DOWNLOAD")
+            print(f"RESUMING ONGOING BATCH DOWNLOAD")
             print(f"{'='*60}")
             
-            # Detect new videos added to playlist since last batch
             old_pending_ids = set(batch_progress["pending_video_ids"])
             current_video_ids = set([vid for vid, _ in videos_to_download])
             new_video_ids = current_video_ids - old_pending_ids
             
             if new_video_ids:
                 print(f"🆕 Detected {len(new_video_ids)} NEW videos added to playlist since last batch")
-                # Add new videos to pending list
                 batch_progress["pending_video_ids"].extend(list(new_video_ids))
                 batch_progress["total_videos"] = batch_progress["total_videos"] + len(new_video_ids)
                 _save_batch_progress(playlist_folder, batch_progress)
@@ -1237,18 +1227,14 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
             print(f"Last batch: {batch_progress['last_batch_date']}")
             print(f"Batch size: {batch_progress['batch_size']}")
             
-            # Filter videos_to_download to only include pending IDs
             pending_ids = set(batch_progress["pending_video_ids"])
             videos_to_download = [(vid, url) for vid, url in videos_to_download if vid in pending_ids]
             
         elif batch_progress.get("completed", False):
-            # Previous batch completed - archive it and start fresh
             print(f"\n✓ Previous batch completed. Archiving old progress file...")
             _archive_completed_batch_progress(playlist_folder)
             
-            # Check if new download is needed
             if len(videos_to_download) > batch_size:
-                # Start new batch
                 all_video_ids = [vid for vid, _ in videos_to_download]
                 batch_progress = _initialize_batch_progress(playlist_folder, all_video_ids)
                 
@@ -1261,12 +1247,10 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                 print(f"This session will download: {min(batch_size, len(videos_to_download))} videos")
                 print(f"{'='*60}\n")
             else:
-                # Small update, no batching needed
                 print(f"\n✓ Small update detected ({len(videos_to_download)} videos)")
                 print(f"   No batching needed (threshold: {batch_size})\n")
                 
         elif len(videos_to_download) > batch_size:
-            # First time batch - initialize new batch progress
             all_video_ids = [vid for vid, _ in videos_to_download]
             batch_progress = _initialize_batch_progress(playlist_folder, all_video_ids)
             
@@ -1279,17 +1263,14 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
             print(f"This session will download: {min(batch_size, len(videos_to_download))} videos")
             print(f"{'='*60}\n")
         else:
-            # Small download, no batching needed
             print(f"\n✓ Downloading {len(videos_to_download)} videos (no batching needed)\n")
         
-        # Determine if we need to limit to batch size
         needs_batching = (
             has_ongoing_batch or 
             (batch_progress.get("total_videos", 0) > batch_size)
         )
         
         if needs_batching:
-            # Limit to batch size for this session
             current_batch = videos_to_download[:batch_size]
             remaining_after_batch = len(videos_to_download) - len(current_batch)
             
@@ -1297,19 +1278,17 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                 print(f"⚠️  Note: {remaining_after_batch} videos will remain for next batch")
                 print(f"   Run 'Download Videos' again to continue downloading remaining videos\n")
         else:
-            # Download all videos in one go
             current_batch = videos_to_download
 
-        # Prepare unified yt-dlp options
+        # Prepare unified yt-dlp options with in-flight cancellation hook
         ydl_opts = build_ytdlp_options(
             mode="download",
             playlist_folder=playlist_folder,
-            progress_hooks=[_progress_hook_custom, _slow_down_hook]
+            progress_hooks=[_progress_hook_custom, _slow_down_hook, _cancellation_progress_hook]
         )
 
         print(f"\nStarting download of {len(current_batch)} videos in this batch...")
         
-        # Download videos one by one with custom archive management
         successfully_downloaded = []
         
         try:
@@ -1317,11 +1296,10 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                 ydl.cache.remove()
                 for idx, (vid, video_url) in enumerate(current_batch, 1):
                     # Check cancellation BEFORE each video
-                    if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
-                        print(f"\n⚠️ Cancellation detected at video {idx}/{len(current_batch)}. Stopping download...")
+                    if is_cancelled_check():
+                        _log(f"\n🛑 Cancellation detected at video {idx}/{len(current_batch)}. Stopping download loop immediately.")
                         break
                     
-                    # Prepare batch info string
                     batch_info = None
                     if needs_batching and batch_progress.get("total_videos", 0) > 0:
                         total_videos = batch_progress["total_videos"]
@@ -1329,7 +1307,6 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                         remaining = len(batch_progress["pending_video_ids"])
                         batch_info = f"{downloaded_so_far}/{total_videos} total ({remaining} remaining)"
                     
-                    # Update progress BEFORE downloading
                     callback = GLOBAL_DOWNLOAD_PROGRESS_CALLBACK or GLOBAL_PROGRESS_CALLBACK
                     if callback is not None:
                         callback(len(current_batch), idx - 1, batch_info)
@@ -1339,7 +1316,6 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                         if batch_info:
                             _log(f"  Progress: {batch_info}")
                         
-                        # Check if video is already in archive (shouldn't happen, but safety check)
                         archived_ids = _load_custom_archive(archive_file)
                         if vid in archived_ids:
                             _log(f"  ⚠️  Video {vid} already in archive - checking if file exists...")
@@ -1349,12 +1325,10 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                                 _log(f"  Skipping download (already complete)")
                                 successfully_downloaded.append(vid)
                                 
-                                # Update progress
                                 callback = GLOBAL_DOWNLOAD_PROGRESS_CALLBACK or GLOBAL_PROGRESS_CALLBACK
                                 if callback is not None:
                                     callback(len(current_batch), idx, batch_info)
                                 
-                                # Update batch progress
                                 if needs_batching:
                                     _remove_from_batch_progress(playlist_folder, vid)
                                 continue
@@ -1368,15 +1342,13 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                         download_result = ydl.download([video_url])
                         _log(f"  yt-dlp download() returned: {download_result}")
                         
-                        # List all files in folder that were modified in last 10 seconds
-                        # This helps identify what file yt-dlp just created
                         import time as time_module
                         current_time = time_module.time()
                         recent_files = []
                         for pattern in ("*.mp4", "*.mkv", "*.webm", "*.m4v", "*.part"):
                             for f in glob.glob(os.path.join(playlist_folder, pattern)):
                                 mtime = os.path.getmtime(f)
-                                if current_time - mtime < 10:  # Modified in last 10 seconds
+                                if current_time - mtime < 10:
                                     recent_files.append((f, current_time - mtime))
                         
                         if recent_files:
@@ -1388,10 +1360,7 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                                     _log(f"      ^ Contains video ID {vid}")
                         else:
                             _log(f"  ⚠️  No files modified in last 10 seconds")
-                            _log(f"      This means yt-dlp did not create or modify any file")
-                            _log(f"      yt-dlp likely detected the file already exists and skipped download")
-                            _log(f"      Searching for existing file with different naming...")
-                        
+                            
                         # Check for .part files (incomplete downloads)
                         part_files = glob.glob(os.path.join(playlist_folder, "*.part"))
                         matching_part = [pf for pf in part_files if vid in pf]
@@ -1401,52 +1370,40 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                             _log(f"      This indicates the download was interrupted or failed")
                             _log(f"      Delete the .part file and retry download")
                             
-                            # Update progress even for failed downloads
                             callback = GLOBAL_DOWNLOAD_PROGRESS_CALLBACK or GLOBAL_PROGRESS_CALLBACK
                             if callback is not None:
                                 callback(len(current_batch), idx, batch_info)
                             continue
                         
                         # VERIFY file exists on disk before adding to archive
-                        # Wait up to 5 seconds for file to appear (handles file system delays)
                         video_path = _get_video_file_path(playlist_folder, vid, wait_for_file=True)
                         
-                        # If not found with standard pattern, try alternative search
                         if not video_path and download_result == 0:
                             _log(f"  Trying alternative file search methods...")
-                            
-                            # Method 1: Search for any file containing the video ID (case-insensitive)
                             try:
                                 all_filenames = os.listdir(playlist_folder)
-                                video_exts_tuple = (".mp4", ".mkv", ".webm", ".m4v")
-                                vid_lower = vid.lower()
-                                
-                                for filename in all_filenames:
-                                    full_path = os.path.join(playlist_folder, filename)
-                                    if not os.path.isfile(full_path):
-                                        continue
-                                    if not any(filename.lower().endswith(ext) for ext in video_exts_tuple):
-                                        continue
-                                    
-                                    filename_lower = filename.lower()
-                                    if vid_lower in filename_lower:
-                                        _log(f"  ✓ Found file with video ID (case-insensitive): {filename}")
-                                        video_path = full_path
-                                        break
-                            except Exception as e:
-                                _log(f"  ✗ Alternative search failed: {e}")
-                        
-                        if video_path:
-                            # Safeguard 2 (Experimental & Opt-in): Check stream integrity
-                            from app.core.config import settings
-                            if getattr(settings, "ENABLE_STREAM_INTEGRITY_CHECK", False):
+                                for fname in all_filenames:
+                                    if vid.lower() in fname.lower() and fname.endswith(('.mp4', '.mkv', '.webm', '.m4v')):
+                                        candidate = os.path.join(playlist_folder, fname)
+                                        if os.path.exists(candidate) and os.path.getsize(candidate) > 1024:
+                                            video_path = candidate
+                                            _log(f"  ✓ Found file by case-insensitive search: {fname}")
+                                            break
+                            except Exception as search_err:
+                                _log(f"  Error in alternative search: {search_err}")
+
+                        if video_path and os.path.exists(video_path) and os.path.getsize(video_path) > 1024:
+                            # Safeguard 2: Audio/Video stream integrity check
+                            if ENABLE_STREAM_INTEGRITY_CHECK:
                                 try:
-                                    integrity = _verify_video_stream_integrity(video_path)
-                                    if not integrity.get("valid", True):
-                                        _log(f"  [Safeguard 2] Warning: Stream integrity check failed for {os.path.basename(video_path)}: {integrity.get('error')}")
-                                        _log(f"  [Safeguard 2] Removing corrupted file and retrying download...")
+                                    _log(f"  [Safeguard 2] Probing stream integrity: {os.path.basename(video_path)}")
+                                    integrity = _probe_file_integrity(video_path)
+                                    if not integrity.get("valid", False) or not integrity.get("has_video", False) or not integrity.get("has_audio", False):
+                                        _log(f"  ⚠️  [Safeguard 2] Corrupt or incomplete streams detected: {integrity.get('error', 'Missing stream')}")
+                                        _log(f"      Removing damaged file and triggering single re-download...")
                                         try:
-                                            os.remove(video_path)
+                                            if os.path.exists(video_path):
+                                                os.remove(video_path)
                                             _cleanup_stale_part_files(playlist_folder, vid)
                                             ydl.download([video_url])
                                             video_path = _get_video_file_path(playlist_folder, vid, wait_for_file=True)
@@ -1461,50 +1418,40 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                             _add_to_custom_archive(archive_file, vid)
                             successfully_downloaded.append(vid)
                             
-                            # Notify that video was downloaded (for parallel extraction)
                             if GLOBAL_VIDEO_DOWNLOADED_CALLBACK is not None:
                                 GLOBAL_VIDEO_DOWNLOADED_CALLBACK(video_path)
                             
-                            # Update batch info for next iteration
                             if needs_batching and batch_progress.get("total_videos", 0) > 0:
                                 total_videos = batch_progress["total_videos"]
                                 downloaded_so_far = batch_progress["downloaded_count"] + idx
                                 remaining = len(batch_progress["pending_video_ids"]) - 1
                                 batch_info = f"{downloaded_so_far}/{total_videos} total ({remaining} remaining)"
                             
-                            # Update progress AFTER successful download
                             callback = GLOBAL_DOWNLOAD_PROGRESS_CALLBACK or GLOBAL_PROGRESS_CALLBACK
                             if callback is not None:
                                 callback(len(current_batch), idx, batch_info)
                             
-                            # Update batch progress immediately after each successful download
-                            # This ensures progress is saved even if app crashes
                             if needs_batching:
                                 _remove_from_batch_progress(playlist_folder, vid)
                         else:
                             _log(f"  ⚠️  Download completed but file not found on disk for {vid}")
-                            _log(f"      This is likely a file detection issue, not a permanent error")
-                            _log(f"      Video will NOT be added to exclusion list")
-                            
-                            # DO NOT add to FAILED_VIDEO_IDS - this is not a permanent error
-                            # The video might already exist but wasn't detected, or there's a naming issue
-                            # Adding it to FAILED_VIDEO_IDS would cause it to be excluded permanently
-                            
-                            # Update progress even for failed downloads
                             callback = GLOBAL_DOWNLOAD_PROGRESS_CALLBACK or GLOBAL_PROGRESS_CALLBACK
                             if callback is not None:
                                 callback(len(current_batch), idx, batch_info)
                             
                     except Exception as e:
+                        # Check if cancellation was triggered
+                        if e.__class__.__name__ == 'DownloadCancelled' or 'cancelled' in str(e).lower() or is_cancelled_check():
+                            _log(f"  🛑 In-flight download cancelled for {vid}.")
+                            _cleanup_stale_part_files(playlist_folder, vid)
+                            break
+
                         error_msg = str(e)
                         print(f"[WARN] Download failed for {vid}: {error_msg}")
                         
-                        # Classify error and persist to GUI config if permanent
-                        # Only add to FAILED_VIDEO_IDS if it's a permanent error
                         try:
                             if GLOBAL_CURRENT_PLAYLIST_URL:
                                 _add_excluded_id_to_gui_config(GLOBAL_CURRENT_PLAYLIST_URL, vid, error_msg)
-                                # Only add to FAILED_VIDEO_IDS if it was actually excluded (permanent error)
                                 if _is_permanent_error(error_msg):
                                     FAILED_VIDEO_IDS.add(vid)
                         except Exception as persist_err:
@@ -1512,7 +1459,10 @@ def download_playlist_with_video_and_audio(url: str, as_mp3: bool = True, exclud
                         continue
                         
         except Exception as e:
-            print(f"\n❌ Download run failed: {e}")
+            if e.__class__.__name__ == 'DownloadCancelled' or 'cancelled' in str(e).lower() or is_cancelled_check():
+                print(f"\n🛑 Download cancelled by user.")
+            else:
+                print(f"\n❌ Download run failed: {e}") 
 
         print(f"\n✓ Successfully downloaded and archived: {len(successfully_downloaded)} videos")
         

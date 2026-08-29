@@ -11,9 +11,11 @@ from datetime import datetime
 # Import download tools from backend core
 try:
     from app.core import yt_playlist_audio_tools as tools
+    from app.core.cancellation import CancellationToken
 except ImportError as e:
-    print(f"Warning: Could not import yt_playlist_audio_tools.py: {e}")
+    print(f"Warning: Could not import yt_playlist_audio_tools or cancellation: {e}")
     tools = None
+    CancellationToken = None
 
 class DownloadService:
     """Service for downloading playlists using existing logic"""
@@ -22,7 +24,8 @@ class DownloadService:
         """Initialize download service"""
         self.base_path = base_path
         self.config = config
-        self.current_runstate = None  # Track current job's runstate
+        self.cancel_token: Optional[CancellationToken] = None
+        self.current_runstate = None
         
         # Configure tools module if available
         if tools:
@@ -36,6 +39,8 @@ class DownloadService:
     
     def cancel_current_job(self):
         """Cancel the currently running job"""
+        if self.cancel_token:
+            self.cancel_token.cancel()
         if self.current_runstate:
             self.current_runstate.cancelled = True
     
@@ -45,7 +50,8 @@ class DownloadService:
         excluded_ids: Set[str],
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
-        video_downloaded_callback: Optional[Callable] = None
+        video_downloaded_callback: Optional[Callable] = None,
+        cancel_token: Optional[CancellationToken] = None
     ) -> Set[str]:
         """
         Download playlist with progress and log callbacks
@@ -56,6 +62,7 @@ class DownloadService:
             progress_callback: Async function(total, current, batch_info=None) for progress updates
             log_callback: Async function(message) for log messages
             video_downloaded_callback: Async function(video_path) called when a video is downloaded
+            cancel_token: Optional thread-safe CancellationToken for cooperative cancellation
         
         Returns:
             Set of failed video IDs
@@ -63,11 +70,14 @@ class DownloadService:
         if not tools:
             raise RuntimeError("yt_playlist_audio_tools not available")
         
-        # Set up runstate for cancellation
+        # Set up cancellation token and runstate
+        self.cancel_token = cancel_token
         from types import SimpleNamespace
         runstate = SimpleNamespace(cancelled=False)
-        self.current_runstate = runstate  # Store for cancellation
+        self.current_runstate = runstate
         tools.GLOBAL_RUNSTATE = runstate
+        if cancel_token:
+            cancel_token.register(lambda: setattr(runstate, "cancelled", True))
         
         # Set up callbacks for existing tools
         main_loop = asyncio.get_event_loop()
@@ -75,7 +85,6 @@ class DownloadService:
         if progress_callback:
             def sync_progress(total, current, batch_info=None):
                 try:
-                    # Use call_soon_threadsafe to schedule the callback in the main loop
                     asyncio.run_coroutine_threadsafe(
                         progress_callback(total, current, batch_info),
                         main_loop
@@ -83,13 +92,11 @@ class DownloadService:
                 except Exception as e:
                     print(f"Progress callback error: {e}")
             
-            # Set download-specific callback
             tools.GLOBAL_DOWNLOAD_PROGRESS_CALLBACK = sync_progress
         
         if video_downloaded_callback:
             def sync_video_downloaded(video_path: str):
                 try:
-                    # Use call_soon_threadsafe to schedule the callback in the main loop
                     asyncio.run_coroutine_threadsafe(
                         video_downloaded_callback(video_path),
                         main_loop
@@ -97,13 +104,11 @@ class DownloadService:
                 except Exception as e:
                     print(f"Video downloaded callback error: {e}")
             
-            # Set video downloaded callback
             tools.GLOBAL_VIDEO_DOWNLOADED_CALLBACK = sync_video_downloaded
         
         if log_callback:
             def sync_log(message: str):
                 try:
-                    # Use call_soon_threadsafe to schedule the callback in the main loop
                     asyncio.run_coroutine_threadsafe(
                         log_callback(message),
                         main_loop
@@ -111,16 +116,13 @@ class DownloadService:
                 except Exception as e:
                     print(f"Log callback error: {e}")
             
-            # Set log callback
             tools.GLOBAL_LOG_CALLBACK = sync_log
         
         # Run download in dedicated thread pool to avoid blocking
         from concurrent.futures import ThreadPoolExecutor
-        import threading
         
-        # Create dedicated download thread pool with custom naming
         download_executor = ThreadPoolExecutor(
-            max_workers=1,  # Downloads are sequential anyway
+            max_workers=1,
             thread_name_prefix="DownloadThread"
         )
         
@@ -131,13 +133,15 @@ class DownloadService:
                 tools.download_playlist_with_video_and_audio,
                 url,
                 False,  # as_mp3 = False (extraction will be done separately in parallel)
-                excluded_ids
+                excluded_ids,
+                cancel_token
             )
             return failed_ids
         finally:
-            # Clean up thread pool and callbacks
             download_executor.shutdown(wait=False)
             tools.GLOBAL_DOWNLOAD_PROGRESS_CALLBACK = None
+            tools.GLOBAL_VIDEO_DOWNLOADED_CALLBACK = None
+            tools.GLOBAL_LOG_CALLBACK = None
             tools.GLOBAL_VIDEO_DOWNLOADED_CALLBACK = None
             tools.GLOBAL_LOG_CALLBACK = None
     
