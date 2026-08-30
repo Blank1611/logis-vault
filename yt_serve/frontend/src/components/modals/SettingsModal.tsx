@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { configApi, type Config } from '../../services/api'
+import { configApi, onboardingApi, type Config } from '../../services/api'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { 
-  FolderOpen, Loader2, Info, Zap, Music, Sparkles 
+  FolderOpen, Loader2, Info, Zap, Music, Sparkles, Search 
 } from 'lucide-react'
 
 // Helper Component for interactive field headers with recommendations and toggleable info
@@ -278,6 +278,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
       validated.enable_daily_auto_refresh = formData.enable_daily_auto_refresh
     }
 
+    if (formData.enable_auto_discovery !== undefined) {
+      validated.enable_auto_discovery = formData.enable_auto_discovery
+    }
+
+    if (formData.auto_discovery_interval_minutes !== undefined) {
+      validated.auto_discovery_interval_minutes = Number(formData.auto_discovery_interval_minutes)
+    }
+
     if (formData.daily_refresh_time !== undefined) {
       validated.daily_refresh_time = formData.daily_refresh_time?.trim() || '04:00'
     }
@@ -419,6 +427,81 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               Leave empty if you do not have a separate SSD temp drive.
             </p>
+          </div>
+
+          {/* Auto-Discovery & Library Sync Configuration */}
+          <div className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4 border border-gray-200 dark:border-gray-600 space-y-3">
+            <div className="flex justify-between items-center flex-wrap gap-2">
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-1.5">
+                  <span>Continuous Library Auto-Discovery</span>
+                </h4>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  Automatically scans your download path for newly added playlist folders and builds the track index.
+                </p>
+              </div>
+
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formData.enable_auto_discovery ?? true}
+                  onChange={(e) => setFormData({ ...formData, enable_auto_discovery: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+              </label>
+            </div>
+
+            {formData.enable_auto_discovery && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-gray-200 dark:border-gray-600">
+                <div>
+                  <FieldHeader
+                    label="Scanning Interval"
+                    infoText="How frequently the background worker scans your download folder for new playlists. Set to 'On Startup Only' to prevent spinning up NAS sleep drives."
+                  />
+                  <select
+                    value={formData.auto_discovery_interval_minutes ?? 60}
+                    onChange={(e) => setFormData({ ...formData, auto_discovery_interval_minutes: parseInt(e.target.value, 10) })}
+                    className="w-full px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                  >
+                    <option value={0}>0 — On Startup Only (NAS Sleep Friendly)</option>
+                    <option value={15}>Every 15 Minutes</option>
+                    <option value={30}>Every 30 Minutes</option>
+                    <option value={60}>Every 1 Hour (Recommended)</option>
+                    <option value={360}>Every 6 Hours</option>
+                    <option value={1440}>Once Daily (24 Hours)</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col justify-end">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const scanRes = await onboardingApi.scan(formData.base_download_path)
+                        const count = scanRes.data.discovered_playlists.length
+                        if (count > 0) {
+                          if (confirm(`Discovered ${count} playlists (${scanRes.data.total_estimated_tracks} tracks). Import and index them into database now?`)) {
+                            const res = await onboardingApi.confirm({ base_path: formData.base_download_path, items: scanRes.data.discovered_playlists })
+                            alert(`✓ Success! ${res.data.playlists_imported} new playlists imported, ${res.data.tracks_indexed} tracks indexed.`)
+                            queryClient.invalidateQueries({ queryKey: ['playlists'] })
+                            queryClient.invalidateQueries({ queryKey: ['track-index'] })
+                          }
+                        } else {
+                          alert('✓ Library is in sync. No new unmanaged playlist folders detected.')
+                        }
+                      } catch (err: any) {
+                        alert(`Scan failed: ${err.message}`)
+                      }
+                    }}
+                    className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-colors"
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                    <span>Scan Library Now (On-Demand)</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div>

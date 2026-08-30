@@ -19,6 +19,17 @@ def _resolve_cli_flag(flag_name: str) -> Optional[str]:
             return sys.argv[idx + 1]
     return None
 
+def _has_cli_flag(flag_names: list) -> bool:
+    """Check if any of the given boolean flags exist in sys.argv"""
+    for arg in sys.argv:
+        if arg in flag_names:
+            return True
+        for f in flag_names:
+            if arg.startswith(f"{f}="):
+                val = arg.split("=", 1)[1].lower()
+                return val in ("true", "1", "yes")
+    return False
+
 # Resolve Config File Path:
 # Priority:
 # 1. CLI flag --config.file
@@ -42,6 +53,10 @@ else:
 _cli_db_path = _resolve_cli_flag("--storage.db.path")
 _cli_downloads_path = _resolve_cli_flag("--storage.downloads.path")
 _cli_temp_path = _resolve_cli_flag("--storage.temp.path")
+_cli_disable_onboarding = _has_cli_flag(["--disable-onboarding", "--no-onboarding", "--no_onboarding", "--disable_onboarding"])
+_cli_enable_auto_discovery = _has_cli_flag(["--enable-auto-discovery", "--auto-discovery"])
+_cli_no_auto_discovery = _has_cli_flag(["--no-auto-discovery", "--disable-auto-discovery"])
+_cli_auto_discovery_interval = _resolve_cli_flag("--auto-discovery-interval")
 
 DEFAULT_ENV_TEMPLATE = """# ==============================================================================
 # YouTube Playlist Manager Configuration (yt_serve)
@@ -159,6 +174,11 @@ class Settings(BaseSettings):
     # FlareSolverr Proxy (Optional)
     FLARESOLVERR_URL: Optional[str] = None
 
+    # Auto-Discovery & Onboarding
+    ENABLE_AUTO_DISCOVERY: bool = True
+    AUTO_DISCOVERY_INTERVAL_MINUTES: int = 60  # 0 = on_startup_only
+    CLI_DISABLE_ONBOARDING: bool = False
+
     class Config:
         env_file = str(ENV_FILE) if ENV_FILE.is_file() else None
         env_file_encoding = "utf-8"
@@ -179,6 +199,17 @@ class Settings(BaseSettings):
             self.BASE_DOWNLOAD_PATH = _cli_downloads_path
         if _cli_temp_path:
             self.TEMP_DOWNLOAD_PATH = _cli_temp_path
+        if _cli_disable_onboarding:
+            self.CLI_DISABLE_ONBOARDING = True
+        if _cli_enable_auto_discovery:
+            self.ENABLE_AUTO_DISCOVERY = True
+        if _cli_no_auto_discovery:
+            self.ENABLE_AUTO_DISCOVERY = False
+        if _cli_auto_discovery_interval is not None:
+            try:
+                self.AUTO_DISCOVERY_INTERVAL_MINUTES = int(_cli_auto_discovery_interval)
+            except ValueError:
+                pass
         
         # Normalize empty string temp path to None
         if self.TEMP_DOWNLOAD_PATH and not self.TEMP_DOWNLOAD_PATH.strip():

@@ -121,6 +121,53 @@ class MovedTrackHistory(Base):
     moved_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="auto_moved")  # auto_moved, manually_moved, ignored
 
+class SystemSetting(Base):
+    """Key-value system setting and state persistence"""
+    __tablename__ = "system_settings"
+
+    key = Column(String, primary_key=True, index=True)
+    value = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+def get_system_setting(key: str, default: Optional[str] = None, db: Optional[Session] = None) -> Optional[str]:
+    """Retrieve a system setting from SQLite database."""
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+    try:
+        setting = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+        return setting.value if setting else default
+    except Exception:
+        return default
+    finally:
+        if close_db:
+            db.close()
+
+def set_system_setting(key: str, value: str, db: Optional[Session] = None) -> Optional[SystemSetting]:
+    """Persist a system setting into SQLite database."""
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+    try:
+        setting = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+        if setting:
+            setting.value = str(value)
+            setting.updated_at = datetime.utcnow()
+        else:
+            setting = SystemSetting(key=key, value=str(value), updated_at=datetime.utcnow())
+            db.add(setting)
+        db.commit()
+        db.refresh(setting)
+        return setting
+    except Exception as e:
+        print(f"[DB] Error setting system setting {key}: {e}")
+        return None
+    finally:
+        if close_db:
+            db.close()
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 

@@ -1,13 +1,15 @@
 """
 Configuration API endpoints
 """
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, UploadFile, File, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 import os
 from pathlib import Path
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.database import get_db
 
 router = APIRouter()
 
@@ -34,6 +36,9 @@ class ConfigResponse(BaseModel):
     browser_name: str
     enable_stream_integrity_check: bool
     flaresolverr_url: Optional[str]
+    enable_auto_discovery: bool = True
+    auto_discovery_interval_minutes: int = 60
+    setup_completed: bool = False
     needs_setup: bool  # Flag for first-run setup
 
 class ConfigUpdate(BaseModel):
@@ -59,28 +64,48 @@ class ConfigUpdate(BaseModel):
     browser_name: Optional[str] = None
     enable_stream_integrity_check: Optional[bool] = None
     flaresolverr_url: Optional[str] = None
+    enable_auto_discovery: Optional[bool] = None
+    auto_discovery_interval_minutes: Optional[int] = None
+    setup_completed: Optional[bool] = None
 
-def _check_needs_setup() -> bool:
+def _check_needs_setup(db=None) -> bool:
     """Check if initial setup is needed"""
-    # Check if BASE_DOWNLOAD_PATH is empty or not configured
+    # 1. CLI flag --disable-onboarding / --no-onboarding or environment variable
+    if getattr(settings, "CLI_DISABLE_ONBOARDING", False):
+        return False
+    if os.environ.get("DISABLE_ONBOARDING", "").lower() in ("true", "1", "yes"):
+        return False
+    if os.environ.get("NO_ONBOARDING", "").lower() in ("true", "1", "yes"):
+        return False
+
+    # 2. Check persistent database state in system_settings table
+    try:
+        from app.models.database import get_system_setting
+        val = get_system_setting("setup_completed", default="false", db=db)
+        if val and val.lower() in ("true", "1", "yes"):
+            return False
+    except Exception:
+        pass
+
+    # 3. Check if BASE_DOWNLOAD_PATH is empty
     if not settings.BASE_DOWNLOAD_PATH or settings.BASE_DOWNLOAD_PATH.strip() == "":
         return True
-    
-    # In container or production environments where BASE_DOWNLOAD_PATH is set (e.g. /downloads)
-    # setup is not needed.
+
+    # 4. Check if BASE_DOWNLOAD_PATH is set explicitly via env
     env_path = settings.get_env_file_path()
     if os.environ.get("BASE_DOWNLOAD_PATH") or env_path.exists():
-        return False
-        
-    # If using unconfigured default relative path 'downloads' with no .env or env var, setup is recommended
-    if settings.BASE_DOWNLOAD_PATH == "downloads" and not os.environ.get("BASE_DOWNLOAD_PATH"):
-        return True
-    
-    return False
+        # If env file exists and BASE_DOWNLOAD_PATH is not default 'downloads'
+        if settings.BASE_DOWNLOAD_PATH != "downloads":
+            return False
+
+    return True
 
 @router.get("/", response_model=ConfigResponse)
-async def get_config():
+async def get_config(db: Session = Depends(get_db)):
     """Get current configuration"""
+    from app.models.database import get_system_setting
+    is_setup_done = get_system_setting("setup_completed", default="false", db=db).lower() in ("true", "1", "yes")
+
     return ConfigResponse(
         base_download_path=settings.BASE_DOWNLOAD_PATH,
         temp_download_path=settings.TEMP_DOWNLOAD_PATH,
@@ -103,7 +128,10 @@ async def get_config():
         browser_name=settings.BROWSER_NAME,
         enable_stream_integrity_check=getattr(settings, "ENABLE_STREAM_INTEGRITY_CHECK", False),
         flaresolverr_url=getattr(settings, "FLARESOLVERR_URL", None),
-        needs_setup=_check_needs_setup()
+        enable_auto_discovery=getattr(settings, "ENABLE_AUTO_DISCOVERY", True),
+        auto_discovery_interval_minutes=getattr(settings, "AUTO_DISCOVERY_INTERVAL_MINUTES", 60),
+        setup_completed=is_setup_done,
+        needs_setup=_check_needs_setup(db=db)
     )
 
 def _save_to_env(config: ConfigUpdate):
@@ -164,6 +192,10 @@ def _save_to_env(config: ConfigUpdate):
         env_content['ENABLE_STREAM_INTEGRITY_CHECK'] = 'true' if config.enable_stream_integrity_check else 'false'
     if config.flaresolverr_url is not None:
         env_content['FLARESOLVERR_URL'] = config.flaresolverr_url if config.flaresolverr_url else ''
+    if config.enable_auto_discovery is not None:
+        env_content['ENABLE_AUTO_DISCOVERY'] = 'true' if config.enable_auto_discovery else 'false'
+    if config.auto_discovery_interval_minutes is not None:
+        env_content['AUTO_DISCOVERY_INTERVAL_MINUTES'] = str(config.auto_discovery_interval_minutes)
     
     # Write back to .env
     with open(env_path, 'w', encoding='utf-8') as f:
@@ -173,8 +205,8 @@ def _save_to_env(config: ConfigUpdate):
             f.write(f"{key}={value}\n")
 
 @router.put("/", response_model=ConfigResponse)
-async def update_config(config: ConfigUpdate):
-    """Update configuration and persist to .env file"""
+async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
+    """Update configuration and persist to .env file and database"""
     
     # Update in-memory settings
     if config.base_download_path is not None:
@@ -219,9 +251,19 @@ async def update_config(config: ConfigUpdate):
         settings.ENABLE_STREAM_INTEGRITY_CHECK = config.enable_stream_integrity_check
     if config.flaresolverr_url is not None:
         settings.FLARESOLVERR_URL = config.flaresolverr_url
+    if config.enable_auto_discovery is not None:
+        settings.ENABLE_AUTO_DISCOVERY = config.enable_auto_discovery
+    if config.auto_discovery_interval_minutes is not None:
+        settings.AUTO_DISCOVERY_INTERVAL_MINUTES = config.auto_discovery_interval_minutes
+    if config.setup_completed is not None:
+        from app.models.database import set_system_setting
+        set_system_setting("setup_completed", "true" if config.setup_completed else "false", db=db)
     
     # Persist to .env file
     _save_to_env(config)
+
+    from app.models.database import get_system_setting
+    is_setup_done = get_system_setting("setup_completed", default="false", db=db).lower() in ("true", "1", "yes")
     
     return ConfigResponse(
         base_download_path=settings.BASE_DOWNLOAD_PATH,
@@ -245,7 +287,10 @@ async def update_config(config: ConfigUpdate):
         browser_name=settings.BROWSER_NAME,
         enable_stream_integrity_check=getattr(settings, "ENABLE_STREAM_INTEGRITY_CHECK", False),
         flaresolverr_url=getattr(settings, "FLARESOLVERR_URL", None),
-        needs_setup=_check_needs_setup()
+        enable_auto_discovery=getattr(settings, "ENABLE_AUTO_DISCOVERY", True),
+        auto_discovery_interval_minutes=getattr(settings, "AUTO_DISCOVERY_INTERVAL_MINUTES", 60),
+        setup_completed=is_setup_done,
+        needs_setup=_check_needs_setup(db=db)
     )
 
 class YtDlpVersionResponse(BaseModel):

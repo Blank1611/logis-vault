@@ -52,22 +52,24 @@ async def startup_event():
         else:
             print("No interrupted jobs found")
         
-        if not playlists_list:
-            print("No playlists found in database. Checking for existing library on disk...")
-            try:
-                from app.services.onboarding_service import scan_download_directory, ingest_discovered_library
-                scan_res = scan_download_directory(settings.BASE_DOWNLOAD_PATH)
-                if scan_res.get("discovered_playlists_count", 0) > 0:
-                    print(f"Discovered {scan_res['discovered_playlists_count']} existing playlist(s) on disk! Auto-ingesting into SQLite...")
-                    ingest_res = ingest_discovered_library(scan_res["discovered_playlists"], db=db)
-                    print(f"✓ Auto-discovery complete: {ingest_res['playlists_imported']} playlists imported, {ingest_res['tracks_indexed']} tracks indexed.")
-                    playlists_list = db.query(Playlist).all()
-                else:
-                    print("No existing playlists found on disk.")
-                    return
-            except Exception as onboard_err:
-                print(f"Note on auto-discovery scan: {onboard_err}")
-                return
+        # Two-Stage Startup Lifecycle
+        from app.api.config import _check_needs_setup
+        needs_setup = _check_needs_setup(db=db)
+        if needs_setup:
+            print("[Startup] Stage 1: Initial setup pending. Awaiting configuration review in UI.")
+        else:
+            # Stage 2: Run Auto-Discovery on verified BASE_DOWNLOAD_PATH
+            if getattr(settings, "ENABLE_AUTO_DISCOVERY", True):
+                try:
+                    from app.services.onboarding_service import scan_download_directory, ingest_discovered_library
+                    print("[Startup] Stage 2: Running Auto-Discovery on BASE_DOWNLOAD_PATH...")
+                    scan_res = scan_download_directory(settings.BASE_DOWNLOAD_PATH)
+                    if scan_res.get("discovered_playlists_count", 0) > 0:
+                        ingest_res = ingest_discovered_library(scan_res["discovered_playlists"], db=db)
+                        print(f"✓ Auto-discovery: {ingest_res['playlists_imported']} new playlists imported, {ingest_res['tracks_indexed']} tracks indexed.")
+                        playlists_list = db.query(Playlist).all()
+                except Exception as ad_err:
+                    print(f"[Startup] Auto-discovery note: {ad_err}")
 
         # Step 2: Refresh playlist stats
         print(f"\n{'='*60}")
@@ -108,9 +110,11 @@ async def startup_event():
         print("Startup complete!")
         print("="*60 + "\n")
         
-        # Start background 24/7 daily metadata scheduler
+        # Start background 24/7 daily metadata scheduler & periodic auto-discovery
         from app.services.scheduler import start_daily_scheduler
         start_daily_scheduler()
+        from app.services.onboarding_service import start_periodic_auto_discovery
+        start_periodic_auto_discovery()
         
     except Exception as e:
         print(f"Error during startup: {e}")
@@ -122,6 +126,8 @@ async def startup_event():
 async def shutdown_event():
     """Graceful container/server shutdown"""
     print("\n[Shutdown] Performing graceful shutdown...")
+    from app.services.onboarding_service import stop_periodic_auto_discovery
+    stop_periodic_auto_discovery()
     from app.services.scheduler import stop_daily_scheduler
     stop_daily_scheduler()
     from app.services.job_manager import job_manager

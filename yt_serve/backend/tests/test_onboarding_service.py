@@ -77,5 +77,25 @@ class TestOnboardingService(unittest.TestCase):
         self.assertIn("fJ9rUzIMcZQ", track_ids)
         self.assertIn("xFYQQPAOz7Y", track_ids)
 
+    def test_system_settings_and_needs_setup(self):
+        from app.models.database import SystemSetting, get_system_setting, set_system_setting
+        from app.api.config import _check_needs_setup
+
+        # Initial state: no setting in db
+        self.db.query(SystemSetting).delete()
+        self.db.commit()
+
+        val = get_system_setting("setup_completed", default="false", db=self.db)
+        self.assertEqual(val, "false")
+
+        # Set setup_completed
+        set_system_setting("setup_completed", "true", db=self.db)
+        val2 = get_system_setting("setup_completed", default="false", db=self.db)
+        self.assertEqual(val2, "true")
+
+        # Check needs_setup is now false
+        needs_setup = _check_needs_setup(db=self.db)
+        self.assertFalse(needs_setup)
+
 if __name__ == "__main__":
     unittest.main()

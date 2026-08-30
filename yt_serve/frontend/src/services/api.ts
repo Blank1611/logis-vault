@@ -149,6 +149,9 @@ export interface Config {
   browser_name: string
   enable_stream_integrity_check?: boolean
   flaresolverr_url?: string | null
+  enable_auto_discovery?: boolean
+  auto_discovery_interval_minutes?: number
+  setup_completed?: boolean
   needs_setup: boolean
 }
 

@@ -9,6 +9,8 @@ import re
 import json
 import glob
 import logging
+import threading
+import time
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 
@@ -282,3 +284,47 @@ def ingest_discovered_library(
     finally:
         if close_db:
             db.close()
+
+
+_discovery_thread: Optional[threading.Thread] = None
+_discovery_stop_event = threading.Event()
+
+def start_periodic_auto_discovery():
+    """Start background periodic auto-discovery worker thread if interval > 0."""
+    global _discovery_thread, _discovery_stop_event
+    if not getattr(settings, "ENABLE_AUTO_DISCOVERY", True):
+        logger.info("[Auto-Discovery] Periodic scanning disabled in settings.")
+        return
+
+    interval_minutes = getattr(settings, "AUTO_DISCOVERY_INTERVAL_MINUTES", 60)
+    if interval_minutes <= 0:
+        logger.info("[Auto-Discovery] Set to on_startup_only (interval=0). Periodic polling inactive.")
+        return
+
+    if _discovery_thread and _discovery_thread.is_alive():
+        return
+
+    _discovery_stop_event.clear()
+
+    def _worker():
+        logger.info(f"[Auto-Discovery] Periodic scanner active (every {interval_minutes} min).")
+        while not _discovery_stop_event.is_set():
+            if _discovery_stop_event.wait(timeout=max(60, interval_minutes * 60)):
+                break
+            try:
+                logger.info("[Auto-Discovery] Performing periodic background library check...")
+                scan_res = scan_download_directory(settings.BASE_DOWNLOAD_PATH)
+                if scan_res.get("discovered_playlists_count", 0) > 0:
+                    ingest_res = ingest_discovered_library(scan_res["discovered_playlists"])
+                    if ingest_res.get("playlists_imported", 0) > 0 or ingest_res.get("tracks_indexed", 0) > 0:
+                        logger.info(f"[Auto-Discovery] Ingested {ingest_res['playlists_imported']} new playlists, {ingest_res['tracks_indexed']} tracks.")
+            except Exception as e:
+                logger.error(f"[Auto-Discovery] Background scan error: {e}")
+
+    _discovery_thread = threading.Thread(target=_worker, daemon=True, name="AutoDiscoveryWorker")
+    _discovery_thread.start()
+
+def stop_periodic_auto_discovery():
+    """Stop the periodic auto-discovery worker thread."""
+    global _discovery_stop_event
+    _discovery_stop_event.set()
