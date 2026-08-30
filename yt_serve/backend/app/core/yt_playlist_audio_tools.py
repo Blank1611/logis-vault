@@ -1364,6 +1364,48 @@ def download_playlist_with_video_and_audio(
                             else:
                                 _log(f"  File not found despite being in archive - will attempt re-download")
                         
+                        # Smart Track Index Local Sourcing Check:
+                        # Check if this video exists in another playlist folder locally
+                        try:
+                            from app.core.track_indexer import find_local_track, create_hardlink_or_copy
+                            local_track = find_local_track(vid)
+                            if local_track and local_track.get("primary_filepath") and os.path.isfile(local_track["primary_filepath"]):
+                                src_vid_path = local_track["primary_filepath"]
+                                dst_vid_path = os.path.join(playlist_folder, os.path.basename(src_vid_path))
+                                if src_vid_path != dst_vid_path:
+                                    _log(f"  ⚡ Found local track in library: {os.path.basename(src_vid_path)}")
+                                    _log(f"  ⚡ Creating zero-space hardlink to avoid re-downloading...")
+                                    if create_hardlink_or_copy(src_vid_path, dst_vid_path):
+                                        _log(f"  ✓ Instant zero-space hardlink created: {os.path.basename(dst_vid_path)}")
+                                        
+                                        # Also hardlink audio if exists
+                                        if local_track.get("primary_audio_filepath") and os.path.isfile(local_track["primary_audio_filepath"]):
+                                            safe_title = os.path.basename(playlist_folder)
+                                            audio_subfolder = os.path.join(playlist_folder, safe_title)
+                                            os.makedirs(audio_subfolder, exist_ok=True)
+                                            src_audio_path = local_track["primary_audio_filepath"]
+                                            dst_audio_path = os.path.join(audio_subfolder, os.path.basename(src_audio_path))
+                                            create_hardlink_or_copy(src_audio_path, dst_audio_path)
+                                        
+                                        _append_to_custom_archive(archive_file, vid)
+                                        successfully_downloaded.append(vid)
+                                        
+                                        if GLOBAL_VIDEO_DOWNLOADED_CALLBACK is not None:
+                                            try:
+                                                GLOBAL_VIDEO_DOWNLOADED_CALLBACK(dst_vid_path)
+                                            except Exception as cb_e:
+                                                _log(f"  Warning: video_downloaded_callback error: {cb_e}")
+                                        
+                                        callback = GLOBAL_DOWNLOAD_PROGRESS_CALLBACK or GLOBAL_PROGRESS_CALLBACK
+                                        if callback is not None:
+                                            callback(len(current_batch), idx, batch_info)
+                                        
+                                        if needs_batching:
+                                            _remove_from_batch_progress(playlist_folder, vid)
+                                        continue
+                        except Exception as index_err:
+                            pass
+
                         # Safeguard 1: Purge stale .part or 0-byte files before download
                         _cleanup_stale_part_files(playlist_folder, vid)
                         

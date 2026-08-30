@@ -80,6 +80,53 @@ export const logsApi = {
   getLogFileUrl: () => '/api/logs/file',
 }
 
+export interface IndexedTrack {
+  video_id: string
+  title: string
+  artist?: string | null
+  duration?: number | null
+  primary_filepath: string
+  primary_audio_filepath?: string | null
+  playlists: number[]
+  is_hardlinked: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface PendingMoveItem {
+  video_id: string
+  title: string
+  from_playlist_id: number
+  from_playlist_title: string
+  to_playlist_id: number
+  to_playlist_title: string
+  type: string
+  suggested_action: string
+}
+
+export interface MovedHistoryItem {
+  id: number
+  video_id: string
+  title: string
+  from_playlist_id: number
+  from_playlist_title: string
+  to_playlist_id: number
+  to_playlist_title: string
+  status: string
+  moved_at: string
+}
+
+export const tracksApi = {
+  getIndex: (params?: { search?: string; limit?: number; offset?: number }) =>
+    api.get<{ total: number; items: IndexedTrack[] }>('/tracks/index', { params }),
+  getPendingMoves: () =>
+    api.get<{ count: number; pending: PendingMoveItem[] }>('/tracks/reorganize/pending'),
+  applyMoves: (moves: Array<{ video_id: string; from_playlist_id: number; to_playlist_id: number; action?: string }>) =>
+    api.post<{ processed: number; results: any[] }>('/tracks/reorganize/apply', { moves }),
+  getMoveHistory: (params?: { limit?: number; offset?: number }) =>
+    api.get<{ total: number; items: MovedHistoryItem[] }>('/tracks/reorganize/history', { params }),
+}
+
 export interface Config {
   base_download_path: string
   temp_download_path?: string | null

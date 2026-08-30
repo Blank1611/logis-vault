@@ -1,5 +1,5 @@
 import React from 'react'
-import { Settings, Moon, Sun, Grid3x3, List } from 'lucide-react'
+import { Settings, Moon, Sun, Grid3x3, List, Layers } from 'lucide-react'
 import { NavigationTabs } from './NavigationTabs'
 import { useTheme } from '../../context/ThemeContext'
 
@@ -10,6 +10,7 @@ export interface HeaderProps {
   viewMode?: 'grid' | 'list'
   onViewModeChange?: (mode: 'grid' | 'list') => void
   onOpenSettings: () => void
+  onOpenReorganize?: () => void
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -19,6 +20,7 @@ export const Header: React.FC<HeaderProps> = ({
   viewMode = 'grid',
   onViewModeChange,
   onOpenSettings,
+  onOpenReorganize,
 }) => {
   const { darkMode, toggleDarkMode } = useTheme()
 
@@ -63,6 +65,18 @@ export const Header: React.FC<HeaderProps> = ({
                 <List className="w-5 h-5" />
               </button>
             </div>
+          )}
+
+          {/* Reorganize Track Index Button */}
+          {onOpenReorganize && (
+            <button
+              onClick={onOpenReorganize}
+              className="p-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors flex items-center gap-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300 px-3"
+              title="Track Index & Inter-Playlist Reorganization Manager"
+            >
+              <Layers className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+              <span className="hidden sm:inline">Track Index</span>
+            </button>
           )}
 
           {/* Settings Button */}

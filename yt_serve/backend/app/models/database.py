@@ -92,6 +92,35 @@ class Job(Base):
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
 
+class Track(Base):
+    """Global index of downloaded tracks for cross-playlist hardlinking and deduplication"""
+    __tablename__ = "tracks"
+
+    video_id = Column(String, primary_key=True, index=True)
+    title = Column(String, nullable=False)
+    artist = Column(String, nullable=True)
+    duration = Column(Integer, nullable=True)
+    primary_filepath = Column(String, nullable=False)
+    primary_audio_filepath = Column(String, nullable=True)
+    playlists_json = Column(JSON, default=list)  # List of playlist IDs [1, 2, ...]
+    is_hardlinked = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class MovedTrackHistory(Base):
+    """Audit log for tracks moved between playlists on YouTube"""
+    __tablename__ = "moved_tracks_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    video_id = Column(String, index=True, nullable=False)
+    title = Column(String, nullable=False)
+    from_playlist_id = Column(Integer, nullable=False)
+    from_playlist_title = Column(String, nullable=False)
+    to_playlist_id = Column(Integer, nullable=False)
+    to_playlist_title = Column(String, nullable=False)
+    moved_at = Column(DateTime, default=datetime.utcnow)
+    status = Column(String, default="auto_moved")  # auto_moved, manually_moved, ignored
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 

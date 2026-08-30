@@ -76,10 +76,10 @@ Building the roadmap in this sequence eliminates architectural rework and guaran
 ### 🗄️ Phase 2: Database Track Index, Instant Onboarding & Space Reclaim
 > **Focus**: Build the SQLite track indexing foundation, ingest existing libraries in $<3$ seconds, and reclaim physical hard drive space.
 
-3. **[#7: Smart Track Index & Move Manager](https://github.com/Blank1611/yt_playlist_dnlder/issues/7)**:
-   - Create SQLite `tracks` and `moved_tracks_history` database tables (`video_id` primary key).
-   - Hook local cross-playlist sourcing into `ytdlp_service.py` for $0.1$s zero-space hardlinking.
-   - Build auto-move and batch reorganization manager.
+3. **[#7: Smart Track Index & Move Manager](https://github.com/Blank1611/yt_playlist_dnlder/issues/7)**: ✅ *(Completed)*
+   - Created SQLite `tracks` and `moved_tracks_history` database tables (`video_id` primary key).
+   - Hooked local cross-playlist sourcing into `yt_playlist_audio_tools.py` for $0.1$s zero-space hardlinking.
+   - Built auto-move and batch reorganization manager with `ReorganizeModal` and audit logging.
 4. **[#10: First-Time Auto-Discovery & Database Ingestion](https://github.com/Blank1611/yt_playlist_dnlder/issues/10)**:
    - Scan standard playlist directories on first run, extract metadata from `playlist_info.json`, and populate SQLite tables.
 5. **[#8: Retroactive Library Deduplication (CLI + Web GUI)](https://github.com/Blank1611/yt_playlist_dnlder/issues/8)**:
