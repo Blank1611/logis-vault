@@ -207,4 +207,40 @@ export const configApi = {
   deleteCookies: () => api.delete<CookieStatus>('/config/cookies'),
 }
 
+export interface DiscoveredPlaylistItem {
+  folder_name: string
+  folder_path: string
+  title: string
+  url: string
+  video_count: number
+  audio_count: number
+  archived_count: number
+  total_online_count: number
+}
+
+export interface DiscoveredLibraryPreview {
+  base_path: string
+  exists: boolean
+  total_folders_scanned: number
+  discovered_playlists_count: number
+  total_estimated_tracks: number
+  discovered_playlists: DiscoveredPlaylistItem[]
+}
+
+export interface OnboardingResult {
+  status: string
+  playlists_imported: number
+  playlists_skipped: number
+  tracks_indexed: number
+  total_playlists: number
+  total_tracks: number
+}
+
+export const onboardingApi = {
+  scan: (base_path?: string) =>
+    api.post<DiscoveredLibraryPreview>('/config/onboarding/scan', { base_path }),
+  confirm: (params?: { base_path?: string; items?: any[] }) =>
+    api.post<OnboardingResult>('/config/onboarding/confirm', params || {}),
+}
+
 export default api

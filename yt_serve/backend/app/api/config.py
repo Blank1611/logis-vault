@@ -572,4 +572,33 @@ async def delete_cookies():
     return _parse_cookie_file_status(None)
 
 
+class OnboardingScanRequest(BaseModel):
+    base_path: Optional[str] = None
+
+
+class OnboardingConfirmRequest(BaseModel):
+    base_path: Optional[str] = None
+    items: Optional[List[dict]] = None
+
+
+@router.post("/onboarding/scan")
+async def scan_onboarding_library(payload: OnboardingScanRequest = OnboardingScanRequest()):
+    """Scan directory for existing playlists and tracks preview"""
+    from app.services.onboarding_service import scan_download_directory
+    target = payload.base_path or settings.BASE_DOWNLOAD_PATH
+    return scan_download_directory(target)
+
+
+@router.post("/onboarding/confirm")
+async def confirm_onboarding_ingest(
+    payload: OnboardingConfirmRequest = OnboardingConfirmRequest(),
+    db: Session = Depends(get_db)
+):
+    """Ingest discovered playlists and populate tracks index in SQLite"""
+    from app.services.onboarding_service import ingest_discovered_library
+    target = payload.base_path or settings.BASE_DOWNLOAD_PATH
+    res = ingest_discovered_library(discovered_items=payload.items, base_path=target, db=db)
+    return res
+
+
 

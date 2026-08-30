@@ -80,8 +80,8 @@ Building the roadmap in this sequence eliminates architectural rework and guaran
    - Created SQLite `tracks` and `moved_tracks_history` database tables (`video_id` primary key).
    - Hooked local cross-playlist sourcing into `yt_playlist_audio_tools.py` for $0.1$s zero-space hardlinking.
    - Built auto-move and batch reorganization manager with `ReorganizeModal` and audit logging.
-4. **[#10: First-Time Auto-Discovery & Database Ingestion](https://github.com/Blank1611/yt_playlist_dnlder/issues/10)**:
-   - Scan standard playlist directories on first run, extract metadata from `playlist_info.json`, and populate SQLite tables.
+4. **[#10: First-Time Auto-Discovery & Database Ingestion](https://github.com/Blank1611/yt_playlist_dnlder/issues/10)**: ✅ *(Completed)*
+   - Scans standard playlist directories on startup or on demand, extracts metadata from `playlist_info.json`, media files, and populates SQLite `Playlist` and `tracks` tables in $<3$s.
 5. **[#8: Retroactive Library Deduplication (CLI + Web GUI)](https://github.com/Blank1611/yt_playlist_dnlder/issues/8)**:
    - Scan existing library for physical duplicates and convert redundant files into zero-space NTFS / ext4 hardlinks.
 

@@ -53,8 +53,21 @@ async def startup_event():
             print("No interrupted jobs found")
         
         if not playlists_list:
-            print("No playlists found")
-            return
+            print("No playlists found in database. Checking for existing library on disk...")
+            try:
+                from app.services.onboarding_service import scan_download_directory, ingest_discovered_library
+                scan_res = scan_download_directory(settings.BASE_DOWNLOAD_PATH)
+                if scan_res.get("discovered_playlists_count", 0) > 0:
+                    print(f"Discovered {scan_res['discovered_playlists_count']} existing playlist(s) on disk! Auto-ingesting into SQLite...")
+                    ingest_res = ingest_discovered_library(scan_res["discovered_playlists"], db=db)
+                    print(f"✓ Auto-discovery complete: {ingest_res['playlists_imported']} playlists imported, {ingest_res['tracks_indexed']} tracks indexed.")
+                    playlists_list = db.query(Playlist).all()
+                else:
+                    print("No existing playlists found on disk.")
+                    return
+            except Exception as onboard_err:
+                print(f"Note on auto-discovery scan: {onboard_err}")
+                return
 
         # Step 2: Refresh playlist stats
         print(f"\n{'='*60}")
