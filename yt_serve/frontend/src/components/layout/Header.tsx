@@ -1,11 +1,11 @@
 import React from 'react'
 import { Settings, Moon, Sun, Grid3x3, List, Layers, Sparkles } from 'lucide-react'
-import { NavigationTabs } from './NavigationTabs'
+import { NavigationTabs, type TabType } from './NavigationTabs'
 import { useTheme } from '../../context/ThemeContext'
 
 export interface HeaderProps {
-  activeTab: 'playlists' | 'logs'
-  onTabChange: (tab: 'playlists' | 'logs') => void
+  activeTab: TabType
+  onTabChange: (tab: TabType) => void
   runningJobsCount?: number
   viewMode?: 'grid' | 'list'
   onViewModeChange?: (mode: 'grid' | 'list') => void

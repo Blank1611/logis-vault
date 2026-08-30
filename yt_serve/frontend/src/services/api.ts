@@ -153,6 +153,9 @@ export interface Config {
   auto_discovery_interval_minutes?: number
   setup_completed?: boolean
   needs_setup: boolean
+  adhoc_download_path?: string | null
+  use_custom_adhoc_path?: boolean
+  effective_adhoc_download_path?: string
 }
 
 export interface SchedulerStatus {
@@ -293,6 +296,48 @@ export const housekeepingApi = {
     api.post<DeduplicationScanResult>('/housekeeping/deduplicate/scan', { base_path }),
   applyDeduplication: (params?: { base_path?: string; duplicate_groups?: any[] }) =>
     api.post<DeduplicationApplyResult>('/housekeeping/deduplicate/apply', params || {}),
+}
+
+export interface VideoResolutionOption {
+  height: number
+  label: string
+}
+
+export interface AdhocProbeResult {
+  status: string
+  video_id: string
+  title: string
+  uploader: string
+  duration: number
+  formatted_duration: string
+  thumbnail: string
+  view_count: number
+  description: string
+  available_resolutions: VideoResolutionOption[]
+  default_download_path: string
+  message?: string
+}
+
+export interface AdhocDownloadParams {
+  url: string
+  video_quality?: string
+  audio_format?: string
+  extract_mode?: 'video_only' | 'audio_only' | 'both'
+  custom_download_path?: string
+}
+
+export interface AdhocStartResult {
+  status: string
+  job_id: number
+  job_type: string
+  message: string
+}
+
+export const adhocApi = {
+  probe: (url: string) =>
+    api.post<AdhocProbeResult>('/downloads/adhoc/probe', { url }),
+  start: (params: AdhocDownloadParams) =>
+    api.post<AdhocStartResult>('/downloads/adhoc/start', params),
 }
 
 export default api

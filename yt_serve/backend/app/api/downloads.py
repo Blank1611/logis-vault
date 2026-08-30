@@ -492,3 +492,80 @@ async def test_integrity(
     )
 
 
+# ==============================================================================
+# Ad-hoc / Quick Single-Video Download Endpoints
+# ==============================================================================
+
+class AdhocProbeRequest(BaseModel):
+    url: str
+
+
+class AdhocDownloadRequest(BaseModel):
+    url: str
+    video_quality: Optional[str] = "best"
+    audio_format: Optional[str] = "copy"
+    extract_mode: Optional[str] = "both"  # video_only, audio_only, both
+    custom_download_path: Optional[str] = None
+
+
+@router.post("/adhoc/probe")
+async def probe_adhoc_video(req: AdhocProbeRequest):
+    """
+    Probe single YouTube video URL without downloading.
+    Returns title, thumbnail, duration, and available resolution options.
+    """
+    from app.services.adhoc_service import probe_video_info
+    if not req.url or not req.url.strip():
+        raise HTTPException(status_code=400, detail="YouTube video URL is required")
+    res = probe_video_info(req.url.strip())
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message", "Failed to probe video"))
+    return res
+
+
+@router.post("/adhoc/start")
+async def start_adhoc_download(
+    req: AdhocDownloadRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Start asynchronous ad-hoc single video download and optional audio extraction.
+    Creates a background Job tracked in the shared Job queue.
+    """
+    import threading
+    from app.repositories import JobRepository
+    from app.services.adhoc_service import execute_adhoc_download
+
+    if not req.url or not req.url.strip():
+        raise HTTPException(status_code=400, detail="YouTube video URL is required")
+
+    job = JobRepository.create(
+        playlist_id=0,
+        job_type=f"adhoc_{req.extract_mode}",
+        total_items=1,
+        db=db
+    )
+
+    # Launch in background thread
+    thread = threading.Thread(
+        target=execute_adhoc_download,
+        kwargs={
+            "job_id": job.id,
+            "url": req.url.strip(),
+            "video_quality": req.video_quality or "best",
+            "audio_format": req.audio_format or "copy",
+            "extract_mode": req.extract_mode or "both",
+            "custom_download_path": req.custom_download_path,
+        },
+        daemon=True
+    )
+    thread.start()
+
+    return {
+        "status": "started",
+        "job_id": job.id,
+        "job_type": job.job_type,
+        "message": "Ad-hoc download enqueued successfully."
+    }
+
+

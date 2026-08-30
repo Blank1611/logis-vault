@@ -40,6 +40,9 @@ class ConfigResponse(BaseModel):
     auto_discovery_interval_minutes: int = 60
     setup_completed: bool = False
     needs_setup: bool  # Flag for first-run setup
+    adhoc_download_path: Optional[str] = None
+    use_custom_adhoc_path: bool = False
+    effective_adhoc_download_path: str = ""
 
 class ConfigUpdate(BaseModel):
     """Configuration update model"""
@@ -67,6 +70,8 @@ class ConfigUpdate(BaseModel):
     enable_auto_discovery: Optional[bool] = None
     auto_discovery_interval_minutes: Optional[int] = None
     setup_completed: Optional[bool] = None
+    adhoc_download_path: Optional[str] = None
+    use_custom_adhoc_path: Optional[bool] = None
 
 def _check_needs_setup(db=None) -> bool:
     """Check if initial setup is needed"""
@@ -131,7 +136,10 @@ async def get_config(db: Session = Depends(get_db)):
         enable_auto_discovery=getattr(settings, "ENABLE_AUTO_DISCOVERY", True),
         auto_discovery_interval_minutes=getattr(settings, "AUTO_DISCOVERY_INTERVAL_MINUTES", 60),
         setup_completed=is_setup_done,
-        needs_setup=_check_needs_setup(db=db)
+        needs_setup=_check_needs_setup(db=db),
+        adhoc_download_path=getattr(settings, "ADHOC_DOWNLOAD_PATH", None),
+        use_custom_adhoc_path=getattr(settings, "USE_CUSTOM_ADHOC_PATH", False),
+        effective_adhoc_download_path=settings.get_adhoc_download_path()
     )
 
 def _save_to_env(config: ConfigUpdate):
@@ -196,6 +204,10 @@ def _save_to_env(config: ConfigUpdate):
         env_content['ENABLE_AUTO_DISCOVERY'] = 'true' if config.enable_auto_discovery else 'false'
     if config.auto_discovery_interval_minutes is not None:
         env_content['AUTO_DISCOVERY_INTERVAL_MINUTES'] = str(config.auto_discovery_interval_minutes)
+    if config.adhoc_download_path is not None:
+        env_content['ADHOC_DOWNLOAD_PATH'] = config.adhoc_download_path if config.adhoc_download_path else ''
+    if config.use_custom_adhoc_path is not None:
+        env_content['USE_CUSTOM_ADHOC_PATH'] = 'true' if config.use_custom_adhoc_path else 'false'
     
     # Write back to .env
     with open(env_path, 'w', encoding='utf-8') as f:
@@ -255,6 +267,10 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         settings.ENABLE_AUTO_DISCOVERY = config.enable_auto_discovery
     if config.auto_discovery_interval_minutes is not None:
         settings.AUTO_DISCOVERY_INTERVAL_MINUTES = config.auto_discovery_interval_minutes
+    if config.adhoc_download_path is not None:
+        settings.ADHOC_DOWNLOAD_PATH = config.adhoc_download_path
+    if config.use_custom_adhoc_path is not None:
+        settings.USE_CUSTOM_ADHOC_PATH = config.use_custom_adhoc_path
     if config.setup_completed is not None:
         from app.models.database import set_system_setting
         set_system_setting("setup_completed", "true" if config.setup_completed else "false", db=db)
@@ -290,7 +306,10 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         enable_auto_discovery=getattr(settings, "ENABLE_AUTO_DISCOVERY", True),
         auto_discovery_interval_minutes=getattr(settings, "AUTO_DISCOVERY_INTERVAL_MINUTES", 60),
         setup_completed=is_setup_done,
-        needs_setup=_check_needs_setup(db=db)
+        needs_setup=_check_needs_setup(db=db),
+        adhoc_download_path=getattr(settings, "ADHOC_DOWNLOAD_PATH", None),
+        use_custom_adhoc_path=getattr(settings, "USE_CUSTOM_ADHOC_PATH", False),
+        effective_adhoc_download_path=settings.get_adhoc_download_path()
     )
 
 class YtDlpVersionResponse(BaseModel):

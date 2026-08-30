@@ -1,9 +1,11 @@
 import React from 'react'
-import { PlayCircle, FileText } from 'lucide-react'
+import { PlayCircle, FileText, Sparkles } from 'lucide-react'
+
+export type TabType = 'playlists' | 'quick-download' | 'logs'
 
 export interface NavigationTabsProps {
-  activeTab: 'playlists' | 'logs'
-  onTabChange: (tab: 'playlists' | 'logs') => void
+  activeTab: TabType
+  onTabChange: (tab: TabType) => void
   runningJobsCount?: number
 }
 
@@ -25,6 +27,19 @@ export const NavigationTabs: React.FC<NavigationTabsProps> = ({
         <PlayCircle className="w-4 h-4" />
         Playlists
       </button>
+
+      <button
+        onClick={() => onTabChange('quick-download')}
+        className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${
+          activeTab === 'quick-download'
+            ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 shadow-sm'
+            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+        }`}
+      >
+        <Sparkles className="w-4 h-4 text-indigo-500" />
+        Quick Download
+      </button>
+
       <button
         onClick={() => onTabChange('logs')}
         className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${

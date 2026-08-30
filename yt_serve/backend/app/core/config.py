@@ -179,6 +179,16 @@ class Settings(BaseSettings):
     AUTO_DISCOVERY_INTERVAL_MINUTES: int = 60  # 0 = on_startup_only
     CLI_DISABLE_ONBOARDING: bool = False
 
+    # Ad-hoc / Single Video Downloads
+    ADHOC_DOWNLOAD_PATH: Optional[str] = None
+    USE_CUSTOM_ADHOC_PATH: bool = False
+
+    def get_adhoc_download_path(self) -> str:
+        """Resolve absolute ad-hoc downloads directory"""
+        if self.USE_CUSTOM_ADHOC_PATH and self.ADHOC_DOWNLOAD_PATH:
+            return os.path.abspath(self.ADHOC_DOWNLOAD_PATH)
+        return os.path.abspath(os.path.join(self.BASE_DOWNLOAD_PATH, "_adhoc_downloads"))
+
     class Config:
         env_file = str(ENV_FILE) if ENV_FILE.is_file() else None
         env_file_encoding = "utf-8"

@@ -430,6 +430,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDed
             </p>
           </div>
 
+          <div>
+            <FieldHeader
+              label="Ad-hoc Downloads Directory"
+              recommended="Default: _adhoc_downloads"
+              infoText="Location where single video downloads (outside playlists) are stored. Defaults to '_adhoc_downloads' inside your Base Download Path."
+            />
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="use_custom_adhoc_path"
+                  checked={formData.use_custom_adhoc_path || false}
+                  onChange={(e) => setFormData({ ...formData, use_custom_adhoc_path: e.target.checked })}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <label htmlFor="use_custom_adhoc_path" className="text-xs text-gray-700 dark:text-gray-300 font-medium cursor-pointer">
+                  Use custom independent folder for ad-hoc downloads
+                </label>
+              </div>
+
+              {formData.use_custom_adhoc_path && (
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={formData.adhoc_download_path || ''}
+                    onChange={(e) => setFormData({ ...formData, adhoc_download_path: e.target.value })}
+                    className="flex-1 px-3.5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm font-mono"
+                    placeholder="/path/to/QuickDownloads"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Auto-Discovery & Library Sync Configuration */}
           <div className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4 border border-gray-200 dark:border-gray-600 space-y-3">
             <div className="flex justify-between items-center flex-wrap gap-2">

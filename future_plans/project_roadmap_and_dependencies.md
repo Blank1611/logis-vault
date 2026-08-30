@@ -90,9 +90,9 @@ Building the roadmap in this sequence eliminates architectural rework and guaran
 ### 🎯 Phase 3: Core Feature Expansion & User Experience
 > **Focus**: Deliver major user-facing download features, format presets, and smart automation.
 
-6. **[#6: Ad-hoc Individual Video Download Flow](https://github.com/Blank1611/yt_playlist_dnlder/issues/6)**:
+6. **[#6: Ad-hoc Individual Video Download Flow](https://github.com/Blank1611/yt_playlist_dnlder/issues/6)**: ✅ *(Completed)*
    - Single-video download tab with format/resolution inspection (`4K`, `1080p`, `Audio Only`, `Both`).
-   - Customizable `ADHOC_DOWNLOAD_PATH` and `adhoc_info.json` metadata tracking.
+   - Customizable `ADHOC_DOWNLOAD_PATH`, `adhoc_info.json` metadata tracking, and automatic `Track` index registration.
 7. **[#4: Multi-Format Audio Quality Presets](https://github.com/Blank1611/yt_playlist_dnlder/issues/4)**:
    - Quality presets (`MP3 320k`, `Opus 160k`, `FLAC Lossless`, `M4A 256k`) per playlist and globally.
 8. **[#3: Automated Background Downloader for Daily Auto-Scan](https://github.com/Blank1611/yt_playlist_dnlder/issues/3)**:

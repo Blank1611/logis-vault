@@ -4,14 +4,15 @@ import { playlistsApi, jobsApi, configApi } from './services/api'
 import type { Playlist, Job } from './services/types'
 import { useWebSocketEvents } from './hooks/useWebSocket'
 import { ThemeProvider } from './context/ThemeContext'
-import { Header, SchedulerBanner } from './components/layout'
+import { Header, SchedulerBanner, type TabType } from './components/layout'
 import { PlaylistsPage, LogsPage, type ActivityLog } from './pages'
+import { QuickDownloadCard } from './components/adhoc/QuickDownloadCard'
 import { 
   SettingsModal, ExclusionsModal, LogsModal, InitialSetupModal, InterruptedJobsDialog, ReorganizeModal, DeduplicateModal 
 } from './components/modals'
 
 function AppContent() {
-  const [activeTab, setActiveTab] = useState<'playlists' | 'logs'>('playlists')
+  const [activeTab, setActiveTab] = useState<TabType>('playlists')
   const [showSettings, setShowSettings] = useState(false)
   const [showReorganize, setShowReorganize] = useState(false)
   const [showDeduplicate, setShowDeduplicate] = useState(false)
@@ -276,7 +277,7 @@ function AppContent() {
       <main className="max-w-7xl mx-auto px-4 py-8">
         <SchedulerBanner schedulerStatus={schedulerStatus} />
 
-        {activeTab === 'playlists' ? (
+        {activeTab === 'playlists' && (
           <PlaylistsPage
             playlists={playlists}
             jobs={jobs}
@@ -297,7 +298,17 @@ function AppContent() {
             cancellingJobId={cancellingJobId}
             openFolderPlaylistId={openFolderPlaylistId}
           />
-        ) : (
+        )}
+
+        {activeTab === 'quick-download' && (
+          <div className="space-y-6">
+            <QuickDownloadCard onJobStarted={() => {
+              // Stay on page and let user see active progress
+            }} />
+          </div>
+        )}
+
+        {activeTab === 'logs' && (
           <LogsPage
             jobs={jobs}
             playlists={playlists}
