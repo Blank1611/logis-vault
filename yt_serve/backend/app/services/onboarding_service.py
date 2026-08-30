@@ -181,14 +181,13 @@ def ingest_discovered_library(
     db: Optional[Session] = None
 ) -> Dict[str, Any]:
     """
-    Ingest discovered playlists and tracks into SQLite database.
+    Ingest discovered playlists and tracks into SQLite database using repositories.
+    Safe and idempotent - will not duplicate existing playlists or tracks.
     """
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
+    from app.repositories import PlaylistRepository, TrackRepository
+    from app.models.database import get_db_context, Playlist, Track
 
-    try:
+    with get_db_context(db) as session:
         if discovered_items is None:
             scan_res = scan_download_directory(base_path)
             discovered_items = scan_res.get("discovered_playlists", [])
@@ -202,23 +201,19 @@ def ingest_discovered_library(
             url = item.get("url") or f"https://www.youtube.com/playlist?list={item.get('folder_name')}"
             
             # Check if playlist already exists
-            existing = db.query(Playlist).filter(
-                (Playlist.title == title) | (Playlist.url == url)
-            ).first()
+            existing = PlaylistRepository.get_by_url_or_title(url=url, title=title, db=session)
 
             if existing:
                 playlist_id = existing.id
                 skipped_count += 1
             else:
-                new_playlist = Playlist(
+                new_playlist = PlaylistRepository.create(
                     title=title,
                     url=url,
                     playlist_count=item.get("total_online_count") or max(item.get("video_count", 0), item.get("archived_count", 0)),
                     local_count=max(item.get("video_count", 0), item.get("audio_count", 0)),
+                    db=session,
                 )
-                db.add(new_playlist)
-                db.commit()
-                db.refresh(new_playlist)
                 playlist_id = new_playlist.id
                 imported_count += 1
 
@@ -249,7 +244,7 @@ def ingest_discovered_library(
                     filepath=vfile,
                     playlist_id=playlist_id,
                     audio_filepath=audio_file,
-                    db=db
+                    db=session
                 )
                 indexed_ids.add(vid)
                 tracks_indexed_count += 1
@@ -258,18 +253,24 @@ def ingest_discovered_library(
             for afile in item.get("audio_files", []):
                 fname = os.path.basename(afile)
                 vid = extract_video_id_from_filename(fname)
-                if vid and vid not in indexed_ids:
-                    song_title = os.path.splitext(fname)[0]
-                    song_title = re.sub(r'\[[a-zA-Z0-9_-]{11}\]', '', song_title).strip()
-                    index_track(
-                        video_id=vid,
-                        title=song_title or fname,
-                        filepath=afile,
-                        playlist_id=playlist_id,
-                        audio_filepath=afile,
-                        db=db
-                    )
-                    tracks_indexed_count += 1
+                if not vid or vid in indexed_ids:
+                    continue
+
+                song_title = os.path.splitext(fname)[0]
+                song_title = re.sub(r'\[[a-zA-Z0-9_-]{11}\]', '', song_title).strip()
+                if not song_title:
+                    song_title = fname
+
+                index_track(
+                    video_id=vid,
+                    title=song_title,
+                    filepath=afile,
+                    playlist_id=playlist_id,
+                    audio_filepath=afile,
+                    db=session
+                )
+                indexed_ids.add(vid)
+                tracks_indexed_count += 1
 
         logger.info(f"Onboarding complete: {imported_count} playlists imported, {skipped_count} existing, {tracks_indexed_count} tracks indexed.")
 
@@ -278,12 +279,9 @@ def ingest_discovered_library(
             "playlists_imported": imported_count,
             "playlists_skipped": skipped_count,
             "tracks_indexed": tracks_indexed_count,
-            "total_playlists": db.query(Playlist).count(),
-            "total_tracks": db.query(Track).count(),
+            "total_playlists": session.query(Playlist).count(),
+            "total_tracks": session.query(Track).count(),
         }
-    finally:
-        if close_db:
-            db.close()
 
 
 _discovery_thread: Optional[threading.Thread] = None

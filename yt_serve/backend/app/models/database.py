@@ -28,9 +28,26 @@ SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_PATH}"
 print(f"[DATABASE] Using database at: {DB_PATH}")
 print(f"[DATABASE] Database exists: {DB_PATH.exists()}")
 
+from sqlalchemy import event
+from contextlib import contextmanager
+
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
 )
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragmas(dbapi_connection, connection_record):
+    """Enable SQLite WAL mode, normal synchronous, busy timeout, and foreign keys for high concurrency."""
+    try:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=10000")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+    except Exception as e:
+        print(f"[DB] Note setting SQLite pragmas: {e}")
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
@@ -197,12 +214,37 @@ def _auto_migrate_sqlite_columns():
 
 _auto_migrate_sqlite_columns()
 
-# Dependency
+# Dependency for FastAPI
 def get_db():
-    """Get database session"""
+    """Get database session for FastAPI request lifecycle"""
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+
+@contextmanager
+def get_db_context(existing_db: Optional[Session] = None):
+    """
+    Context manager for background workers, services, and tasks.
+    Auto-commits on success, rolls back on error, and closes session cleanly.
+    If an existing session is passed, yields it without closing.
+    """
+    if existing_db is not None:
+        try:
+            yield existing_db
+            existing_db.commit()
+        except Exception:
+            existing_db.rollback()
+            raise
+    else:
+        db = SessionLocal()
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 

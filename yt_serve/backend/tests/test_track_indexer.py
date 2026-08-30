@@ -1,7 +1,8 @@
 import unittest
 import os
 import tempfile
-from app.models.database import SessionLocal, Track, MovedTrackHistory, Playlist, _auto_migrate_sqlite_columns
+from tests.test_db_helper import create_isolated_test_db
+from app.models.database import Track, MovedTrackHistory, Playlist
 from app.core.track_indexer import (
     create_hardlink_or_copy,
     find_local_track,
@@ -12,11 +13,12 @@ from app.core.track_indexer import (
 class TestTrackIndexer(unittest.TestCase):
 
     def setUp(self):
-        _auto_migrate_sqlite_columns()
-        self.db = SessionLocal()
+        # 100% isolated in-memory test database sandbox
+        self.test_engine, self.TestingSession = create_isolated_test_db()
+        self.db = self.TestingSession()
         self.temp_dir = tempfile.TemporaryDirectory()
 
-        # Create dummy source and destination playlists
+        # Create dummy source and destination playlists in isolated test DB
         self.p1 = Playlist(url="https://youtube.com/playlist?list=PL1", title="Playlist One")
         self.p2 = Playlist(url="https://youtube.com/playlist?list=PL2", title="Playlist Two")
         self.db.add(self.p1)
@@ -26,11 +28,6 @@ class TestTrackIndexer(unittest.TestCase):
         self.db.refresh(self.p2)
 
     def tearDown(self):
-        # Cleanup playlists and tracks
-        self.db.query(MovedTrackHistory).delete()
-        self.db.query(Track).delete()
-        self.db.query(Playlist).filter(Playlist.id.in_([self.p1.id, self.p2.id])).delete()
-        self.db.commit()
         self.db.close()
         self.temp_dir.cleanup()
 

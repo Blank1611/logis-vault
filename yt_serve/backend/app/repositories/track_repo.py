@@ -1,0 +1,138 @@
+"""
+Track Data Access Repository
+"""
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+from sqlalchemy.orm import Session
+from sqlalchemy import or_
+
+from app.models.database import Track, MovedTrackHistory, get_db_context
+
+
+class TrackRepository:
+    """Centralized repository for all Track Index and Move History operations"""
+
+    @staticmethod
+    def get_by_video_id(video_id: str, db: Optional[Session] = None) -> Optional[Track]:
+        """Fetch indexed track by YouTube video ID"""
+        with get_db_context(db) as session:
+            return session.query(Track).filter(Track.video_id == video_id).first()
+
+    @staticmethod
+    def get_all_tracks(
+        search: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+        db: Optional[Session] = None
+    ) -> List[Track]:
+        """Fetch indexed tracks with optional title search and pagination"""
+        with get_db_context(db) as session:
+            query = session.query(Track)
+            if search:
+                query = query.filter(
+                    or_(Track.title.ilike(f"%{search}%"), Track.video_id.ilike(f"%{search}%"))
+                )
+            return query.order_by(Track.updated_at.desc()).offset(offset).limit(limit).all()
+
+    @staticmethod
+    def count_tracks(search: Optional[str] = None, db: Optional[Session] = None) -> int:
+        """Count total tracks matching optional search filter"""
+        with get_db_context(db) as session:
+            query = session.query(Track)
+            if search:
+                query = query.filter(
+                    or_(Track.title.ilike(f"%{search}%"), Track.video_id.ilike(f"%{search}%"))
+                )
+            return query.count()
+
+    @staticmethod
+    def index_or_update_track(
+        video_id: str,
+        title: str,
+        filepath: str,
+        playlist_id: Optional[int] = None,
+        audio_filepath: Optional[str] = None,
+        artist: Optional[str] = None,
+        duration: Optional[int] = None,
+        is_hardlinked: bool = False,
+        db: Optional[Session] = None
+    ) -> Track:
+        """Create or update a track record in the index"""
+        with get_db_context(db) as session:
+            track = session.query(Track).filter(Track.video_id == video_id).first()
+            if track:
+                if filepath and not track.primary_filepath:
+                    track.primary_filepath = filepath
+                if audio_filepath and not track.primary_audio_filepath:
+                    track.primary_audio_filepath = audio_filepath
+                if title and (not track.title or track.title == video_id):
+                    track.title = title
+                if duration is not None:
+                    track.duration = duration
+                if artist:
+                    track.artist = artist
+                if is_hardlinked:
+                    track.is_hardlinked = True
+
+                # Update associated playlists
+                current_playlists = list(track.playlists_json or [])
+                if playlist_id is not None and playlist_id not in current_playlists:
+                    current_playlists.append(playlist_id)
+                    track.playlists_json = current_playlists
+
+                track.updated_at = datetime.utcnow()
+                return track
+            else:
+                playlists = [playlist_id] if playlist_id is not None else []
+                new_track = Track(
+                    video_id=video_id,
+                    title=title or video_id,
+                    artist=artist,
+                    duration=duration,
+                    primary_filepath=filepath or "",
+                    primary_audio_filepath=audio_filepath,
+                    playlists_json=playlists,
+                    is_hardlinked=is_hardlinked,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+                session.add(new_track)
+                session.flush()
+                session.refresh(new_track)
+                return new_track
+
+    @staticmethod
+    def record_move_history(
+        video_id: str,
+        title: str,
+        from_playlist_id: int,
+        from_playlist_title: str,
+        to_playlist_id: int,
+        to_playlist_title: str,
+        status: str = "auto_moved",
+        db: Optional[Session] = None
+    ) -> MovedTrackHistory:
+        """Record an inter-playlist track move audit entry"""
+        with get_db_context(db) as session:
+            history = MovedTrackHistory(
+                video_id=video_id,
+                title=title,
+                from_playlist_id=from_playlist_id,
+                from_playlist_title=from_playlist_title,
+                to_playlist_id=to_playlist_id,
+                to_playlist_title=to_playlist_title,
+                moved_at=datetime.utcnow(),
+                status=status,
+            )
+            session.add(history)
+            session.flush()
+            session.refresh(history)
+            return history
+
+    @staticmethod
+    def get_move_history(limit: int = 50, db: Optional[Session] = None) -> List[MovedTrackHistory]:
+        """Fetch recent track move history audit logs"""
+        with get_db_context(db) as session:
+            return session.query(MovedTrackHistory).order_by(
+                MovedTrackHistory.moved_at.desc()
+            ).limit(limit).all()

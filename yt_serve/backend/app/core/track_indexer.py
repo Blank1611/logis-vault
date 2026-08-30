@@ -10,7 +10,8 @@ from typing import Optional, Dict, List, Any
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from app.models.database import SessionLocal, Track, MovedTrackHistory, Playlist
+from app.models.database import Track, MovedTrackHistory, Playlist, get_db_context
+from app.repositories import TrackRepository, PlaylistRepository
 from app.core.logging_engine import get_logger
 
 logger = get_logger("app.core.track_indexer")
@@ -49,13 +50,8 @@ def find_local_track(video_id: str, db: Optional[Session] = None) -> Optional[Di
     Check if a video ID already exists locally in the global track index.
     Verifies that the physical file actually exists on disk.
     """
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-
-    try:
-        track = db.query(Track).filter(Track.video_id == video_id).first()
+    with get_db_context(db) as session:
+        track = session.query(Track).filter(Track.video_id == video_id).first()
         if not track:
             return None
 
@@ -77,9 +73,6 @@ def find_local_track(video_id: str, db: Optional[Session] = None) -> Optional[Di
             "playlists": track.playlists_json or [],
             "is_hardlinked": track.is_hardlinked,
         }
-    finally:
-        if close_db:
-            db.close()
 
 
 def index_track(
@@ -96,13 +89,8 @@ def index_track(
     """
     Register or update a track in the global SQLite tracks index.
     """
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-
-    try:
-        track = db.query(Track).filter(Track.video_id == video_id).first()
+    with get_db_context(db) as session:
+        track = session.query(Track).filter(Track.video_id == video_id).first()
         if track:
             current_playlists = list(track.playlists_json or [])
             if playlist_id not in current_playlists:
@@ -115,8 +103,8 @@ def index_track(
                 track.primary_audio_filepath = audio_filepath
 
             track.updated_at = datetime.utcnow()
-            db.commit()
-            db.refresh(track)
+            session.flush()
+            session.refresh(track)
             return track
         else:
             new_track = Track(
@@ -131,13 +119,10 @@ def index_track(
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )
-            db.add(new_track)
-            db.commit()
-            db.refresh(new_track)
+            session.add(new_track)
+            session.flush()
+            session.refresh(new_track)
             return new_track
-    finally:
-        if close_db:
-            db.close()
 
 
 def hardlink_track_to_playlist(
@@ -190,52 +175,53 @@ def execute_track_move(
     video_id: str,
     from_playlist_id: int,
     to_playlist_id: int,
-    db: Session,
+    db: Optional[Session] = None,
     status: str = "manually_moved"
 ) -> Dict[str, Any]:
     """
     Relocate track files from one playlist folder to another and log the move.
     """
-    from_playlist = db.query(Playlist).filter(Playlist.id == from_playlist_id).first()
-    to_playlist = db.query(Playlist).filter(Playlist.id == to_playlist_id).first()
+    with get_db_context(db) as session:
+        from_playlist = session.query(Playlist).filter(Playlist.id == from_playlist_id).first()
+        to_playlist = session.query(Playlist).filter(Playlist.id == to_playlist_id).first()
 
-    if not from_playlist or not to_playlist:
-        raise ValueError("Source or destination playlist not found")
+        if not from_playlist or not to_playlist:
+            raise ValueError("Source or destination playlist not found")
 
-    track = db.query(Track).filter(Track.video_id == video_id).first()
-    title = track.title if track else video_id
+        track = session.query(Track).filter(Track.video_id == video_id).first()
+        title = track.title if track else video_id
 
-    # Update Track playlists_json
-    if track:
-        current_playlists = list(track.playlists_json or [])
-        if from_playlist_id in current_playlists:
-            current_playlists.remove(from_playlist_id)
-        if to_playlist_id not in current_playlists:
-            current_playlists.append(to_playlist_id)
-        track.playlists_json = current_playlists
-        track.updated_at = datetime.utcnow()
+        # Update Track playlists_json
+        if track:
+            current_playlists = list(track.playlists_json or [])
+            if from_playlist_id in current_playlists:
+                current_playlists.remove(from_playlist_id)
+            if to_playlist_id not in current_playlists:
+                current_playlists.append(to_playlist_id)
+            track.playlists_json = current_playlists
+            track.updated_at = datetime.utcnow()
 
-    # Record Move in History
-    history_entry = MovedTrackHistory(
-        video_id=video_id,
-        title=title,
-        from_playlist_id=from_playlist_id,
-        from_playlist_title=from_playlist.title,
-        to_playlist_id=to_playlist_id,
-        to_playlist_title=to_playlist.title,
-        moved_at=datetime.utcnow(),
-        status=status
-    )
-    db.add(history_entry)
-    db.commit()
+        # Record Move in History
+        history_entry = MovedTrackHistory(
+            video_id=video_id,
+            title=title,
+            from_playlist_id=from_playlist_id,
+            from_playlist_title=from_playlist.title,
+            to_playlist_id=to_playlist_id,
+            to_playlist_title=to_playlist.title,
+            moved_at=datetime.utcnow(),
+            status=status
+        )
+        session.add(history_entry)
+        session.flush()
 
-    logger.info(f"Moved track '{title}' ({video_id}) from '{from_playlist.title}' to '{to_playlist.title}'")
+        logger.info(f"Moved track '{title}' ({video_id}) from '{from_playlist.title}' to '{to_playlist.title}'")
 
-    return {
-        "video_id": video_id,
-        "title": title,
-        "from_playlist": from_playlist.title,
-        "to_playlist": to_playlist.title,
-        "status": status,
-        "moved_at": history_entry.moved_at.isoformat()
-    }
+        return {
+            "video_id": video_id,
+            "title": title,
+            "from_playlist": from_playlist.title,
+            "to_playlist": to_playlist.title,
+            "status": status,
+            "moved_at": history_entry.moved_at.isoformat()
+        }

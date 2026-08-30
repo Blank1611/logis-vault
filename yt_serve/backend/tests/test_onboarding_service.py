@@ -2,24 +2,24 @@ import unittest
 import os
 import json
 import tempfile
-from app.models.database import SessionLocal, Playlist, Track, _auto_migrate_sqlite_columns
+from tests.test_db_helper import create_isolated_test_db
+from app.models.database import Playlist, Track, SystemSetting, get_system_setting, set_system_setting
 from app.services.onboarding_service import (
     extract_video_id_from_filename,
     scan_download_directory,
     ingest_discovered_library
 )
+from app.api.config import _check_needs_setup
 
 class TestOnboardingService(unittest.TestCase):
 
     def setUp(self):
-        _auto_migrate_sqlite_columns()
-        self.db = SessionLocal()
+        # 100% isolated in-memory test database sandbox
+        self.test_engine, self.TestingSession = create_isolated_test_db()
+        self.db = self.TestingSession()
         self.temp_dir = tempfile.TemporaryDirectory()
 
     def tearDown(self):
-        self.db.query(Track).delete()
-        self.db.query(Playlist).delete()
-        self.db.commit()
         self.db.close()
         self.temp_dir.cleanup()
 
@@ -61,13 +61,13 @@ class TestOnboardingService(unittest.TestCase):
         self.assertEqual(found_a["url"], "https://www.youtube.com/playlist?list=PL_ROCK_123")
         self.assertEqual(found_a["video_count"], 1)
 
-        # 2. Ingest into SQLite database
+        # 2. Ingest into isolated test SQLite database
         ingest_res = ingest_discovered_library(discovered_items=scan_res["discovered_playlists"], db=self.db)
         self.assertEqual(ingest_res["status"], "success")
         self.assertEqual(ingest_res["playlists_imported"], 2)
         self.assertEqual(ingest_res["tracks_indexed"], 2)
 
-        # Verify records in database
+        # Verify records in isolated database
         db_playlists = self.db.query(Playlist).all()
         self.assertEqual(len(db_playlists), 2)
 
@@ -78,17 +78,10 @@ class TestOnboardingService(unittest.TestCase):
         self.assertIn("xFYQQPAOz7Y", track_ids)
 
     def test_system_settings_and_needs_setup(self):
-        from app.models.database import SystemSetting, get_system_setting, set_system_setting
-        from app.api.config import _check_needs_setup
-
-        # Initial state: no setting in db
-        self.db.query(SystemSetting).delete()
-        self.db.commit()
-
         val = get_system_setting("setup_completed", default="false", db=self.db)
         self.assertEqual(val, "false")
 
-        # Set setup_completed
+        # Set setup_completed in isolated test DB
         set_system_setting("setup_completed", "true", db=self.db)
         val2 = get_system_setting("setup_completed", default="false", db=self.db)
         self.assertEqual(val2, "true")
