@@ -239,11 +239,60 @@ export interface OnboardingResult {
   total_tracks: number
 }
 
+export interface DuplicateFileInfo {
+  video_id: string
+  filename: string
+  filepath: string
+  file_size: number
+  playlist_folder: string
+  extension: string
+  is_audio: boolean
+}
+
+export interface DuplicateGroup {
+  video_id: string
+  title: string
+  media_type: string
+  master_file: DuplicateFileInfo
+  redundant_copies: DuplicateFileInfo[]
+  already_hardlinked_count: number
+  reclaimable_bytes: number
+  formatted_reclaimable_space: string
+  playlists: string[]
+}
+
+export interface DeduplicationScanResult {
+  status: string
+  base_path: string
+  total_scanned_files: number
+  duplicate_groups_count: number
+  total_duplicate_files: number
+  reclaimable_bytes: number
+  formatted_reclaimable_space: string
+  duplicate_groups: DuplicateGroup[]
+  message?: string
+}
+
+export interface DeduplicationApplyResult {
+  status: string
+  files_converted: number
+  space_reclaimed_bytes: number
+  formatted_space_reclaimed: string
+  errors: string[]
+}
+
 export const onboardingApi = {
   scan: (base_path?: string) =>
     api.post<DiscoveredLibraryPreview>('/config/onboarding/scan', { base_path }),
   confirm: (params?: { base_path?: string; items?: any[] }) =>
     api.post<OnboardingResult>('/config/onboarding/confirm', params || {}),
+}
+
+export const housekeepingApi = {
+  scanDuplicates: (base_path?: string) =>
+    api.post<DeduplicationScanResult>('/housekeeping/deduplicate/scan', { base_path }),
+  applyDeduplication: (params?: { base_path?: string; duplicate_groups?: any[] }) =>
+    api.post<DeduplicationApplyResult>('/housekeeping/deduplicate/apply', params || {}),
 }
 
 export default api

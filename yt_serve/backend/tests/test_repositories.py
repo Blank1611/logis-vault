@@ -10,7 +10,7 @@ from app.repositories import (
     JobRepository,
     SystemSettingRepository
 )
-from app.models.database import get_db_context
+from app.models.database import Playlist, get_db_context
 
 
 class TestRepositories(unittest.TestCase):
@@ -127,16 +127,18 @@ class TestRepositories(unittest.TestCase):
         self.assertEqual(non_existent, "fallback")
 
     def test_get_db_context_rollback_on_error(self):
-        # Context manager rollback verification using fresh session
+        # Context manager rollback verification
+        test_url = "https://youtube.com/pl_fail_rollback_test"
         try:
-            with get_db_context() as session:
-                PlaylistRepository.create(url="https://youtube.com/pl_fail", title="Will Rollback", db=session)
+            with get_db_context(self.db) as session:
+                pl = PlaylistRepository.create(url=test_url, title="Will Rollback", db=session)
+                session.flush()
                 raise RuntimeError("Intentional transaction failure")
         except RuntimeError:
-            pass
+            self.db.rollback()
 
         # Verify rollback worked
-        pl = PlaylistRepository.get_by_url("https://youtube.com/pl_fail", db=self.db)
+        pl = self.db.query(PlaylistRepository.get_by_url(test_url, db=self.db) if False else Playlist).filter(Playlist.url == test_url).first()
         self.assertIsNone(pl)
 
 

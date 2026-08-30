@@ -4,7 +4,7 @@ import { configApi, onboardingApi, type Config } from '../../services/api'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { 
-  FolderOpen, Loader2, Info, Zap, Music, Sparkles, Search 
+  FolderOpen, Loader2, Info, Zap, Music, Sparkles, Search, HardDrive 
 } from 'lucide-react'
 
 // Helper Component for interactive field headers with recommendations and toggleable info
@@ -118,9 +118,10 @@ export function AudioModeCard({ mode }: { mode: string }) {
 
 export interface SettingsModalProps {
   onClose: () => void
+  onOpenDeduplicate?: () => void
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDeduplicate }) => {
   const queryClient = useQueryClient()
   
   const { data: config, isLoading } = useQuery({
@@ -501,6 +502,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   </button>
                 </div>
               </div>
+            )}
+          </div>
+
+          {/* Deduplication & Space Reclaim Action Card */}
+          <div className="bg-indigo-50/50 dark:bg-indigo-950/20 rounded-xl p-4 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span>Library Deduplication & Space Reclaimer</span>
+              </h4>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Scan for duplicate songs shared across playlists and convert redundant copies to zero-space hardlinks.
+              </p>
+            </div>
+            {onOpenDeduplicate && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose()
+                  onOpenDeduplicate()
+                }}
+                className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                <HardDrive className="w-3.5 h-3.5" />
+                <span>Open Deduplicator</span>
+              </button>
             )}
           </div>
 

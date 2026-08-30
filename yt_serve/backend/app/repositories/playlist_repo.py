@@ -112,4 +112,7 @@ class PlaylistRepository:
             if not playlist:
                 return False
             session.delete(playlist)
+            session.flush()
+            if db is not None:
+                session.commit()
             return True

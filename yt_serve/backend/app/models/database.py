@@ -227,16 +227,11 @@ def get_db():
 def get_db_context(existing_db: Optional[Session] = None):
     """
     Context manager for background workers, services, and tasks.
-    Auto-commits on success, rolls back on error, and closes session cleanly.
-    If an existing session is passed, yields it without closing.
+    Auto-commits on success, rolls back on error, and closes session cleanly when creating a new session.
+    If an existing session is passed, yields it directly for nested re-use.
     """
     if existing_db is not None:
-        try:
-            yield existing_db
-            existing_db.commit()
-        except Exception:
-            existing_db.rollback()
-            raise
+        yield existing_db
     else:
         db = SessionLocal()
         try:

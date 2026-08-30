@@ -1,5 +1,5 @@
 import React from 'react'
-import { Settings, Moon, Sun, Grid3x3, List, Layers } from 'lucide-react'
+import { Settings, Moon, Sun, Grid3x3, List, Layers, Sparkles } from 'lucide-react'
 import { NavigationTabs } from './NavigationTabs'
 import { useTheme } from '../../context/ThemeContext'
 
@@ -11,6 +11,7 @@ export interface HeaderProps {
   onViewModeChange?: (mode: 'grid' | 'list') => void
   onOpenSettings: () => void
   onOpenReorganize?: () => void
+  onOpenDeduplicate?: () => void
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -21,6 +22,7 @@ export const Header: React.FC<HeaderProps> = ({
   onViewModeChange,
   onOpenSettings,
   onOpenReorganize,
+  onOpenDeduplicate,
 }) => {
   const { darkMode, toggleDarkMode } = useTheme()
 
@@ -76,6 +78,18 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Layers className="w-4 h-4 text-blue-600 dark:text-blue-400" />
               <span className="hidden sm:inline">Track Index</span>
+            </button>
+          )}
+
+          {/* Deduplicate Button */}
+          {onOpenDeduplicate && (
+            <button
+              onClick={onOpenDeduplicate}
+              className="p-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors flex items-center gap-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300 px-3"
+              title="Retroactive Library Deduplication & Hardlink Space Reclaimer"
+            >
+              <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              <span className="hidden sm:inline">Deduplicate</span>
             </button>
           )}
 

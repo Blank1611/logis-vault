@@ -7,13 +7,14 @@ import { ThemeProvider } from './context/ThemeContext'
 import { Header, SchedulerBanner } from './components/layout'
 import { PlaylistsPage, LogsPage, type ActivityLog } from './pages'
 import { 
-  SettingsModal, ExclusionsModal, LogsModal, InitialSetupModal, InterruptedJobsDialog, ReorganizeModal 
+  SettingsModal, ExclusionsModal, LogsModal, InitialSetupModal, InterruptedJobsDialog, ReorganizeModal, DeduplicateModal 
 } from './components/modals'
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState<'playlists' | 'logs'>('playlists')
   const [showSettings, setShowSettings] = useState(false)
   const [showReorganize, setShowReorganize] = useState(false)
+  const [showDeduplicate, setShowDeduplicate] = useState(false)
   const [showInitialSetup, setShowInitialSetup] = useState(false)
   const [editingExclusions, setEditingExclusions] = useState<Playlist | null>(null)
   const [viewingLogs, setViewingLogs] = useState<Job | null>(null)
@@ -268,6 +269,7 @@ function AppContent() {
         onViewModeChange={setViewMode}
         onOpenSettings={() => setShowSettings(true)}
         onOpenReorganize={() => setShowReorganize(true)}
+        onOpenDeduplicate={() => setShowDeduplicate(true)}
       />
 
       {/* Main Container */}
@@ -307,13 +309,23 @@ function AppContent() {
 
       {/* Modals & Dialogs */}
       {showSettings && (
-        <SettingsModal onClose={() => setShowSettings(false)} />
+        <SettingsModal 
+          onClose={() => setShowSettings(false)} 
+          onOpenDeduplicate={() => setShowDeduplicate(true)}
+        />
       )}
 
       {showReorganize && (
         <ReorganizeModal
           isOpen={showReorganize}
           onClose={() => setShowReorganize(false)}
+        />
+      )}
+
+      {showDeduplicate && (
+        <DeduplicateModal
+          isOpen={showDeduplicate}
+          onClose={() => setShowDeduplicate(false)}
         />
       )}
 

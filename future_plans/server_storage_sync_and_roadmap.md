@@ -127,7 +127,7 @@ services:
 
 #### 🧹 Column 3: Housekeeping & Storage Optimization
 - [ ] **[#11: Non-Standard Library Importer & Fuzzy Title Matching Renamer (v2.6)](https://github.com/Blank1611/yt_playlist_dnlder/issues/11)**: Wizard to import unformatted music folders lacking `playlist_info.json` or `[video_id]`, using ID3 tags, fuzzy playlist title matching, and auto-renaming.
-- [ ] **[#8: Retroactive Library Deduplication & Hardlink Space Reclaimer (Housekeeping: GUI + CLI)](https://github.com/Blank1611/yt_playlist_dnlder/issues/8)**: On-demand housekeeping tool in Web GUI / CLI (`tools/deduplicate_library.py`) to scan and convert existing duplicate physical files across playlists into zero-space hardlinks.
+- [x] **[#8: Retroactive Library Deduplication & Hardlink Space Reclaimer (Housekeeping: GUI + CLI)](https://github.com/Blank1611/yt_playlist_dnlder/issues/8)**: *(Completed)* On-demand housekeeping tool in Web GUI / CLI (`tools/deduplicate_library.py`) to scan and convert existing duplicate physical files across playlists into zero-space hardlinks.
 - [ ] **[#9: Content-Based Duplicate Finder: SHA-256 Checksum & Acoustic Audio Fingerprinting (Housekeeping: GUI + CLI)](https://github.com/Blank1611/yt_playlist_dnlder/issues/9)**: On-demand library curation tool in Web GUI / CLI (`tools/find_content_duplicates.py`) with 3-stage fast SHA-256 hash and Chromaprint/AcoustID waveform fingerprinting to find duplicates with different filenames, bitrates, or tags.
 - [ ] **Built-in Storage Quota Watchdog**: Alert in Web UI when target storage drops below threshold (e.g. <10 GB free).
 - [ ] **Direct Cloud Backup Export**: WebDAV / Rclone hook to backup metadata directly to Google Drive / OneDrive.
