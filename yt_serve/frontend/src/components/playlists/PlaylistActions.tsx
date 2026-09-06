@@ -114,14 +114,20 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
         {compact ? 'Refresh' : ''}
       </Button>
 
-      {compact && playlist.excluded_ids?.length > 0 && onEditExclusions && (
+      {onEditExclusions && (
         <Button
           variant="secondary"
-          size="sm"
+          size={compact ? 'sm' : 'md'}
           onClick={onEditExclusions}
-          icon={<Edit3 className="w-3.5 h-3.5" />}
+          icon={<Edit3 className="w-4 h-4 text-amber-600 dark:text-amber-400" />}
+          title={
+            playlist.excluded_ids?.length
+              ? `Manage exclusions (${playlist.excluded_ids.length} currently excluded)`
+              : 'Manage video exclusions'
+          }
+          className={compact ? '' : 'px-3'}
         >
-          Edit Exclusions ({playlist.excluded_ids.length})
+          {compact ? `Exclusions ${playlist.excluded_ids?.length ? `(${playlist.excluded_ids.length})` : ''}` : ''}
         </Button>
       )}
 

@@ -39,76 +39,75 @@ async def startup_event():
         playlists_map = {p.id: p for p in playlists_list}
         
         # Step 1: Check for interrupted jobs
-        print("Checking for interrupted jobs...")
+        logger.info("[STARTUP] Checking for interrupted jobs...")
         interrupted_jobs = db.query(Job).filter(Job.status == 'running').all()
         
         if interrupted_jobs:
-            print(f"\nFound {len(interrupted_jobs)} interrupted job(s):")
+            logger.warning(f"[STARTUP] Found {len(interrupted_jobs)} interrupted job(s):")
             for job in interrupted_jobs:
                 playlist = playlists_map.get(job.playlist_id)
                 playlist_title = playlist.title if playlist else "Unknown Playlist"
-                print(f"  - Job #{job.id}: {job.job_type} for '{playlist_title}' (started {job.created_at})")
-            print("Interrupted jobs will be presented to the user via the UI recovery dialog.\n")
+                logger.warning(f"  - Job #{job.id}: {job.job_type} for '{playlist_title}' (started {job.created_at})")
+            logger.info("[STARTUP] Interrupted jobs will be presented to the user via the UI recovery dialog.")
         else:
-            print("No interrupted jobs found")
+            logger.info("[STARTUP] No interrupted jobs found")
         
         # Two-Stage Startup Lifecycle
         from app.api.config import _check_needs_setup
         needs_setup = _check_needs_setup(db=db)
         if needs_setup:
-            print("[Startup] Stage 1: Initial setup pending. Awaiting configuration review in UI.")
+            logger.info("[STARTUP] Stage 1: Initial setup pending. Awaiting configuration review and onboarding wizard in UI.")
         else:
             # Stage 2: Run Auto-Discovery on verified BASE_DOWNLOAD_PATH
             if getattr(settings, "ENABLE_AUTO_DISCOVERY", True):
                 try:
                     from app.services.onboarding_service import scan_download_directory, ingest_discovered_library
-                    print("[Startup] Stage 2: Running Auto-Discovery on BASE_DOWNLOAD_PATH...")
+                    logger.info("[STARTUP] Stage 2: Running Auto-Discovery on BASE_DOWNLOAD_PATH...")
                     scan_res = scan_download_directory(settings.BASE_DOWNLOAD_PATH)
                     if scan_res.get("discovered_playlists_count", 0) > 0:
                         ingest_res = ingest_discovered_library(scan_res["discovered_playlists"], db=db)
-                        print(f"✓ Auto-discovery: {ingest_res['playlists_imported']} new playlists imported, {ingest_res['tracks_indexed']} tracks indexed.")
+                        logger.info(f"[STARTUP] ✓ Auto-discovery: {ingest_res['playlists_imported']} new playlists imported, {ingest_res['tracks_indexed']} tracks indexed.")
                         playlists_list = db.query(Playlist).all()
                 except Exception as ad_err:
-                    print(f"[Startup] Auto-discovery note: {ad_err}")
+                    logger.warning(f"[STARTUP] Auto-discovery note: {ad_err}")
 
-        # Step 2: Refresh playlist stats
-        print(f"\n{'='*60}")
-        print("Refreshing playlist stats...")
-        print("="*60)
+            # Step 2: Refresh playlist stats (only if setup already completed)
+            logger.info("=" * 60)
+            logger.info("[STARTUP] [REFRESH] Refreshing playlist stats...")
+            logger.info("=" * 60)
 
-        download_service = DownloadService(settings.BASE_DOWNLOAD_PATH, {
-            "audio_extract_mode": settings.AUDIO_EXTRACT_MODE,
-            "max_extraction_workers": settings.MAX_CONCURRENT_EXTRACTIONS,
-            "batch_size": settings.BATCH_SIZE,
-            "use_browser_cookies": settings.USE_BROWSER_COOKIES,
-            "browser_name": settings.BROWSER_NAME,
-            "cookies_file": settings.COOKIES_FILE,
-        })
-        
-        for playlist in playlists_list:
-            try:
-                print(f"  Refreshing: {playlist.title}...", end=" ")
-                local_count, available_count, unavailable_count = await download_service.get_playlist_stats(
-                    playlist.title,
-                    playlist.url,
-                    playlist.excluded_ids or [],
-                    source="startup"
-                )
-                
-                playlist.local_count = local_count
-                playlist.playlist_count = available_count
-                playlist.unavailable_count = unavailable_count
-                db.commit()
-                
-                status = "Caught up" if local_count >= available_count else f"{available_count - local_count} new"
-                print(f"{status} ({local_count}/{available_count})")
-                
-            except Exception as e:
-                print(f"Error: {str(e)}")
-        
-        print("="*60)
-        print("Startup complete!")
-        print("="*60 + "\n")
+            download_service = DownloadService(settings.BASE_DOWNLOAD_PATH, {
+                "audio_extract_mode": settings.AUDIO_EXTRACT_MODE,
+                "max_extraction_workers": settings.MAX_CONCURRENT_EXTRACTIONS,
+                "batch_size": settings.BATCH_SIZE,
+                "use_browser_cookies": settings.USE_BROWSER_COOKIES,
+                "browser_name": settings.BROWSER_NAME,
+                "cookies_file": settings.COOKIES_FILE,
+            })
+            
+            for playlist in playlists_list:
+                try:
+                    local_count, available_count, unavailable_count = await download_service.get_playlist_stats(
+                        playlist.title,
+                        playlist.url,
+                        playlist.excluded_ids or [],
+                        source="startup"
+                    )
+                    
+                    playlist.local_count = local_count
+                    playlist.playlist_count = available_count
+                    playlist.unavailable_count = unavailable_count
+                    db.commit()
+                    
+                    status = "Caught up" if local_count >= available_count else f"{available_count - local_count} new"
+                    logger.info(f"[STARTUP] [REFRESH] {playlist.title}: {status} ({local_count}/{available_count})")
+                    
+                except Exception as e:
+                    logger.error(f"[STARTUP] [REFRESH] Error for {playlist.title}: {str(e)}")
+            
+            logger.info("=" * 60)
+            logger.info("[STARTUP] Startup complete!")
+            logger.info("=" * 60)
         
         # Start background 24/7 daily metadata scheduler & periodic auto-discovery
         from app.services.scheduler import start_daily_scheduler

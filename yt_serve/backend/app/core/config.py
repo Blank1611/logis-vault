@@ -102,8 +102,8 @@ ENABLE_DAILY_AUTO_REFRESH=true
 DAILY_REFRESH_TIME=04:00
 DAILY_REFRESH_TIMEZONE=Asia/Kolkata
 
-# Automated Git Metadata Sync & Versioning
-ENABLE_GIT_METADATA_SYNC=true
+# Automated Git Metadata Sync & Versioning (uncomment and set to true when configured)
+ENABLE_GIT_METADATA_SYNC=false
 # GIT_REMOTE_URL=https://github.com/username/yt-playlists-metadata.git
 # GIT_AUTH_TOKEN=ghp_yourPersonalAccessTokenHere
 GIT_BRANCH=main
@@ -157,8 +157,8 @@ class Settings(BaseSettings):
     DAILY_REFRESH_TIME: str = "04:00"
     DAILY_REFRESH_TIMEZONE: str = "Asia/Kolkata"
     
-    # Git Metadata Sync
-    ENABLE_GIT_METADATA_SYNC: bool = True
+    # Git Metadata Sync (Disabled by default until repository and token are configured)
+    ENABLE_GIT_METADATA_SYNC: bool = False
     GIT_REMOTE_URL: Optional[str] = None
     GIT_AUTH_TOKEN: Optional[str] = None
     GIT_BRANCH: str = "main"

@@ -9,6 +9,7 @@ Features:
 """
 
 import os
+import shutil
 import subprocess
 import threading
 from typing import Optional, Dict, Any, List, Tuple
@@ -16,6 +17,10 @@ from pathlib import Path
 from datetime import datetime
 
 from app.core.config import settings
+
+def is_git_available() -> bool:
+    """Check if git executable exists in system PATH"""
+    return shutil.which("git") is not None
 
 # Whitelist .gitignore content for BASE_DOWNLOAD_PATH
 BASE_DOWNLOAD_GITIGNORE = """# YouTube Playlist Manager - Metadata Whitelist .gitignore
@@ -51,6 +56,9 @@ def _run_git_cmd(
     env_vars: Optional[Dict[str, str]] = None
 ) -> Tuple[int, str, str]:
     """Execute a git command with timeout and return (returncode, stdout, stderr)"""
+    if not is_git_available():
+        return -1, "", "git executable not found in PATH"
+
     try:
         env = os.environ.copy()
         if env_vars:
@@ -74,7 +82,15 @@ def _run_git_cmd(
 def ensure_git_repo(base_path: str) -> bool:
     """
     Ensure a local git repository exists in base_path and .gitignore is in place.
+    Safely bypassed if git sync is disabled or git is not installed.
     """
+    if not getattr(settings, "ENABLE_GIT_METADATA_SYNC", False):
+        return False
+
+    if not is_git_available():
+        print(f"[GIT SYNC] Git executable not available in system; skipping repository setup.")
+        return False
+
     if not os.path.isdir(base_path):
         os.makedirs(base_path, exist_ok=True)
 
@@ -198,7 +214,10 @@ def commit_playlist_atomic(
     Stages ONLY this playlist's playlist_info.json and creates a concise atomic commit if changed.
     Thread-safe: acquired via _GIT_MUTEX to prevent index.lock conflicts.
     """
-    if not getattr(settings, "ENABLE_GIT_METADATA_SYNC", True):
+    if not getattr(settings, "ENABLE_GIT_METADATA_SYNC", False):
+        return False
+
+    if not is_git_available():
         return False
 
     base_path = settings.BASE_DOWNLOAD_PATH

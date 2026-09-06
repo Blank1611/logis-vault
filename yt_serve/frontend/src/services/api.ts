@@ -181,8 +181,8 @@ export interface CookieStatus {
 }
 
 export const configApi = {
-  get: () => api.get<Config>('/config'),
-  update: (config: Partial<Config>) => api.put<Config>('/config', config),
+  get: () => api.get<Config>('/config/'),
+  update: (config: Partial<Config>) => api.put<Config>('/config/', config),
   getSchedulerStatus: () => api.get<SchedulerStatus>('/config/scheduler-status'),
   getYtdlpVersion: () => api.get<{ version: string }>('/config/ytdlp-version'),
   updateYtdlp: () => api.post<{

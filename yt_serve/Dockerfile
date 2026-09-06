@@ -12,9 +12,10 @@ RUN npm run build
 FROM python:3.14-slim AS runner
 WORKDIR /app/backend
 
-# Install ffmpeg
+# Install ffmpeg and git for metadata versioning
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install python dependencies

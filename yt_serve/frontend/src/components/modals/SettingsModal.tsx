@@ -226,6 +226,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDed
       alert('Settings saved! Restart the backend for changes to take effect.')
       onClose()
     },
+    onError: (err: any) => {
+      alert(`Failed to save settings: ${err.response?.data?.detail || err.message}`)
+    },
   })
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -938,7 +941,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDed
                 <label className="flex items-center space-x-2">
                   <input
                     type="checkbox"
-                    checked={formData.enable_git_metadata_sync ?? true}
+                    checked={formData.enable_git_metadata_sync ?? false}
                     onChange={(e) => setFormData({ ...formData, enable_git_metadata_sync: e.target.checked })}
                     className="rounded text-blue-600 focus:ring-blue-500"
                   />

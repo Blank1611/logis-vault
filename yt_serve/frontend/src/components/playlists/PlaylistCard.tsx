@@ -83,7 +83,19 @@ export const PlaylistCard: React.FC<PlaylistCardProps> = ({
             </div>
             <div className="text-xs text-gray-600 dark:text-gray-400">Available</div>
           </div>
-          <div className="text-center">
+          <div
+            className={`text-center ${
+              playlist.unavailable_count > 0
+                ? 'cursor-pointer hover:bg-red-50 dark:hover:bg-red-900/30 rounded p-1 transition-colors'
+                : ''
+            }`}
+            onClick={() => {
+              if (playlist.unavailable_count > 0) {
+                onEditExclusions(playlist)
+              }
+            }}
+            title={playlist.unavailable_count > 0 ? "Click to manage unavailable / excluded videos" : undefined}
+          >
             <div className="text-2xl font-bold text-red-600 dark:text-red-400">
               {playlist.unavailable_count}
             </div>
@@ -169,6 +181,7 @@ export const PlaylistCard: React.FC<PlaylistCardProps> = ({
             onCancelJob={onCancelJob}
             onRefresh={() => onRefresh(playlist.id)}
             onDelete={() => onDelete(playlist.id)}
+            onEditExclusions={() => onEditExclusions(playlist)}
             isRefreshing={isRefreshing}
             isCancelling={isCancelling}
           />
@@ -182,19 +195,20 @@ export const PlaylistCard: React.FC<PlaylistCardProps> = ({
           {playlist.last_extract && (
             <div>Last extract: {new Date(playlist.last_extract).toLocaleString()}</div>
           )}
-          {playlist.excluded_ids?.length > 0 && (
-            <div className="flex items-center justify-between pt-1">
-              <span>{playlist.excluded_ids.length} videos excluded</span>
-              <button
-                onClick={() => onEditExclusions(playlist)}
-                className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1 font-medium"
-                title="Edit exclusions"
-              >
-                <Edit3 className="w-3 h-3" />
-                Edit
-              </button>
-            </div>
-          )}
+          <div className="flex items-center justify-between pt-1 border-t border-gray-100 dark:border-gray-700/50">
+            <span>
+              {playlist.excluded_ids?.length || 0} excluded
+              {playlist.unavailable_count > 0 ? ` • ${playlist.unavailable_count} unavailable` : ''}
+            </span>
+            <button
+              onClick={() => onEditExclusions(playlist)}
+              className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1 font-medium"
+              title="Manage exclusions"
+            >
+              <Edit3 className="w-3 h-3" />
+              Exclusions
+            </button>
+          </div>
         </div>
       </div>
     </div>

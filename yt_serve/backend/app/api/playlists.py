@@ -65,7 +65,8 @@ async def refresh_playlist_stats_task(playlist_id: int):
             playlist.title,
             playlist.url,
             playlist.excluded_ids or [],
-            source="ondemand"
+            source="manual",
+            force_refresh=True
         )
         
         playlist.local_count = local_count
@@ -73,6 +74,13 @@ async def refresh_playlist_stats_task(playlist_id: int):
         playlist.unavailable_count = unavailable_count
         playlist.updated_at = datetime.utcnow()
         db.commit()
+
+        # Notify connected frontend clients via WebSocket
+        try:
+            from app.api.websocket import manager as ws_manager
+            await ws_manager.broadcast("playlist_updated", {"playlist_id": playlist.id})
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -271,39 +279,46 @@ async def get_playlist_video_info(playlist_id: int, db: Session = Depends(get_db
     import json
     import os
     from app.core import yt_playlist_audio_tools as tools
+    from app.services.ytdlp_service import ytdlp_service
     
     playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
-    # Get playlist folder
-    safe_title = tools._sanitize_title(playlist.title)
-    playlist_folder = os.path.join(settings.BASE_DOWNLOAD_PATH, safe_title)
+    # Get playlist folder using case-insensitive resolver
+    playlist_folder = ytdlp_service.resolve_playlist_folder(playlist.title)
     snapshot_folder = os.path.join(playlist_folder, "playlist_info_snapshot")
     
-    # Find the most recent playlist_info.json
-    video_info = {}
+    latest_file = None
     if os.path.exists(snapshot_folder):
         json_files = [f for f in os.listdir(snapshot_folder) if f.startswith("playlist_info_") and f.endswith(".json")]
         if json_files:
-            # Get the most recent file
             json_files.sort(reverse=True)
             latest_file = os.path.join(snapshot_folder, json_files[0])
             
-            try:
-                with open(latest_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    entries = data.get('entries', [])
-                    
-                    # Build a map of video_id -> title
-                    for entry in entries:
-                        if entry and entry.get('id'):
-                            video_info[entry['id']] = {
-                                'title': entry.get('title', 'Unknown Title'),
-                                'duration': entry.get('duration'),
-                                'uploader': entry.get('uploader'),
-                            }
-            except Exception as e:
-                print(f"Error reading playlist info: {e}")
+    if not latest_file:
+        direct_file = os.path.join(playlist_folder, "playlist_info.json")
+        if os.path.exists(direct_file):
+            latest_file = direct_file
+    
+    # Build map of video_id -> info
+    video_info = {}
+    if latest_file and os.path.exists(latest_file):
+        try:
+            with open(latest_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                entries = data.get('entries', [])
+                
+                for entry in entries:
+                    if entry and entry.get('id'):
+                        is_unavail = tools.is_entry_unavailable(entry, None) if tools else False
+                        video_info[entry['id']] = {
+                            'title': entry.get('title', 'Unknown Title'),
+                            'duration': entry.get('duration'),
+                            'uploader': entry.get('uploader'),
+                            'is_unavailable': is_unavail,
+                        }
+        except Exception as e:
+            logger.error(f"Error reading playlist info from {latest_file}: {e}")
     
     return video_info

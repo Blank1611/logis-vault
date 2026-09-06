@@ -237,19 +237,60 @@ class DownloadService:
         
         return info
     
+    def resolve_playlist_folder(self, title: str) -> str:
+        """
+        Resolve the playlist directory on disk.
+        Matches exact sanitized title first; if not found, scans directory entries
+        case-insensitively to prevent duplicate ghost folders on Linux ext4 filesystems.
+        """
+        if not tools:
+            safe_title = "".join(c for c in title if c not in r'\/:*?"<>|').strip() or "playlist"
+        else:
+            safe_title = tools._sanitize_title(title)
+
+        direct_path = os.path.join(self.base_path, safe_title)
+        if os.path.isdir(direct_path):
+            return direct_path
+
+        # Case-insensitive check against existing directories on disk
+        try:
+            if os.path.isdir(self.base_path):
+                safe_title_lower = safe_title.lower()
+                raw_title_lower = title.strip().lower()
+                for entry in os.listdir(self.base_path):
+                    entry_path = os.path.join(self.base_path, entry)
+                    if not os.path.isdir(entry_path) or entry.startswith('.'):
+                        continue
+                    entry_lower = entry.lower()
+                    if entry_lower == safe_title_lower or entry_lower == raw_title_lower:
+                        return entry_path
+        except Exception:
+            pass
+
+        return direct_path
+
     async def get_playlist_stats(
         self,
         title: str,
         url: str,
         excluded_ids: list,
-        source: str = "ondemand"
+        source: str = "ondemand",
+        force_refresh: Optional[bool] = None
     ) -> tuple:
-        """Get playlist statistics"""
+        """Get playlist statistics with 3-tier refresh policy"""
         if not tools:
             raise RuntimeError("yt_playlist_audio_tools not available")
         
-        safe_title = tools._sanitize_title(title)
-        playlist_folder = os.path.join(self.base_path, safe_title)
+        # 3-Tier refresh policy:
+        # Tier 1 & 3: Manual user refreshes and onboarding always force fresh online fetch
+        # Tier 2: Routine startup restarts respect ctime freshness check
+        if force_refresh is None:
+            if source in ("manual", "refresh", "onboarding"):
+                force_refresh = True
+            else:
+                force_refresh = False
+
+        playlist_folder = self.resolve_playlist_folder(title)
         
         # Count local videos
         local_count = 0
@@ -268,7 +309,7 @@ class DownloadService:
             tools._get_playlist_entries,
             url,
             playlist_folder,
-            False,  # force_refresh
+            force_refresh,
             source
         )
         

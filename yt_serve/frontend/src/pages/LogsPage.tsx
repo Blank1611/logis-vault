@@ -6,7 +6,7 @@ import { Button } from '../components/ui/Button'
 import { StatusBadge } from '../components/ui/StatusBadge'
 import { ProgressBar, DualTierProgressBar } from '../components/ui/ProgressBar'
 import { 
-  Terminal, RotateCcw, Copy, Check, DownloadCloud, Trash2, Search, Loader2, Activity, Server 
+  Terminal, RotateCcw, Copy, Check, DownloadCloud, Trash2, Search, Loader2, Activity, Server, PlayCircle
 } from 'lucide-react'
 
 export interface ActivityLog {
@@ -32,11 +32,22 @@ export const LogsPage: React.FC<LogsPageProps> = ({
   onClearActivity,
 }) => {
   const queryClient = useQueryClient()
-  const [selectedSource, setSelectedSource] = useState<string>(() => {
+
+  // Top-level tab: 'system' (Live System & Observability) vs 'jobs' (Job History & Execution)
+  const [activeTab, setActiveTab] = useState<'system' | 'jobs'>(() => {
     const running = jobs.find(j => j.status === 'running' || j.status === 'pending')
-    if (running) return `job_${running.id}`
-    if (jobs.length > 0) return `job_${jobs[0].id}`
-    return 'system'
+    return running ? 'jobs' : 'system'
+  })
+
+  // Sub-source for system tab: 'server' (Central Server Logs via SSE/Ring Buffer) vs 'browser' (Client session events)
+  const [systemLogType, setSystemLogType] = useState<'server' | 'browser'>('server')
+
+  // Selected job for jobs tab
+  const [selectedJobId, setSelectedJobId] = useState<number | null>(() => {
+    const running = jobs.find(j => j.status === 'running' || j.status === 'pending')
+    if (running) return running.id
+    if (jobs.length > 0) return jobs[0].id
+    return null
   })
 
   const [selectedLevel, setSelectedLevel] = useState<'ALL' | 'ERROR' | 'WARN' | 'SUCCESS' | 'INFO'>('ALL')
@@ -45,21 +56,23 @@ export const LogsPage: React.FC<LogsPageProps> = ({
   const [copied, setCopied] = useState(false)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
-  // Auto-switch to newly running job if currently on finished job
+  // Auto-switch to newly running job if one starts
   useEffect(() => {
     const running = jobs.find(j => j.status === 'running')
-    if (running && (!selectedSource.startsWith('job_') || jobs.find(j => `job_${j.id}` === selectedSource)?.status !== 'running')) {
-      setSelectedSource(`job_${running.id}`)
+    if (running) {
+      if (selectedJobId !== running.id) {
+        setSelectedJobId(running.id)
+      }
     }
-  }, [jobs, selectedSource])
+  }, [jobs, selectedJobId])
 
-  const isJobSource = selectedSource.startsWith('job_')
-  const isSystemSource = selectedSource === 'system'
-  const selectedJobId = isJobSource ? parseInt(selectedSource.replace('job_', ''), 10) : null
+  const runningJobs = jobs.filter(j => j.status === 'running' || j.status === 'pending')
+  const completedJobs = jobs.filter(j => j.status !== 'running' && j.status !== 'pending')
+
   const selectedJob = jobs.find(j => j.id === selectedJobId)
   const selectedPlaylist = selectedJob ? playlists.find(p => p.id === selectedJob.playlist_id) : null
 
-  // Fetch job logs if job source is selected
+  // Fetch job logs if on jobs tab and job is selected
   const { data: jobLogs, isLoading: jobLogsLoading } = useQuery({
     queryKey: ['job-logs', selectedJobId],
     queryFn: async () => {
@@ -67,24 +80,24 @@ export const LogsPage: React.FC<LogsPageProps> = ({
       const res = await jobsApi.logs(selectedJobId, 1000)
       return res.data
     },
-    enabled: !!selectedJobId,
+    enabled: activeTab === 'jobs' && !!selectedJobId,
     refetchInterval: selectedJob?.status === 'running' ? 1500 : false,
   })
 
-  // Fetch central ring buffer server logs if system source is selected
+  // Fetch central ring buffer server logs if on system tab and server logs selected
   const { data: serverLogs = [] } = useQuery({
     queryKey: ['server-logs'],
     queryFn: async () => {
       const res = await logsApi.getRecent({ limit: 500 })
       return res.data
     },
-    enabled: isSystemSource,
+    enabled: activeTab === 'system' && systemLogType === 'server',
     staleTime: 5000,
   })
 
   // Live SSE stream for server logs
   useEffect(() => {
-    if (!isSystemSource) return
+    if (activeTab !== 'system' || systemLogType !== 'server') return
 
     const es = new EventSource('/api/logs/stream')
     es.addEventListener('log', (event: MessageEvent) => {
@@ -102,16 +115,16 @@ export const LogsPage: React.FC<LogsPageProps> = ({
     return () => {
       es.close()
     }
-  }, [isSystemSource, queryClient])
+  }, [activeTab, systemLogType, queryClient])
 
   // Auto scroll to bottom
   useEffect(() => {
     if (autoScroll) {
       logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [jobLogs, serverLogs, activityLogs, autoScroll])
+  }, [jobLogs, serverLogs, activityLogs, autoScroll, activeTab, systemLogType])
 
-  // Parse lines
+  // Parse lines for jobs
   const parsedJobLogs = (jobLogs || []).map(entry => {
     const text = entry.message
     let level: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS' = 'INFO'
@@ -173,9 +186,9 @@ export const LogsPage: React.FC<LogsPageProps> = ({
 
   const copyToClipboard = () => {
     let content = ''
-    if (isJobSource) {
+    if (activeTab === 'jobs') {
       content = filteredJobLogs.map(l => l.raw).join('\n')
-    } else if (isSystemSource) {
+    } else if (systemLogType === 'server') {
       content = filteredServerLogs.map(l => `[${l.timestamp}] [${l.level}] [${l.source || l.logger}] ${l.message}`).join('\n')
     } else {
       content = activityLogs.map(l => `[${l.timestamp}] [${l.level.toUpperCase()}] [${l.source}] ${l.message}`).join('\n')
@@ -185,64 +198,119 @@ export const LogsPage: React.FC<LogsPageProps> = ({
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const runningJobs = jobs.filter(j => j.status === 'running' || j.status === 'pending')
-  const completedJobs = jobs.filter(j => j.status !== 'running' && j.status !== 'pending')
-
   return (
-    <div className="space-y-6">
-      {/* Top Controls Bar */}
+    <div className="space-y-5">
+      {/* Primary Navigation Tabs */}
+      <div className="flex border-b border-gray-200 dark:border-gray-700 gap-3">
+        <button
+          onClick={() => setActiveTab('system')}
+          className={`pb-3 px-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-all ${
+            activeTab === 'system'
+              ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400'
+              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+          }`}
+        >
+          <Server className="w-4 h-4" />
+          Live System & Observability
+          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-normal">
+            Server & App
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('jobs')}
+          className={`pb-3 px-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-all ${
+            activeTab === 'jobs'
+              ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400'
+              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+          }`}
+        >
+          <PlayCircle className="w-4 h-4" />
+          Job History & Execution
+          {runningJobs.length > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-bold animate-pulse">
+              {runningJobs.length} Running
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Controls and Selectors Bar */}
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-5 border border-gray-200 dark:border-gray-700 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           
-          {/* Log Source Selector Dropdown */}
-          <div className="flex-1 max-w-xl">
-            <label className="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5 flex items-center gap-1.5">
-              <Terminal className="w-3.5 h-3.5 text-blue-500" />
-              Log Source
-            </label>
-            <select
-              value={selectedSource}
-              onChange={(e) => setSelectedSource(e.target.value)}
-              className="w-full px-3.5 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-            >
-              {runningJobs.length > 0 && (
-                <optgroup label="🟢 Active Running Jobs">
-                  {runningJobs.map(j => {
+          {/* Sub-selector depending on active tab */}
+          {activeTab === 'system' ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mr-2">
+                Observability Feed:
+              </span>
+              <button
+                onClick={() => setSystemLogType('server')}
+                className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                  systemLogType === 'server'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
+              >
+                <Server className="w-3.5 h-3.5" />
+                Central Server Logs (Ring Buffer & SSE)
+              </button>
+
+              <button
+                onClick={() => setSystemLogType('browser')}
+                className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                  systemLogType === 'browser'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
+                title="Ephemeral client-side UI and WebSocket notifications recorded during the current browser tab session"
+              >
+                <Activity className="w-3.5 h-3.5" />
+                Browser Session Events ({activityLogs.length})
+              </button>
+            </div>
+          ) : (
+            <div className="flex-1 max-w-xl">
+              <label className="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5 flex items-center gap-1.5">
+                <Terminal className="w-3.5 h-3.5 text-blue-500" />
+                Select Job Execution Log:
+              </label>
+              <select
+                value={selectedJobId || ''}
+                onChange={(e) => setSelectedJobId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                className="w-full px-3.5 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              >
+                {runningJobs.length > 0 && (
+                  <optgroup label="🟢 Active Running Jobs">
+                    {runningJobs.map(j => {
+                      const pl = playlists.find(p => p.id === j.playlist_id)
+                      const title = pl ? pl.title : `Playlist #${j.playlist_id}`
+                      return (
+                        <option key={j.id} value={j.id}>
+                          ⚡ Job #{j.id} — {title} ({j.job_type}) [{j.status.toUpperCase()}]
+                        </option>
+                      )
+                    })}
+                  </optgroup>
+                )}
+                
+                <optgroup label="⚪ Recent Completed Jobs">
+                  {completedJobs.slice(0, 30).map(j => {
                     const pl = playlists.find(p => p.id === j.playlist_id)
                     const title = pl ? pl.title : `Playlist #${j.playlist_id}`
                     return (
-                      <option key={j.id} value={`job_${j.id}`}>
-                        ⚡ Job #{j.id} — {title} ({j.job_type}) [{j.status.toUpperCase()}]
+                      <option key={j.id} value={j.id}>
+                        Job #{j.id} — {title} ({j.job_type}) [{j.status}]
                       </option>
                     )
                   })}
                 </optgroup>
-              )}
-              
-              <optgroup label="⚪ Recent Jobs History">
-                {completedJobs.slice(0, 20).map(j => {
-                  const pl = playlists.find(p => p.id === j.playlist_id)
-                  const title = pl ? pl.title : `Playlist #${j.playlist_id}`
-                  return (
-                    <option key={j.id} value={`job_${j.id}`}>
-                      Job #{j.id} — {title} ({j.job_type}) [{j.status}]
-                    </option>
-                  )
-                })}
-              </optgroup>
+              </select>
+            </div>
+          )}
 
-              <optgroup label="🌐 Live System & Observability">
-                <option value="system">
-                  📡 Central Server Logs (SSE Stream & In-Memory Ring Buffer)
-                </option>
-                <option value="activity">
-                  ⚡ UI & WebSocket Live Activity ({activityLogs.length} events)
-                </option>
-              </optgroup>
-            </select>
-          </div>
-
-          {/* Quick Actions */}
+          {/* Quick Actions Bar */}
           <div className="flex items-center gap-2 flex-wrap">
             <Button
               variant="secondary"
@@ -264,7 +332,7 @@ export const LogsPage: React.FC<LogsPageProps> = ({
               {copied ? 'Copied!' : 'Copy Logs'}
             </Button>
 
-            {isJobSource && selectedJobId && (
+            {activeTab === 'jobs' && selectedJobId && (
               <a
                 href={jobsApi.getDownloadLogUrl(selectedJobId)}
                 download={`job_${selectedJobId}.log`}
@@ -277,41 +345,41 @@ export const LogsPage: React.FC<LogsPageProps> = ({
               </a>
             )}
 
-            {isSystemSource && (
-              <a
-                href={logsApi.getLogFileUrl()}
-                download="yt_manager.log"
-                target="_blank"
-                rel="noreferrer"
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
-              >
-                <DownloadCloud className="w-3.5 h-3.5" />
-                Download Server Log
-              </a>
+            {activeTab === 'system' && systemLogType === 'server' && (
+              <>
+                <a
+                  href={logsApi.getLogFileUrl()}
+                  download="yt_manager.log"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
+                >
+                  <DownloadCloud className="w-3.5 h-3.5" />
+                  Download Server Log
+                </a>
+
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={async () => {
+                    await logsApi.clear()
+                    queryClient.invalidateQueries({ queryKey: ['server-logs'] })
+                  }}
+                  icon={<Trash2 className="w-3.5 h-3.5" />}
+                >
+                  Clear Buffer
+                </Button>
+              </>
             )}
 
-            {isSystemSource && (
-              <Button
-                variant="danger"
-                size="sm"
-                onClick={async () => {
-                  await logsApi.clear()
-                  queryClient.invalidateQueries({ queryKey: ['server-logs'] })
-                }}
-                icon={<Trash2 className="w-3.5 h-3.5" />}
-              >
-                Clear Buffer
-              </Button>
-            )}
-
-            {!isJobSource && !isSystemSource && (
+            {activeTab === 'system' && systemLogType === 'browser' && (
               <Button
                 variant="danger"
                 size="sm"
                 onClick={onClearActivity}
                 icon={<Trash2 className="w-3.5 h-3.5" />}
               >
-                Clear Activity
+                Clear Events
               </Button>
             )}
           </div>
@@ -358,8 +426,8 @@ export const LogsPage: React.FC<LogsPageProps> = ({
         </div>
       </div>
 
-      {/* Selected Job Header / Progress Banner */}
-      {isJobSource && selectedJob && (
+      {/* Selected Job Header / Progress Banner (for Job Execution Tab) */}
+      {activeTab === 'jobs' && selectedJob && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-4 border border-gray-200 dark:border-gray-700">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
@@ -417,7 +485,7 @@ export const LogsPage: React.FC<LogsPageProps> = ({
 
       {/* Terminal Display Console */}
       <div className="bg-gray-950 rounded-xl shadow-2xl border border-gray-800 p-4 font-mono text-xs text-gray-200 min-h-[500px] max-h-[70vh] overflow-y-auto">
-        {isJobSource ? (
+        {activeTab === 'jobs' ? (
           jobLogsLoading ? (
             <div className="text-center py-16 text-gray-500">
               <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-500 mb-2" />
@@ -463,10 +531,10 @@ export const LogsPage: React.FC<LogsPageProps> = ({
           ) : (
             <div className="text-center py-20 text-gray-500">
               <Terminal className="w-8 h-8 mx-auto mb-2 opacity-50" />
-              No logs matched your current filters.
+              {selectedJobId ? 'No log lines found for this job.' : 'Select a job to view its execution logs.'}
             </div>
           )
-        ) : isSystemSource ? (
+        ) : systemLogType === 'server' ? (
           filteredServerLogs.length > 0 ? (
             <div className="space-y-1">
               {filteredServerLogs.map(log => {
@@ -547,7 +615,7 @@ export const LogsPage: React.FC<LogsPageProps> = ({
           ) : (
             <div className="text-center py-20 text-gray-500">
               <Activity className="w-8 h-8 mx-auto mb-2 opacity-50" />
-              No system activity events recorded yet.
+              No client-side browser session events recorded yet.
             </div>
           )
         )}

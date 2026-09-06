@@ -172,13 +172,17 @@ def setup_logging(logs_dir: Optional[str] = None, level: int = logging.INFO):
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
 
-    # 1. Console Handler (if not already attached)
-    has_console = any(isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler) for h in root_logger.handlers)
-    if not has_console:
+    # 1. Console Handler (ensure stdout has standard structured formatter for Loki / Alloy)
+    console_handlers = [h for h in root_logger.handlers if isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler)]
+    if not console_handlers:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(level)
         console_handler.setFormatter(standard_formatter)
         root_logger.addHandler(console_handler)
+    else:
+        for ch in console_handlers:
+            ch.setFormatter(standard_formatter)
+            ch.setLevel(level)
 
     # 2. Ring Buffer Handler
     ring_handler = RingBufferHandler(capacity=MAX_RING_BUFFER_SIZE)

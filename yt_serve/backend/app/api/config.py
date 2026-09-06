@@ -74,8 +74,8 @@ class ConfigUpdate(BaseModel):
     use_custom_adhoc_path: Optional[bool] = None
 
 def _check_needs_setup(db=None) -> bool:
-    """Check if initial setup is needed"""
-    # 1. CLI flag --disable-onboarding / --no-onboarding or environment variable
+    """Check if initial setup is needed (requires explicit completion or opt-out flag)"""
+    # 1. Explicit CLI flag --disable-onboarding / --no-onboarding or environment variable
     if getattr(settings, "CLI_DISABLE_ONBOARDING", False):
         return False
     if os.environ.get("DISABLE_ONBOARDING", "").lower() in ("true", "1", "yes"):
@@ -92,19 +92,10 @@ def _check_needs_setup(db=None) -> bool:
     except Exception:
         pass
 
-    # 3. Check if BASE_DOWNLOAD_PATH is empty
-    if not settings.BASE_DOWNLOAD_PATH or settings.BASE_DOWNLOAD_PATH.strip() == "":
-        return True
-
-    # 4. Check if BASE_DOWNLOAD_PATH is set explicitly via env
-    env_path = settings.get_env_file_path()
-    if os.environ.get("BASE_DOWNLOAD_PATH") or env_path.exists():
-        # If env file exists and BASE_DOWNLOAD_PATH is not default 'downloads'
-        if settings.BASE_DOWNLOAD_PATH != "downloads":
-            return False
-
+    # By default, initial setup/onboarding is needed until explicitly completed in the UI or skipped
     return True
 
+@router.get("", response_model=ConfigResponse)
 @router.get("/", response_model=ConfigResponse)
 async def get_config(db: Session = Depends(get_db)):
     """Get current configuration"""
@@ -216,6 +207,7 @@ def _save_to_env(config: ConfigUpdate):
         for key, value in env_content.items():
             f.write(f"{key}={value}\n")
 
+@router.put("", response_model=ConfigResponse)
 @router.put("/", response_model=ConfigResponse)
 async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
     """Update configuration and persist to .env file and database"""
@@ -658,10 +650,12 @@ async def confirm_onboarding_ingest(
     payload: OnboardingConfirmRequest = OnboardingConfirmRequest(),
     db: Session = Depends(get_db)
 ):
-    """Ingest discovered playlists and populate tracks index in SQLite"""
+    """Ingest discovered playlists and mark initial setup completed"""
     from app.services.onboarding_service import ingest_discovered_library
+    from app.models.database import set_system_setting
     target = payload.base_path or settings.BASE_DOWNLOAD_PATH
     res = ingest_discovered_library(discovered_items=payload.items, base_path=target, db=db)
+    set_system_setting("setup_completed", "true", db=db)
     return res
 
 

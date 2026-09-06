@@ -132,7 +132,20 @@ export const PlaylistList: React.FC<PlaylistListProps> = ({
                     <div className="text-2xl font-bold text-blue-700 dark:text-blue-400">{playlist.playlist_count}</div>
                     <div className="text-xs text-gray-600 dark:text-gray-400">Available</div>
                   </div>
-                  <div className="text-center p-3 bg-red-50 dark:bg-red-900/30 rounded-lg min-w-[75px]">
+                  <div
+                    className={`text-center p-3 bg-red-50 dark:bg-red-900/30 rounded-lg min-w-[75px] ${
+                      playlist.unavailable_count > 0
+                        ? 'cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors ring-1 ring-red-200 dark:ring-red-800'
+                        : ''
+                    }`}
+                    onClick={(e) => {
+                      if (playlist.unavailable_count > 0) {
+                        e.stopPropagation()
+                        onEditExclusions(playlist)
+                      }
+                    }}
+                    title={playlist.unavailable_count > 0 ? "Click to manage unavailable / excluded videos" : undefined}
+                  >
                     <div className="text-2xl font-bold text-red-700 dark:text-red-400">{playlist.unavailable_count}</div>
                     <div className="text-xs text-gray-600 dark:text-gray-400">Unavailable</div>
                   </div>
