@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import threading
+import contextvars
 from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
 from datetime import datetime
@@ -203,6 +204,163 @@ def _cleanup_stale_git_lock(base_path: str):
         except Exception as e:
             print(f"[GIT SYNC] Warning: Could not inspect/remove stale lock: {e}")
 
+# Context variable tracking the active GitBatchSession (scoped per asyncio task/thread)
+_CURRENT_GIT_BATCH: contextvars.ContextVar[Optional["GitBatchSession"]] = contextvars.ContextVar(
+    "_CURRENT_GIT_BATCH", default=None
+)
+
+def _get_git_commit_env() -> Dict[str, str]:
+    """Retrieve Git author and committer environment mapping from settings"""
+    return {
+        "GIT_AUTHOR_NAME": getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"),
+        "GIT_AUTHOR_EMAIL": getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"),
+        "GIT_COMMITTER_NAME": getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"),
+        "GIT_COMMITTER_EMAIL": getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"),
+    }
+
+def _format_playlist_delta(playlist_title: str, old_info: Optional[Dict[str, Any]], new_info: Dict[str, Any]) -> str:
+    """Format a human-readable delta line for a playlist update"""
+    added_ids, removed_ids, total_count = _compute_video_deltas(old_info, new_info)
+    if added_ids and removed_ids:
+        sample_ids = [f"-{vid}" for vid in removed_ids[:3]] + [f"+{vid}" for vid in added_ids[:3]]
+        return f"Update '{playlist_title}': +{len(added_ids)} added, -{len(removed_ids)} removed/private (Total: {total_count}) [IDs: {', '.join(sample_ids)}]"
+    elif removed_ids:
+        sample_ids = [f"{vid}" for vid in removed_ids[:5]]
+        return f"Update '{playlist_title}': -{len(removed_ids)} removed/private (Total: {total_count}) [ID{'s' if len(sample_ids) > 1 else ''}: {', '.join(sample_ids)}]"
+    elif added_ids:
+        sample_ids = [f"{vid}" for vid in added_ids[:5]]
+        return f"Update '{playlist_title}': +{len(added_ids)} added (Total: {total_count}) [ID{'s' if len(sample_ids) > 1 else ''}: {', '.join(sample_ids)}]"
+    else:
+        return f"Update '{playlist_title}': Metadata updated (Total: {total_count})"
+
+
+class GitBatchSession:
+    """
+    Context manager that defers committing Git changes until the entire multi-playlist
+    batch scan (e.g. Daily Schedule or Startup Scan) completes, consolidating all modified
+    playlists into a single structured commit with bulleted changelogs.
+    """
+    def __init__(self, source: str = "scheduled", label: Optional[str] = None):
+        self.source = source
+        self.label = label or ("Daily Schedule" if source == "scheduled" else "Startup Scan")
+        self.staged_entries: List[Dict[str, Any]] = []
+        self._token: Optional[contextvars.Token] = None
+
+    def __enter__(self):
+        self._token = _CURRENT_GIT_BATCH.set(self)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            self.commit_batch()
+        finally:
+            if self._token is not None:
+                _CURRENT_GIT_BATCH.reset(self._token)
+
+    async def __aenter__(self):
+        return self.__enter__()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return self.__exit__(exc_type, exc_val, exc_tb)
+
+    def commit_batch(self) -> bool:
+        """Commit all accumulated changes in this batch session into a single Git commit"""
+        if not getattr(settings, "ENABLE_GIT_METADATA_SYNC", False):
+            return False
+        if not is_git_available():
+            return False
+
+        base_path = settings.BASE_DOWNLOAD_PATH
+
+        with _GIT_MUTEX:
+            if not ensure_git_repo(base_path):
+                return False
+
+            _cleanup_stale_git_lock(base_path)
+
+            # Verify if there are changes currently staged in git index
+            code, _, _ = _run_git_cmd(["diff", "--cached", "--quiet"], base_path)
+            if code == 0:
+                # 0 means NO staged changes -> 0 commits created
+                return False
+
+            now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            prefix_map = {
+                "scheduled": "[Daily Schedule]",
+                "startup": "[Startup Scan]",
+                "ondemand": "[On-Demand]",
+                "manual": "[On-Demand]",
+            }
+            tag = prefix_map.get(self.source.lower(), f"[{self.source.capitalize()}]")
+
+            if len(self.staged_entries) == 1:
+                commit_msg = f"{tag} {self.staged_entries[0]['summary']}"
+            elif len(self.staged_entries) > 1:
+                header = f"{tag} Batch update {len(self.staged_entries)} playlists ({now_str})"
+                bullets = [f"• {entry['summary']}" for entry in self.staged_entries]
+                commit_msg = f"{header}\n\n" + "\n".join(bullets)
+            else:
+                commit_msg = f"{tag} Batch metadata update ({now_str})"
+
+            commit_env = _get_git_commit_env()
+            code, stdout, stderr = _run_git_cmd(["commit", "-m", commit_msg], base_path, env_vars=commit_env)
+            if code == 0:
+                print(f"[GIT SYNC] ✓ Committed batch: {commit_msg.splitlines()[0]}")
+                push_to_remote_async()
+                return True
+            else:
+                print(f"[GIT SYNC] Batch commit failed: {stderr}")
+                return False
+
+
+def reconcile_uncommitted_metadata(base_path: str) -> bool:
+    """
+    Checks for uncommitted metadata changes or dead locks on container boot and commits them cleanly.
+    Called by RecoveryService during startup recovery.
+    """
+    if not getattr(settings, "ENABLE_GIT_METADATA_SYNC", False):
+        return False
+    if not is_git_available():
+        return False
+
+    with _GIT_MUTEX:
+        _cleanup_stale_git_lock(base_path)
+        if not ensure_git_repo(base_path):
+            return False
+
+        # Check git status for modified or untracked metadata files
+        code, stdout, _ = _run_git_cmd(["status", "--porcelain"], base_path)
+        if not stdout.strip():
+            return False
+
+        dirty_lines = [line.strip() for line in stdout.splitlines() if "playlist_info.json" in line]
+        if not dirty_lines:
+            return False
+
+        # Stage modified playlist metadata files
+        _run_git_cmd(["add", "-u"], base_path)
+
+        # Check if there are differences against HEAD
+        code, _, _ = _run_git_cmd(["diff", "--cached", "--quiet"], base_path)
+        if code == 0:
+            return False
+
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        commit_msg = (
+            f"[Startup Recovery] Reconcile uncommitted playlist metadata after restart ({now_str})\n\n"
+            f"• Automatically reconciled {len(dirty_lines)} metadata file(s) left uncommitted from prior crash/restart."
+        )
+        commit_env = _get_git_commit_env()
+        code, stdout, stderr = _run_git_cmd(["commit", "-m", commit_msg], base_path, env_vars=commit_env)
+        if code == 0:
+            print(f"[GIT SYNC] ✓ Startup Recovery: Reconciled {len(dirty_lines)} uncommitted metadata file(s).")
+            push_to_remote_async()
+            return True
+        else:
+            print(f"[GIT SYNC] Startup Recovery commit failed: {stderr}")
+            return False
+
+
 def commit_playlist_atomic(
     playlist_folder: str,
     playlist_title: str,
@@ -211,7 +369,9 @@ def commit_playlist_atomic(
     source: str = "ondemand"
 ) -> bool:
     """
-    Stages ONLY this playlist's playlist_info.json and creates a concise atomic commit if changed.
+    Stages this playlist's playlist_info.json.
+    - If a GitBatchSession is active: defers commit until batch completion.
+    - If no GitBatchSession is active: commits immediately and atomically.
     Thread-safe: acquired via _GIT_MUTEX to prevent index.lock conflicts.
     """
     if not getattr(settings, "ENABLE_GIT_METADATA_SYNC", False):
@@ -231,7 +391,6 @@ def commit_playlist_atomic(
         # Path to the playlist_info.json relative to base_path
         snapshot_json = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
         if not os.path.isfile(snapshot_json):
-            # Fallback to playlist root if not in snapshot dir
             snapshot_json = os.path.join(playlist_folder, "playlist_info.json")
             if not os.path.isfile(snapshot_json):
                 return False
@@ -250,26 +409,21 @@ def commit_playlist_atomic(
             # No changes in this playlist's metadata -> skip commit
             return False
 
-        # Compute deltas for commit message
-        added_ids, removed_ids, total_count = _compute_video_deltas(old_info, new_info)
+        # Compute delta summary for commit message
+        delta_summary = _format_playlist_delta(playlist_title, old_info, new_info)
 
-        # Build concise commit message with IDs
-        parts = []
-        if added_ids and removed_ids:
-            parts.append(f"+{len(added_ids)} added, -{len(removed_ids)} removed/private")
-            sample_ids = [f"-{vid}" for vid in removed_ids[:3]] + [f"+{vid}" for vid in added_ids[:3]]
-            parts.append(f"[IDs: {', '.join(sample_ids)}]")
-        elif removed_ids:
-            parts.append(f"-{len(removed_ids)} removed/private")
-            sample_ids = [f"{vid}" for vid in removed_ids[:5]]
-            parts.append(f"[ID{'s' if len(sample_ids) > 1 else ''}: {', '.join(sample_ids)}]")
-        elif added_ids:
-            parts.append(f"+{len(added_ids)} added")
-            sample_ids = [f"{vid}" for vid in added_ids[:5]]
-            parts.append(f"[ID{'s' if len(sample_ids) > 1 else ''}: {', '.join(sample_ids)}]")
-        else:
-            parts.append("Metadata updated")
+        # If inside an active batch session, register entry and defer commit
+        active_batch = _CURRENT_GIT_BATCH.get()
+        if active_batch is not None:
+            active_batch.staged_entries.append({
+                "title": playlist_title,
+                "summary": delta_summary,
+                "rel_path": rel_path
+            })
+            print(f"[GIT SYNC] Staged for batch commit: {delta_summary}")
+            return True
 
+        # Outside a batch session -> create immediate atomic commit
         prefix_map = {
             "scheduled": "[Daily Schedule]",
             "ondemand": "[On-Demand]",
@@ -277,16 +431,12 @@ def commit_playlist_atomic(
             "startup": "[Startup Scan]",
         }
         tag = prefix_map.get(source.lower(), f"[{source.capitalize()}]")
-        commit_env = {
-            "GIT_AUTHOR_NAME": getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"),
-            "GIT_AUTHOR_EMAIL": getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"),
-            "GIT_COMMITTER_NAME": getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"),
-            "GIT_COMMITTER_EMAIL": getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"),
-        }
+        commit_title = f"{tag} {delta_summary}"
+
+        commit_env = _get_git_commit_env()
         code, stdout, stderr = _run_git_cmd(["commit", "-m", commit_title, "--", rel_path], base_path, env_vars=commit_env)
         if code == 0:
             print(f"[GIT SYNC] ✓ Committed: {commit_title}")
-            # Asynchronously trigger push
             push_to_remote_async()
             return True
         else:

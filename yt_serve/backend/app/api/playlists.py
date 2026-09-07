@@ -2,17 +2,22 @@
 Playlist management API endpoints for multi-platform playlist operations
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
-from typing import List, Optional
+from typing import List, Optional, Set
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 from datetime import datetime
 import os
+import threading
 
 from app.models.database import get_db, Playlist
 from app.services.ytdlp_service import DownloadService
 from app.core.config import settings
 
 router = APIRouter()
+
+# Thread-safe in-flight playlist refresh tracker
+_ACTIVE_REFRESH_PLAYLISTS: Set[int] = set()
+_REFRESH_LOCK = threading.Lock()
 
 class PlaylistCreate(BaseModel):
     """Playlist creation model"""
@@ -82,6 +87,8 @@ async def refresh_playlist_stats_task(playlist_id: int):
         except Exception:
             pass
     finally:
+        with _REFRESH_LOCK:
+            _ACTIVE_REFRESH_PLAYLISTS.discard(playlist_id)
         db.close()
 
 @router.get("/", response_model=List[PlaylistResponse])
@@ -156,6 +163,12 @@ async def create_playlist(
         last_extract=None,
         excluded_ids=[]
     )
+
+@router.get("/active-refreshes", response_model=List[int])
+async def get_active_refreshes():
+    """Return list of playlist IDs currently actively being refreshed in the background"""
+    with _REFRESH_LOCK:
+        return list(_ACTIVE_REFRESH_PLAYLISTS)
 
 @router.get("/{playlist_id}", response_model=PlaylistResponse)
 async def get_playlist(playlist_id: int, db: Session = Depends(get_db)):
@@ -238,6 +251,14 @@ async def refresh_playlist(
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
+    with _REFRESH_LOCK:
+        if playlist_id in _ACTIVE_REFRESH_PLAYLISTS:
+            raise HTTPException(
+                status_code=409,
+                detail=f"A refresh is already actively in progress for '{playlist.title}'."
+            )
+        _ACTIVE_REFRESH_PLAYLISTS.add(playlist_id)
+
     # Refresh stats in background
     background_tasks.add_task(refresh_playlist_stats_task, playlist_id)
     

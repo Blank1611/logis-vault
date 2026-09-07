@@ -38,19 +38,9 @@ async def startup_event():
         playlists_list = db.query(Playlist).all()
         playlists_map = {p.id: p for p in playlists_list}
         
-        # Step 1: Check for interrupted jobs
-        logger.info("[STARTUP] Checking for interrupted jobs...")
-        interrupted_jobs = db.query(Job).filter(Job.status == 'running').all()
-        
-        if interrupted_jobs:
-            logger.warning(f"[STARTUP] Found {len(interrupted_jobs)} interrupted job(s):")
-            for job in interrupted_jobs:
-                playlist = playlists_map.get(job.playlist_id)
-                playlist_title = playlist.title if playlist else "Unknown Playlist"
-                logger.warning(f"  - Job #{job.id}: {job.job_type} for '{playlist_title}' (started {job.created_at})")
-            logger.info("[STARTUP] Interrupted jobs will be presented to the user via the UI recovery dialog.")
-        else:
-            logger.info("[STARTUP] No interrupted jobs found")
+        # Step 1: Startup crash recovery (interrupted jobs, git locks & metadata, temp files)
+        from app.services.recovery_service import RecoveryService
+        await RecoveryService.run_startup_recovery(db)
         
         # Two-Stage Startup Lifecycle
         from app.api.config import _check_needs_setup
@@ -85,25 +75,27 @@ async def startup_event():
                 "cookies_file": settings.COOKIES_FILE,
             })
             
-            for playlist in playlists_list:
-                try:
-                    local_count, available_count, unavailable_count = await download_service.get_playlist_stats(
-                        playlist.title,
-                        playlist.url,
-                        playlist.excluded_ids or [],
-                        source="startup"
-                    )
-                    
-                    playlist.local_count = local_count
-                    playlist.playlist_count = available_count
-                    playlist.unavailable_count = unavailable_count
-                    db.commit()
-                    
-                    status = "Caught up" if local_count >= available_count else f"{available_count - local_count} new"
-                    logger.info(f"[STARTUP] [REFRESH] {playlist.title}: {status} ({local_count}/{available_count})")
-                    
-                except Exception as e:
-                    logger.error(f"[STARTUP] [REFRESH] Error for {playlist.title}: {str(e)}")
+            from app.utils.git_sync import GitBatchSession
+            async with GitBatchSession(source="startup", label="Startup Scan"):
+                for playlist in playlists_list:
+                    try:
+                        local_count, available_count, unavailable_count = await download_service.get_playlist_stats(
+                            playlist.title,
+                            playlist.url,
+                            playlist.excluded_ids or [],
+                            source="startup"
+                        )
+                        
+                        playlist.local_count = local_count
+                        playlist.playlist_count = available_count
+                        playlist.unavailable_count = unavailable_count
+                        db.commit()
+                        
+                        status = "Caught up" if local_count >= available_count else f"{available_count - local_count} new"
+                        logger.info(f"[STARTUP] [REFRESH] {playlist.title}: {status} ({local_count}/{available_count})")
+                        
+                    except Exception as e:
+                        logger.error(f"[STARTUP] [REFRESH] Error for {playlist.title}: {str(e)}")
             
             logger.info("=" * 60)
             logger.info("[STARTUP] Startup complete!")

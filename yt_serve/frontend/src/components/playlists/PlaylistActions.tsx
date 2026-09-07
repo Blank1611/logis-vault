@@ -60,10 +60,16 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
         variant="primary"
         size={compact ? 'sm' : 'md'}
         onClick={() => onStartJob('both')}
-        disabled={isCaughtUp}
+        disabled={isCaughtUp || isScanning}
         icon={<PlayCircle className="w-4 h-4" />}
         className={compact ? '' : 'flex-[2]'}
-        title={isCaughtUp ? 'All available videos already downloaded' : 'Download and extract all missing tracks'}
+        title={
+          isScanning
+            ? 'Daily scheduled scan is currently in progress. Please wait for it to complete.'
+            : isCaughtUp
+            ? 'All available videos already downloaded'
+            : 'Download and extract all missing tracks'
+        }
       >
         {compact ? 'Download & Extract' : 'Download'}
       </Button>
@@ -73,9 +79,13 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
           variant="success"
           size="sm"
           onClick={() => onStartJob('download')}
-          disabled={isCaughtUp}
+          disabled={isCaughtUp || isScanning}
           icon={<Download className="w-4 h-4" />}
-          title="Download videos only without extraction"
+          title={
+            isScanning
+              ? 'Daily scheduled scan is currently in progress. Please wait for it to complete.'
+              : 'Download videos only without extraction'
+          }
         >
           Download Only
         </Button>
@@ -85,8 +95,13 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
         variant="secondary"
         size={compact ? 'sm' : 'md'}
         onClick={() => onStartJob('extract')}
+        disabled={isScanning}
         icon={<Music className="w-4 h-4 text-purple-600 dark:text-purple-400" />}
-        title="Extract Audio Only"
+        title={
+          isScanning
+            ? 'Daily scheduled scan is currently in progress. Please wait for it to complete.'
+            : 'Extract Audio Only'
+        }
         className={compact ? '' : 'px-3'}
       >
         {compact ? 'Extract' : ''}
@@ -106,7 +121,9 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
         }
         title={
           isScanning
-            ? 'Daily background auto-scan is currently in progress'
+            ? 'Daily background auto-scan is currently in progress. Please wait for it to complete.'
+            : isRefreshing
+            ? 'Refreshing playlist metadata...'
             : 'Refresh playlist metadata and check for new tracks'
         }
         className={compact ? '' : 'px-3'}

@@ -60,77 +60,6 @@ _cli_auto_discovery_interval = _resolve_cli_flag("--auto-discovery-interval")
 _cli_git_user_name = _resolve_cli_flag("--git.user.name")
 _cli_git_user_email = _resolve_cli_flag("--git.user.email")
 
-DEFAULT_ENV_TEMPLATE = """# ==============================================================================
-# YouTube Playlist Manager Configuration (yt_serve)
-# ==============================================================================
-
-# Root directory where playlists and media files will be saved (e.g. 2TB external HDD)
-BASE_DOWNLOAD_PATH=/downloads
-
-# Optional fast SSD directory for active fragment downloads & FFmpeg processing (e.g. /downloads-temp)
-# Leave commented or empty to download directly to BASE_DOWNLOAD_PATH
-# TEMP_DOWNLOAD_PATH=/downloads-temp
-
-# Audio extraction mode:
-# - copy: Stream copy AAC audio to .m4a / Opus to .opus without re-encoding (lossless & fastest)
-# - mp3_best: Re-encode to highest quality MP3 (VBR ~250-320 kbps)
-# - mp3_high: Re-encode to standard high quality MP3 (VBR ~190-250 kbps)
-# - opus: Re-encode to Opus codec (128 kbps)
-AUDIO_EXTRACT_MODE=copy
-
-# Concurrency limits
-MAX_CONCURRENT_EXTRACTIONS=4
-MAX_CONCURRENT_DOWNLOADS=1
-
-# Videos to process per batch (prevents platform rate limiting)
-BATCH_SIZE=200
-
-# Path to YouTube authentication cookies (Netscape format)
-# Upload via Web UI or specify path here
-# COOKIES_FILE=/app/data/cookies.txt
-
-# Experimental stream integrity validation via FFprobe (true/false)
-ENABLE_STREAM_INTEGRITY_CHECK=false
-
-# Anti-rate-limit sleep delay jitter (seconds between video downloads)
-SLEEP_INTERVAL_MIN=1
-SLEEP_INTERVAL_MAX=5
-
-# Concurrent DASH video stream fragments per download (1-16)
-CONCURRENT_FRAGMENTS=2
-
-# Automated Daily Background Refresh (24/7 Server Mode)
-ENABLE_DAILY_AUTO_REFRESH=true
-DAILY_REFRESH_TIME=04:00
-DAILY_REFRESH_TIMEZONE=Asia/Kolkata
-
-# Automated Git Metadata Sync & Versioning (uncomment and set to true when configured)
-ENABLE_GIT_METADATA_SYNC=false
-# GIT_REMOTE_URL=https://github.com/username/yt-playlists-metadata.git
-# GIT_AUTH_TOKEN=ghp_yourPersonalAccessTokenHere
-GIT_BRANCH=main
-# GIT_USER_NAME=YourName
-# GIT_USER_EMAIL=your.email@example.com
-
-# Optional FlareSolverr Proxy URL (e.g. http://flaresolverr:8191/v1)
-# FLARESOLVERR_URL=http://flaresolverr:8191/v1
-"""
-
-def _ensure_default_env_file():
-    """Auto-generate documented default config.env if not present on disk"""
-    try:
-        if not ENV_FILE.is_file():
-            # If parent directory exists (e.g. /app/data or backend), write template
-            if ENV_FILE.parent.is_dir():
-                with open(ENV_FILE, "w", encoding="utf-8") as f:
-                    f.write(DEFAULT_ENV_TEMPLATE)
-                print(f"[CONFIG] Generated default configuration template at: {ENV_FILE}")
-    except Exception as e:
-        print(f"[CONFIG] Note: Could not auto-generate default template file ({e})")
-
-# Check and auto-generate default config file on startup if needed
-_ensure_default_env_file()
-
 class Settings(BaseSettings):
     """Application settings"""
     
@@ -139,55 +68,142 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "YouTube Playlist Manager"
     
     # Database
-    DATABASE_PATH: str = _cli_db_path or "yt_manager.db"
+    DATABASE_PATH: str = Field(
+        default=_cli_db_path or "yt_manager.db",
+        description="Path to SQLite database file"
+    )
     
     # Download settings
-    BASE_DOWNLOAD_PATH: str = _cli_downloads_path or "downloads"
-    TEMP_DOWNLOAD_PATH: Optional[str] = _cli_temp_path or None
-    MAX_CONCURRENT_DOWNLOADS: int = 1
-    MAX_CONCURRENT_EXTRACTIONS: int = 4
+    BASE_DOWNLOAD_PATH: str = Field(
+        default=_cli_downloads_path or "downloads",
+        description="Root directory where playlists and media files will be saved"
+    )
+    TEMP_DOWNLOAD_PATH: Optional[str] = Field(
+        default=_cli_temp_path or None,
+        description="Optional fast SSD directory for active fragment downloads & FFmpeg processing"
+    )
+    MAX_CONCURRENT_DOWNLOADS: int = Field(
+        default=1,
+        description="Maximum concurrent video downloads"
+    )
+    MAX_CONCURRENT_EXTRACTIONS: int = Field(
+        default=4,
+        description="Maximum concurrent audio extractions"
+    )
     
     # Audio settings
-    AUDIO_EXTRACT_MODE: str = "copy"  # copy, mp3_best, mp3_high, opus
+    AUDIO_EXTRACT_MODE: str = Field(
+        default="copy",
+        description="Audio extraction mode: copy (lossless stream copy), mp3_best, mp3_high, opus"
+    )
     
     # Batch & Rate-Limiting Settings
-    BATCH_SIZE: int = 200
-    SLEEP_INTERVAL_MIN: int = 1
-    SLEEP_INTERVAL_MAX: int = 5
-    CONCURRENT_FRAGMENTS: int = 2
+    BATCH_SIZE: int = Field(
+        default=200,
+        description="Videos to process per batch"
+    )
+    SLEEP_INTERVAL_MIN: int = Field(
+        default=1,
+        description="Minimum sleep delay jitter in seconds between video downloads"
+    )
+    SLEEP_INTERVAL_MAX: int = Field(
+        default=5,
+        description="Maximum sleep delay jitter in seconds between video downloads"
+    )
+    CONCURRENT_FRAGMENTS: int = Field(
+        default=2,
+        description="Concurrent DASH video stream fragments per download (1-16)"
+    )
     
     # Daily Scheduler
-    ENABLE_DAILY_AUTO_REFRESH: bool = True
-    DAILY_REFRESH_TIME: str = "04:00"
-    DAILY_REFRESH_TIMEZONE: str = "Asia/Kolkata"
+    ENABLE_DAILY_AUTO_REFRESH: bool = Field(
+        default=True,
+        description="Automated daily background metadata refresh (24/7 Server Mode)"
+    )
+    DAILY_REFRESH_TIME: str = Field(
+        default="04:00",
+        description="Scheduled daily scan time in HH:MM format"
+    )
+    DAILY_REFRESH_TIMEZONE: str = Field(
+        default="Asia/Kolkata",
+        description="Timezone for scheduled daily scan"
+    )
     
     # Git Metadata Sync (Disabled by default until repository and token are configured)
-    ENABLE_GIT_METADATA_SYNC: bool = False
-    GIT_REMOTE_URL: Optional[str] = None
-    GIT_AUTH_TOKEN: Optional[str] = None
-    GIT_BRANCH: str = "main"
-    GIT_USER_NAME: str = "YouTube Playlist Manager"
-    GIT_USER_EMAIL: str = "yt-manager@homelab.local"
+    ENABLE_GIT_METADATA_SYNC: bool = Field(
+        default=False,
+        description="Enable automatic Git metadata versioning and sync"
+    )
+    GIT_REMOTE_URL: Optional[str] = Field(
+        default=None,
+        description="Remote Git repository URL (e.g. https://github.com/username/yt-metadata.git)"
+    )
+    GIT_AUTH_TOKEN: Optional[str] = Field(
+        default=None,
+        description="Git personal access token for remote push"
+    )
+    GIT_BRANCH: str = Field(
+        default="main",
+        description="Target Git branch name"
+    )
+    GIT_USER_NAME: str = Field(
+        default="YouTube Playlist Manager",
+        description="Git author & committer name for metadata commits"
+    )
+    GIT_USER_EMAIL: str = Field(
+        default="yt-manager@homelab.local",
+        description="Git author & committer email for metadata commits"
+    )
     
     # Cookies
-    COOKIES_FILE: Optional[str] = None
-    USE_BROWSER_COOKIES: bool = False
-    BROWSER_NAME: str = "chrome"
+    COOKIES_FILE: Optional[str] = Field(
+        default=None,
+        description="Path to YouTube authentication cookies (Netscape format)"
+    )
+    USE_BROWSER_COOKIES: bool = Field(
+        default=False,
+        description="Extract YouTube cookies directly from local browser"
+    )
+    BROWSER_NAME: str = Field(
+        default="chrome",
+        description="Browser to extract cookies from (chrome, firefox, etc.)"
+    )
     
     # Experimental Integrity Safeguards
-    ENABLE_STREAM_INTEGRITY_CHECK: bool = False
+    ENABLE_STREAM_INTEGRITY_CHECK: bool = Field(
+        default=False,
+        description="Validate video stream integrity via FFprobe"
+    )
     
     # FlareSolverr Proxy (Optional)
-    FLARESOLVERR_URL: Optional[str] = None
+    FLARESOLVERR_URL: Optional[str] = Field(
+        default=None,
+        description="Optional FlareSolverr proxy URL (e.g. http://flaresolverr:8191/v1)"
+    )
 
     # Auto-Discovery & Onboarding
-    ENABLE_AUTO_DISCOVERY: bool = True
-    AUTO_DISCOVERY_INTERVAL_MINUTES: int = 60  # 0 = on_startup_only
-    CLI_DISABLE_ONBOARDING: bool = False
+    ENABLE_AUTO_DISCOVERY: bool = Field(
+        default=True,
+        description="Automatically discover and import playlists from download directory on boot"
+    )
+    AUTO_DISCOVERY_INTERVAL_MINUTES: int = Field(
+        default=60,
+        description="Periodic auto-discovery interval in minutes (0 = startup only)"
+    )
+    CLI_DISABLE_ONBOARDING: bool = Field(
+        default=False,
+        description="Flag to bypass the initial onboarding setup wizard"
+    )
 
     # Ad-hoc / Single Video Downloads
-    ADHOC_DOWNLOAD_PATH: Optional[str] = None
-    USE_CUSTOM_ADHOC_PATH: bool = False
+    ADHOC_DOWNLOAD_PATH: Optional[str] = Field(
+        default=None,
+        description="Custom directory for ad-hoc / single video downloads"
+    )
+    USE_CUSTOM_ADHOC_PATH: bool = Field(
+        default=False,
+        description="Whether to use ADHOC_DOWNLOAD_PATH instead of default _adhoc_downloads"
+    )
 
     def get_adhoc_download_path(self) -> str:
         """Resolve absolute ad-hoc downloads directory"""
@@ -258,5 +274,90 @@ class Settings(BaseSettings):
                 print(f"  Temp SSD download path ready: {self.TEMP_DOWNLOAD_PATH}")
             except Exception as e:
                 print(f"  Warning: Could not create temp download path {self.TEMP_DOWNLOAD_PATH}: {e}")
+
+
+def generate_default_env() -> str:
+    """Dynamically generate clean, documented .env content from Settings schema"""
+    lines = [
+        "# ==============================================================================",
+        "# YouTube Playlist Manager Configuration (yt_serve)",
+        "# ==============================================================================",
+        "# Auto-generated from Settings schema\n"
+    ]
+
+    sections = {
+        "Storage & Directories": [
+            "BASE_DOWNLOAD_PATH", "TEMP_DOWNLOAD_PATH", "DATABASE_PATH",
+            "ADHOC_DOWNLOAD_PATH", "USE_CUSTOM_ADHOC_PATH"
+        ],
+        "Extraction & Concurrency": [
+            "AUDIO_EXTRACT_MODE", "MAX_CONCURRENT_DOWNLOADS",
+            "MAX_CONCURRENT_EXTRACTIONS", "BATCH_SIZE"
+        ],
+        "Rate-Limiting & Network": [
+            "SLEEP_INTERVAL_MIN", "SLEEP_INTERVAL_MAX", "CONCURRENT_FRAGMENTS",
+            "ENABLE_STREAM_INTEGRITY_CHECK", "FLARESOLVERR_URL"
+        ],
+        "Cookies & Authentication": [
+            "USE_BROWSER_COOKIES", "BROWSER_NAME", "COOKIES_FILE"
+        ],
+        "Daily Automation & Scheduler": [
+            "ENABLE_DAILY_AUTO_REFRESH", "DAILY_REFRESH_TIME",
+            "DAILY_REFRESH_TIMEZONE", "ENABLE_AUTO_DISCOVERY", "AUTO_DISCOVERY_INTERVAL_MINUTES"
+        ],
+        "Git Metadata Sync & Versioning": [
+            "ENABLE_GIT_METADATA_SYNC", "GIT_REMOTE_URL", "GIT_AUTH_TOKEN",
+            "GIT_BRANCH", "GIT_USER_NAME", "GIT_USER_EMAIL"
+        ],
+    }
+
+    categorized = set()
+    for cat_name, field_names in sections.items():
+        lines.append(f"# --- {cat_name} ---")
+        for fn in field_names:
+            if fn in Settings.model_fields:
+                categorized.add(fn)
+                f_info = Settings.model_fields[fn]
+                if f_info.description:
+                    lines.append(f"# {f_info.description}")
+                val = f_info.default
+                if val is None or val == "":
+                    lines.append(f"#{fn}=")
+                elif isinstance(val, bool):
+                    lines.append(f"{fn}={'true' if val else 'false'}")
+                else:
+                    lines.append(f"{fn}={val}")
+                lines.append("")
+
+    for fn, f_info in Settings.model_fields.items():
+        if fn in categorized or fn.startswith("_") or fn in ("API_V1_STR", "PROJECT_NAME", "CLI_DISABLE_ONBOARDING"):
+            continue
+        if f_info.description:
+            lines.append(f"# {f_info.description}")
+        val = f_info.default
+        if val is None or val == "":
+            lines.append(f"#{fn}=")
+        elif isinstance(val, bool):
+            lines.append(f"{fn}={'true' if val else 'false'}")
+        else:
+            lines.append(f"{fn}={val}")
+        lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def _ensure_default_env_file():
+    """Auto-generate documented default config.env if not present on disk"""
+    try:
+        if not ENV_FILE.is_file():
+            if ENV_FILE.parent.is_dir():
+                with open(ENV_FILE, "w", encoding="utf-8") as f:
+                    f.write(generate_default_env())
+                print(f"[CONFIG] Generated default configuration template from schema at: {ENV_FILE}")
+    except Exception as e:
+        print(f"[CONFIG] Note: Could not auto-generate default template file ({e})")
+
+
+_ensure_default_env_file()
 
 settings = Settings()

@@ -132,6 +132,13 @@ async def create_job(
     db: Session = Depends(get_db)
 ):
     """Create a new download/extract job"""
+    from app.services.scheduler import is_scheduler_scanning
+    if is_scheduler_scanning():
+        raise HTTPException(
+            status_code=409,
+            detail="Daily scheduled metadata scan is currently in progress. Please wait for it to complete."
+        )
+
     # Check if playlist exists
     playlist = db.query(Playlist).filter(Playlist.id == job.playlist_id).first()
     if not playlist:

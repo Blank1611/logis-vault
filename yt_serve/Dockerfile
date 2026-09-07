@@ -40,7 +40,9 @@ RUN groupadd -g 1000 appuser && \
 EXPOSE 8000
 
 # Default environment variables
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/backend
+
 
 # Run container as unprivileged appuser (supports custom UID/GID or group_add override)
 USER appuser

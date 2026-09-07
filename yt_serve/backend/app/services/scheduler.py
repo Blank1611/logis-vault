@@ -155,34 +155,36 @@ async def run_daily_metadata_refresh():
             "cookies_file": settings.COOKIES_FILE,
         })
 
+        from app.utils.git_sync import GitBatchSession
         refreshed_count = 0
-        for idx, playlist in enumerate(playlists_list, start=1):
-            _SCHEDULER_STATE["current_playlist"] = playlist.title
-            _SCHEDULER_STATE["completed_count"] = idx - 1
+        async with GitBatchSession(source="scheduled", label="Daily Schedule"):
+            for idx, playlist in enumerate(playlists_list, start=1):
+                _SCHEDULER_STATE["current_playlist"] = playlist.title
+                _SCHEDULER_STATE["completed_count"] = idx - 1
 
-            try:
-                print(f"[SCHEDULER] ({idx}/{len(playlists_list)}) Scanning: '{playlist.title}'...", end=" ", flush=True)
-                local_count, available_count, unavailable_count = await download_service.get_playlist_stats(
-                    playlist.title,
-                    playlist.url,
-                    playlist.excluded_ids or [],
-                    source="scheduled"
-                )
+                try:
+                    print(f"[SCHEDULER] ({idx}/{len(playlists_list)}) Scanning: '{playlist.title}'...", end=" ", flush=True)
+                    local_count, available_count, unavailable_count = await download_service.get_playlist_stats(
+                        playlist.title,
+                        playlist.url,
+                        playlist.excluded_ids or [],
+                        source="scheduled"
+                    )
 
-                playlist.local_count = local_count
-                playlist.playlist_count = available_count
-                playlist.unavailable_count = unavailable_count
-                db.commit()
+                    playlist.local_count = local_count
+                    playlist.playlist_count = available_count
+                    playlist.unavailable_count = unavailable_count
+                    db.commit()
 
-                status = "Caught up" if local_count >= available_count else f"{available_count - local_count} new"
-                print(f"✓ {status} ({local_count}/{available_count})")
-                refreshed_count += 1
+                    status = "Caught up" if local_count >= available_count else f"{available_count - local_count} new"
+                    print(f"✓ {status} ({local_count}/{available_count})")
+                    refreshed_count += 1
 
-                # 2-second rate-limit pause between playlists
-                await asyncio.sleep(2)
+                    # 2-second rate-limit pause between playlists
+                    await asyncio.sleep(2)
 
-            except Exception as item_err:
-                print(f"✗ Error: {item_err}")
+                except Exception as item_err:
+                    print(f"✗ Error: {item_err}")
 
         _SCHEDULER_STATE["completed_count"] = len(playlists_list)
         _SCHEDULER_STATE["last_scan_at"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')

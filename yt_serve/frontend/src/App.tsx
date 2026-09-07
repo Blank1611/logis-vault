@@ -70,6 +70,12 @@ function AppContent() {
   const handleWebSocketEvent = useCallback((type: string, data: any) => {
     if (type === 'playlist_updated') {
       addActivityLog('WebSocket', 'playlist_updated', `Playlist update signal received (ID: ${data?.playlist_id || 'all'})`, 'info')
+      setRefreshingPlaylistId(prev => {
+        if (!data?.playlist_id || prev === data.playlist_id) {
+          return null
+        }
+        return prev
+      })
       queryClient.invalidateQueries({ queryKey: ['playlists'] })
       queryClient.refetchQueries({ queryKey: ['playlists'] })
     } else if (type === 'connected') {
@@ -198,11 +204,14 @@ function AppContent() {
       setRefreshingPlaylistId(id)
       return playlistsApi.refresh(id)
     },
-    onSettled: () => {
-      setRefreshingPlaylistId(null)
-      queryClient.invalidateQueries({ queryKey: ['playlists'] })
+    onSuccess: (_, id) => {
+      // Safety timeout: reset loading spinner after 30s in case WebSocket notification drops
+      setTimeout(() => {
+        setRefreshingPlaylistId(prev => prev === id ? null : prev)
+      }, 30000)
     },
     onError: (err: any) => {
+      setRefreshingPlaylistId(null)
       const msg = err.response?.data?.detail || err.message
       alert(`Cannot refresh playlist:\n\n${msg}`)
     },
@@ -213,6 +222,10 @@ function AppContent() {
       jobsApi.create(playlistId, jobType),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+    onError: (err: any) => {
+      const msg = err.response?.data?.detail || err.message
+      alert(`Cannot start job:\n\n${msg}`)
     },
   })
 
