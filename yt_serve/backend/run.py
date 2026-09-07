@@ -62,10 +62,31 @@ def parse_args():
         help="Logging verbosity level (default: info)"
     )
     
+    parser.add_argument(
+        "--git.user.name",
+        dest="git_user_name",
+        type=str,
+        default=None,
+        help="Git committer/author name for playlist metadata versioning (e.g. Blank1611)"
+    )
+    
+    parser.add_argument(
+        "--git.user.email",
+        dest="git_user_email",
+        type=str,
+        default=None,
+        help="Git committer/author email for playlist metadata versioning (e.g. your.email@example.com)"
+    )
+    
     return parser.parse_known_args()
 
 if __name__ == "__main__":
     args, unknown = parse_args()
+    
+    if args.git_user_name:
+        os.environ["GIT_USER_NAME"] = args.git_user_name
+    if args.git_user_email:
+        os.environ["GIT_USER_EMAIL"] = args.git_user_email
     
     # Parse host and port from --web.listen-address
     host = "0.0.0.0"

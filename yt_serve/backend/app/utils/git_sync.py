@@ -116,11 +116,11 @@ def ensure_git_repo(base_path: str) -> bool:
                 print(f"[GIT SYNC] Failed to git init in {base_path}: {stderr}")
                 return False
 
-        # Set fallback committer identity only if not already configured globally or locally
-        code_name, out_name, _ = _run_git_cmd(["config", "user.name"], base_path)
-        if code_name != 0 or not out_name.strip():
-            _run_git_cmd(["config", "user.name", "YouTube Playlist Manager"], base_path)
-            _run_git_cmd(["config", "user.email", "yt-manager@homelab.local"], base_path)
+        # Set committer identity from settings or defaults
+        user_name = getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager")
+        user_email = getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local")
+        _run_git_cmd(["config", "user.name", user_name], base_path)
+        _run_git_cmd(["config", "user.email", user_email], base_path)
 
         # Initial commit with .gitignore
         _run_git_cmd(["add", ".gitignore"], base_path)
@@ -277,9 +277,13 @@ def commit_playlist_atomic(
             "startup": "[Startup Scan]",
         }
         tag = prefix_map.get(source.lower(), f"[{source.capitalize()}]")
-        commit_title = f"{tag} Update '{playlist_title}': {' '.join(parts)} (Total: {total_count})"
-
-        code, stdout, stderr = _run_git_cmd(["commit", "-m", commit_title, "--", rel_path], base_path)
+        commit_env = {
+            "GIT_AUTHOR_NAME": getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"),
+            "GIT_AUTHOR_EMAIL": getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"),
+            "GIT_COMMITTER_NAME": getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"),
+            "GIT_COMMITTER_EMAIL": getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"),
+        }
+        code, stdout, stderr = _run_git_cmd(["commit", "-m", commit_title, "--", rel_path], base_path, env_vars=commit_env)
         if code == 0:
             print(f"[GIT SYNC] ✓ Committed: {commit_title}")
             # Asynchronously trigger push

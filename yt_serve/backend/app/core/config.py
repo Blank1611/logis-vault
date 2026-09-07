@@ -55,8 +55,9 @@ _cli_downloads_path = _resolve_cli_flag("--storage.downloads.path")
 _cli_temp_path = _resolve_cli_flag("--storage.temp.path")
 _cli_disable_onboarding = _has_cli_flag(["--disable-onboarding", "--no-onboarding", "--no_onboarding", "--disable_onboarding"])
 _cli_enable_auto_discovery = _has_cli_flag(["--enable-auto-discovery", "--auto-discovery"])
-_cli_no_auto_discovery = _has_cli_flag(["--no-auto-discovery", "--disable-auto-discovery"])
 _cli_auto_discovery_interval = _resolve_cli_flag("--auto-discovery-interval")
+_cli_git_user_name = _resolve_cli_flag("--git.user.name")
+_cli_git_user_email = _resolve_cli_flag("--git.user.email")
 
 DEFAULT_ENV_TEMPLATE = """# ==============================================================================
 # YouTube Playlist Manager Configuration (yt_serve)
@@ -107,6 +108,8 @@ ENABLE_GIT_METADATA_SYNC=false
 # GIT_REMOTE_URL=https://github.com/username/yt-playlists-metadata.git
 # GIT_AUTH_TOKEN=ghp_yourPersonalAccessTokenHere
 GIT_BRANCH=main
+# GIT_USER_NAME=YourName
+# GIT_USER_EMAIL=your.email@example.com
 
 # Optional FlareSolverr Proxy URL (e.g. http://flaresolverr:8191/v1)
 # FLARESOLVERR_URL=http://flaresolverr:8191/v1
@@ -162,6 +165,8 @@ class Settings(BaseSettings):
     GIT_REMOTE_URL: Optional[str] = None
     GIT_AUTH_TOKEN: Optional[str] = None
     GIT_BRANCH: str = "main"
+    GIT_USER_NAME: str = "YouTube Playlist Manager"
+    GIT_USER_EMAIL: str = "yt-manager@homelab.local"
     
     # Cookies
     COOKIES_FILE: Optional[str] = None
@@ -220,6 +225,10 @@ class Settings(BaseSettings):
                 self.AUTO_DISCOVERY_INTERVAL_MINUTES = int(_cli_auto_discovery_interval)
             except ValueError:
                 pass
+        if _cli_git_user_name:
+            self.GIT_USER_NAME = _cli_git_user_name
+        if _cli_git_user_email:
+            self.GIT_USER_EMAIL = _cli_git_user_email
         
         # Normalize empty string temp path to None
         if self.TEMP_DOWNLOAD_PATH and not self.TEMP_DOWNLOAD_PATH.strip():

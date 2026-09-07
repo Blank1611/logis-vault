@@ -313,6 +313,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDed
     if (formData.git_branch !== undefined) {
       validated.git_branch = formData.git_branch?.trim() || 'main'
     }
+
+    if (formData.git_user_name !== undefined) {
+      validated.git_user_name = formData.git_user_name?.trim() || 'YouTube Playlist Manager'
+    }
+
+    if (formData.git_user_email !== undefined) {
+      validated.git_user_email = formData.git_user_email?.trim() || 'yt-manager@homelab.local'
+    }
     
     if (formData.cookies_file !== undefined) {
       validated.cookies_file = formData.cookies_file?.trim() || null
@@ -990,6 +998,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDed
                         />
                       </div>
                     </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                          Git Committer / Author Name
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.git_user_name || ''}
+                          onChange={(e) => setFormData({ ...formData, git_user_name: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs"
+                          placeholder="e.g. Blank1611 or YouTube Playlist Manager"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                          Git Committer / Author Email
+                        </label>
+                        <input
+                          type="email"
+                          value={formData.git_user_email || ''}
+                          onChange={(e) => setFormData({ ...formData, git_user_email: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs"
+                          placeholder="e.g. your.email@example.com"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                      Tip: Use your GitHub account email address so commits link directly to your profile avatar and contribution graph.
+                    </p>
 
                     <button
                       type="button"

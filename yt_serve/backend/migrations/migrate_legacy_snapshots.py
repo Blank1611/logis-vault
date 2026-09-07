@@ -279,7 +279,11 @@ def _format_group_commit_message(
     return f"{subject}\n\n{body}"
 
 
-def get_git_diagnostics(base_path: str) -> Dict[str, str]:
+def get_git_diagnostics(
+    base_path: str,
+    override_author_name: Optional[str] = None,
+    override_author_email: Optional[str] = None
+) -> Dict[str, str]:
     """Retrieve Git configuration and repository state for diagnostics inspection"""
     diag = {
         "git_available": "NO",
@@ -317,20 +321,6 @@ def get_git_diagnostics(base_path: str) -> Dict[str, str]:
         else:
             diag["branch"] = "main"
 
-        # Author Name
-        c, n_out, _ = _run_git_cmd(["config", "user.name"], cwd=base_path)
-        if c == 0 and n_out:
-            diag["author_name"] = n_out
-        else:
-            diag["author_name"] = os.environ.get("GIT_AUTHOR_NAME", "YouTube Playlist Manager (Default)")
-
-        # Author Email
-        c, e_out, _ = _run_git_cmd(["config", "user.email"], cwd=base_path)
-        if c == 0 and e_out:
-            diag["author_email"] = e_out
-        else:
-            diag["author_email"] = os.environ.get("GIT_AUTHOR_EMAIL", "yt-manager@homelab.local (Default)")
-
         # Remote URL
         c, r_out, _ = _run_git_cmd(["remote", "-v"], cwd=base_path)
         if c == 0 and r_out:
@@ -343,13 +333,34 @@ def get_git_diagnostics(base_path: str) -> Dict[str, str]:
         c, count_out, _ = _run_git_cmd(["rev-list", "--count", "HEAD"], cwd=base_path)
         if c == 0 and count_out:
             diag["commit_count"] = count_out
-    else:
-        # Check global config or defaults if repo not yet initialized
-        c, n_out, _ = _run_git_cmd(["config", "--global", "user.name"], cwd=base_path)
-        diag["author_name"] = n_out if (c == 0 and n_out) else os.environ.get("GIT_AUTHOR_NAME", "YouTube Playlist Manager (Default)")
 
-        c, e_out, _ = _run_git_cmd(["config", "--global", "user.email"], cwd=base_path)
-        diag["author_email"] = e_out if (c == 0 and e_out) else os.environ.get("GIT_AUTHOR_EMAIL", "yt-manager@homelab.local (Default)")
+    # Resolve author name
+    if override_author_name and override_author_name.strip():
+        diag["author_name"] = override_author_name.strip()
+    elif os.environ.get("GIT_AUTHOR_NAME"):
+        diag["author_name"] = os.environ["GIT_AUTHOR_NAME"]
+    elif getattr(settings, "GIT_USER_NAME", None) and getattr(settings, "GIT_USER_NAME") != "YouTube Playlist Manager":
+        diag["author_name"] = getattr(settings, "GIT_USER_NAME")
+    else:
+        c, n_out, _ = _run_git_cmd(["config", "user.name"], cwd=base_path)
+        if c == 0 and n_out:
+            diag["author_name"] = n_out
+        else:
+            diag["author_name"] = getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager")
+
+    # Resolve author email
+    if override_author_email and override_author_email.strip():
+        diag["author_email"] = override_author_email.strip()
+    elif os.environ.get("GIT_AUTHOR_EMAIL"):
+        diag["author_email"] = os.environ["GIT_AUTHOR_EMAIL"]
+    elif getattr(settings, "GIT_USER_EMAIL", None) and getattr(settings, "GIT_USER_EMAIL") != "yt-manager@homelab.local":
+        diag["author_email"] = getattr(settings, "GIT_USER_EMAIL")
+    else:
+        c, e_out, _ = _run_git_cmd(["config", "user.email"], cwd=base_path)
+        if c == 0 and e_out:
+            diag["author_email"] = e_out
+        else:
+            diag["author_email"] = getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local")
 
     return diag
 
@@ -376,6 +387,8 @@ def run_migration(
     base_path: str,
     group_by: str = "session",
     window_minutes: int = 15,
+    author_name: Optional[str] = None,
+    author_email: Optional[str] = None,
     dry_run: bool = False,
     cleanup_legacy: bool = False,
     push: bool = False,
@@ -393,7 +406,7 @@ def run_migration(
     print("=" * 70)
 
     # 1. Print Pre-flight Git Diagnostics
-    pre_diag = get_git_diagnostics(base_path)
+    pre_diag = get_git_diagnostics(base_path, override_author_name=author_name, override_author_email=author_email)
     print_git_diagnostics(pre_diag, "PRE-FLIGHT GIT ENVIRONMENT CHECK")
 
     # 2. Discover snapshots
@@ -625,6 +638,18 @@ def main():
         help="Maximum gap in minutes between consecutive playlist snapshots to consider them part of the same scan session (default: 15)"
     )
     parser.add_argument(
+        "--author-name",
+        type=str,
+        default="",
+        help="Git committer/author name (defaults to settings.GIT_USER_NAME or Blank1611)"
+    )
+    parser.add_argument(
+        "--author-email",
+        type=str,
+        default="",
+        help="Git committer/author email (defaults to settings.GIT_USER_EMAIL or nikhilpatil.patil0@gmail.com)"
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Simulate and print the grouped timeline without making file changes or Git commits"
@@ -655,6 +680,8 @@ def main():
         base_path=target_base_path,
         group_by=args.group_by,
         window_minutes=args.window_minutes,
+        author_name=args.author_name or None,
+        author_email=args.author_email or None,
         dry_run=args.dry_run,
         cleanup_legacy=args.cleanup_legacy,
         push=args.push,

@@ -31,6 +31,8 @@ class ConfigResponse(BaseModel):
     git_remote_url: Optional[str] = None
     git_auth_token: Optional[str] = None
     git_branch: str = "main"
+    git_user_name: str = "YouTube Playlist Manager"
+    git_user_email: str = "yt-manager@homelab.local"
     cookies_file: Optional[str]
     use_browser_cookies: bool
     browser_name: str
@@ -62,6 +64,8 @@ class ConfigUpdate(BaseModel):
     git_remote_url: Optional[str] = None
     git_auth_token: Optional[str] = None
     git_branch: Optional[str] = None
+    git_user_name: Optional[str] = None
+    git_user_email: Optional[str] = None
     cookies_file: Optional[str] = None
     use_browser_cookies: Optional[bool] = None
     browser_name: Optional[str] = None
@@ -119,6 +123,8 @@ async def get_config(db: Session = Depends(get_db)):
         git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
         git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
         git_branch=getattr(settings, "GIT_BRANCH", "main") or "main",
+        git_user_name=get_system_setting("git_user_name", default=getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"), db=db),
+        git_user_email=get_system_setting("git_user_email", default=getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"), db=db),
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
@@ -181,6 +187,10 @@ def _save_to_env(config: ConfigUpdate):
         env_content['GIT_AUTH_TOKEN'] = config.git_auth_token if config.git_auth_token else ''
     if config.git_branch is not None:
         env_content['GIT_BRANCH'] = config.git_branch
+    if config.git_user_name is not None:
+        env_content['GIT_USER_NAME'] = config.git_user_name
+    if config.git_user_email is not None:
+        env_content['GIT_USER_EMAIL'] = config.git_user_email
     if config.cookies_file is not None:
         env_content['COOKIES_FILE'] = config.cookies_file if config.cookies_file else ''
     if config.use_browser_cookies is not None:
@@ -245,6 +255,14 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         settings.GIT_AUTH_TOKEN = config.git_auth_token
     if config.git_branch is not None:
         settings.GIT_BRANCH = config.git_branch
+    if config.git_user_name is not None:
+        settings.GIT_USER_NAME = config.git_user_name
+        from app.models.database import set_system_setting
+        set_system_setting("git_user_name", config.git_user_name, db=db)
+    if config.git_user_email is not None:
+        settings.GIT_USER_EMAIL = config.git_user_email
+        from app.models.database import set_system_setting
+        set_system_setting("git_user_email", config.git_user_email, db=db)
     if config.cookies_file is not None:
         settings.COOKIES_FILE = config.cookies_file
     if config.use_browser_cookies is not None:

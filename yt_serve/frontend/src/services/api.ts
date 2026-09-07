@@ -144,6 +144,8 @@ export interface Config {
   git_remote_url?: string | null
   git_auth_token?: string | null
   git_branch?: string
+  git_user_name?: string
+  git_user_email?: string
   cookies_file: string | null
   use_browser_cookies: boolean
   browser_name: string
