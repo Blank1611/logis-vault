@@ -1,0 +1,98 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Docker: List Images",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+                "--list"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/yt_serve"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true
+            }
+        },
+        {
+            "label": "Docker: Build Test Image",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+                "-e",
+                "test"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/yt_serve"
+            },
+            "group": "test",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Docker: Build Dev Image",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+                "-e",
+                "dev"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/yt_serve"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Docker: Rollback to Previous Release",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+                "--rollback"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/yt_serve"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Docker: Prune Old Images",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+                "--prune"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/yt_serve"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        }
+    ]
+}

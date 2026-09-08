@@ -1,4 +1,6 @@
-# Stage 1: Build frontend
+# ==============================================================================
+# Stage 1: Build Frontend Assets (React + Vite)
+# ==============================================================================
 FROM node:18-alpine AS frontend-builder
 WORKDIR /app/frontend
 
@@ -8,24 +10,47 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Backend with Python
-FROM python:3.14-slim AS runner
+# ==============================================================================
+# Stage 2: Shared Backend Base (Python 3.14 + Static FFmpeg + Git + Dependencies)
+# ==============================================================================
+FROM python:3.14-slim AS backend-base
 WORKDIR /app/backend
 
-# Install ffmpeg and git for metadata versioning
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+# Copy static precompiled FFmpeg and FFprobe binaries (reduces image by ~500 MB)
+COPY --from=mwader/static-ffmpeg:6.1 /ffmpeg /ffprobe /usr/local/bin/
 
-# Install python dependencies
+# Install git for metadata versioning & clean up apt caches in same layer
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
+
+# Install python dependencies (layer cached unless requirements.txt changes)
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Default environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/backend
+
+# ==============================================================================
+# Stage 3: Test Target (Fast Backend Unit, Integration & Recovery Tests)
+# ==============================================================================
+FROM backend-base AS backend-test
+# Copy backend source code & tests (skips Node/frontend compilation entirely!)
+COPY backend/ ./
+
+# Test entrypoint: runs automated test suite
+ENTRYPOINT ["python", "-m", "unittest", "discover", "tests"]
+
+# ==============================================================================
+# Stage 4: Production Runner (Full-Stack Container with Compiled Static Assets)
+# ==============================================================================
+FROM backend-base AS runner
 
 # Copy backend source code
 COPY backend/ ./
 
-# Copy compiled frontend static assets to backend/static
+# Copy compiled frontend static assets from frontend-builder stage
 COPY --from=frontend-builder /app/frontend/dist ./static
 
 # Create non-root appuser (UID 1000 / GID 1000) and state directories
@@ -36,15 +61,10 @@ RUN groupadd -g 1000 appuser && \
     chmod 777 /downloads /downloads-temp /app/data && \
     chmod -R 775 /app
 
-# Expose unified port
+# Expose unified web application port
 EXPOSE 8000
 
-# Default environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app/backend
-
-
-# Run container as unprivileged appuser (supports custom UID/GID or group_add override)
+# Run container as unprivileged appuser
 USER appuser
 
 # Cloud-native entrypoint and default argument list

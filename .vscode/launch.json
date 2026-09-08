@@ -1,0 +1,113 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Docker: List Images (--list)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+            "args": ["--list"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/yt_serve"
+        },
+        {
+            "name": "Docker: Build Test Image (-e test)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+            "args": ["-e", "test"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/yt_serve"
+        },
+        {
+            "name": "Docker: Build Dev Image (-e dev)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+            "args": ["-e", "dev"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/yt_serve"
+        },
+        {
+            "name": "Docker: Promote Latest Dev to Prod (-e prod --from-dev)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+            "args": ["-e", "prod", "-v", "${input:releaseVersion}", "--from-dev"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/yt_serve"
+        },
+        {
+            "name": "Docker: Promote Specific Dev SHA to Prod",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+            "args": ["-e", "prod", "-v", "${input:releaseVersion}", "--from-dev", "${input:devSha}"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/yt_serve"
+        },
+        {
+            "name": "Docker: Build Prod from Source (-e prod)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+            "args": ["-e", "prod", "-v", "${input:releaseVersion}"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/yt_serve"
+        },
+        {
+            "name": "Docker: Rollback to Previous Release (--rollback)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+            "args": ["--rollback"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/yt_serve"
+        },
+        {
+            "name": "Docker: Rollback to Specific Version",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+            "args": ["--rollback", "${input:rollbackVersion}"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/yt_serve"
+        },
+        {
+            "name": "Docker: Promote Existing to Latest",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+            "args": ["--promote-latest", "${input:releaseVersion}"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/yt_serve"
+        },
+        {
+            "name": "Docker: Prune Old Dev Images (--prune)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
+            "args": ["--prune"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/yt_serve"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "releaseVersion",
+            "type": "promptString",
+            "description": "Enter semantic production release version (e.g. v2.0.0):",
+            "default": "v2.0.0"
+        },
+        {
+            "id": "devSha",
+            "type": "promptString",
+            "description": "Enter dev commit SHA to promote (e.g. e066c18):"
+        },
+        {
+            "id": "rollbackVersion",
+            "type": "promptString",
+            "description": "Enter target version to roll back to (e.g. v1.9.0):"
+        }
+    ]
+}

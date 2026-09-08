@@ -29,11 +29,11 @@ logs/
 *.log
 
 # IDE & Agent Configs
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
 .idea/
-.agents/
 GEMINI.md
-AGENTS.md
 
 # Node.js / Frontend
 node_modules/
