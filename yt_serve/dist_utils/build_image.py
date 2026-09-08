@@ -31,7 +31,7 @@ COLOR_BOLD = "\033[1m"
 class StandardLogFormatter(logging.Formatter):
     """
     Standard Structured Formatter matching yt_serve backend logging engine:
-    [%(asctime)s] [%(levelname)-7s] [%(name)s] %(message)s
+    [%(asctime)s] [%(levelname)s] [%(name)s] %(message)s
     """
     def __init__(self, use_colors: bool = True):
         super().__init__(datefmt="%Y-%m-%d %H:%M:%S")
@@ -42,15 +42,15 @@ class StandardLogFormatter(logging.Formatter):
         levelname = record.levelname
         if self.use_colors:
             if record.levelno >= logging.ERROR:
-                level_str = f"{COLOR_RED}{levelname:<7}{COLOR_RESET}"
+                level_str = f"{COLOR_RED}{levelname}{COLOR_RESET}"
             elif record.levelno >= logging.WARNING:
-                level_str = f"{COLOR_YELLOW}{levelname:<7}{COLOR_RESET}"
+                level_str = f"{COLOR_YELLOW}{levelname}{COLOR_RESET}"
             elif record.levelno >= logging.INFO:
-                level_str = f"{COLOR_CYAN}{levelname:<7}{COLOR_RESET}"
+                level_str = f"{COLOR_CYAN}{levelname}{COLOR_RESET}"
             else:
-                level_str = f"{levelname:<7}"
+                level_str = levelname
         else:
-            level_str = f"{levelname:<7}"
+            level_str = levelname
         return f"[{asctime}] [{level_str}] [{record.name}] {record.getMessage()}"
 
 
@@ -482,42 +482,74 @@ def action_rollback(
 
 
 def action_prune(keep_n: int = 3, dry_run: bool = False):
-    """Clean up old dev images, test image, and dangling build cache layers."""
-    logger.info(f"Pruning local images (keeping {keep_n} most recent dev builds)...")
+    """
+    Clean up stale dev images, test images, and untagged build layers strictly scoped to yt_serve.
+    Lists all candidate tags prior to deletion and preserves production releases.
+    Scoped to project='yt_serve' via Docker label filtering.
+    """
+    logger.info(f"Scanning local 'yt_serve' images for pruning (retention limit: {keep_n} newest dev builds)...")
     images = get_local_images()
 
+    prod_images = []
     dev_images = []
     test_images = []
 
     for img in images:
         tag = img["tag"]
         if ":test" in tag:
-            test_images.append(tag)
+            test_images.append(img)
+        elif re.search(r":v\d+\.\d+\.\d+", tag) or tag.endswith(":latest"):
+            prod_images.append(img)
         elif ":dev-" in tag:
             dev_images.append(img)
 
     # Sort dev images newest first by creation timestamp string
     dev_images.sort(key=lambda x: x["created"], reverse=True)
 
-    remove_tags = []
-    # Test images always removed on prune
-    remove_tags.extend(test_images)
+    kept_dev = dev_images[:keep_n]
+    prune_dev = dev_images[keep_n:]
+    prune_candidates = test_images + prune_dev
 
-    # Remove dev images beyond keep_n
-    if len(dev_images) > keep_n:
-        for old in dev_images[keep_n:]:
-            remove_tags.append(old["tag"])
+    print("\n" + "=" * 88)
+    print(f"{COLOR_BOLD}PRUNE SCOPING: LOCAL yt_serve ARTIFACTS{COLOR_RESET}")
+    print("=" * 88)
 
-    if remove_tags:
-        for t in remove_tags:
-            logger.info(f"Removing image '{t}'...")
-            run_command(["docker", "rmi", t], dry_run=dry_run)
-        log_success(f"Removed {len(remove_tags)} stale image tags.")
+    # Display Protected / Retained Images
+    print(f"{COLOR_GREEN}[RETAINED RELEASES & ACTIVE BUILDS]{COLOR_RESET}")
+    if prod_images:
+        for p in prod_images:
+            print(f"  ★ PROD  {p['tag']:<34} {p['id']:<14} {p['size']:<10} {p['created']}")
+    for k in kept_dev:
+        print(f"  ✔ DEV   {k['tag']:<34} {k['id']:<14} {k['size']:<10} {k['created']} (Active)")
+
+    print("-" * 88)
+
+    # Display Prune Candidates
+    if not prune_candidates:
+        print(f"{COLOR_CYAN}[PRUNE CANDIDATES - NAMED TAGS]{COLOR_RESET}")
+        print("  None. All named yt_serve tags meet local retention limits.")
     else:
-        logger.info("No stale dev or test images exceed retention threshold.")
+        print(f"{COLOR_YELLOW}[PRUNE CANDIDATES SCHEDULED FOR REMOVAL]{COLOR_RESET}")
+        print(f"  {'TYPE':<6} {'TAG':<34} {'IMAGE ID':<14} {'SIZE':<10} {'CREATED':<20}")
+        for c in prune_candidates:
+            c_type = "TEST" if ":test" in c["tag"] else "DEV"
+            print(f"  {c_type:<6} {c['tag']:<34} {c['id']:<14} {c['size']:<10} {c['created']}")
+    print("=" * 88 + "\n")
 
-    logger.info("Cleaning up untagged dangling build layers (docker image prune -f)...")
-    run_command(["docker", "image", "prune", "-f"], dry_run=dry_run)
+    if prune_candidates:
+        logger.info(f"Identified {len(prune_candidates)} stale yt_serve image(s) for removal.")
+        if dry_run:
+            logger.info(f"[DRY-RUN] Would remove {len(prune_candidates)} candidate image(s).")
+        else:
+            for c in prune_candidates:
+                tag = c["tag"]
+                logger.info(f"Removing image '{tag}'...")
+                run_command(["docker", "rmi", tag], dry_run=dry_run)
+            log_success(f"Removed {len(prune_candidates)} stale yt_serve image(s).")
+
+    # Clean up project-specific untagged dangling build layers (<none>:<none>) using label filter
+    logger.info("Cleaning up untagged dangling build layers (docker image prune -f --filter label=project=yt_serve)...")
+    run_command(["docker", "image", "prune", "-f", "--filter", "label=project=yt_serve"], dry_run=dry_run)
     log_success("Prune operation finished.")
 
 

@@ -2,6 +2,7 @@
 # Stage 1: Build Frontend Assets (React + Vite)
 # ==============================================================================
 FROM node:18-alpine AS frontend-builder
+LABEL project="yt_serve"
 WORKDIR /app/frontend
 
 COPY frontend/package*.json ./
@@ -31,6 +32,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Default environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/backend
+
+# Informative project and OCI container metadata
+LABEL org.opencontainers.image.source="https://github.com/Blank1611/yt_playlist_dnlder" \
+      org.opencontainers.image.title="yt_serve" \
+      org.opencontainers.image.description="Containerized YouTube Playlist Downloader" \
+      project="yt_serve"
 
 # ==============================================================================
 # Stage 3: Test Target (Fast Backend Unit, Integration & Recovery Tests)
