@@ -9,7 +9,7 @@ import tempfile
 import json
 from unittest.mock import patch, MagicMock
 
-from tests.test_db_helper import create_isolated_test_db
+from tests.test_db_helper import create_isolated_test_db, dispose_isolated_test_db
 from app.services.adhoc_service import (
     format_duration,
     probe_video_info,
@@ -29,7 +29,7 @@ class TestAdhocDownloads(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
 
     def tearDown(self):
-        self.db.close()
+        dispose_isolated_test_db(self.test_engine, self.db)
         self.temp_dir.cleanup()
 
     def test_format_duration(self):

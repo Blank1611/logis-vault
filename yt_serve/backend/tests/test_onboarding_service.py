@@ -2,7 +2,7 @@ import unittest
 import os
 import json
 import tempfile
-from tests.test_db_helper import create_isolated_test_db
+from tests.test_db_helper import create_isolated_test_db, dispose_isolated_test_db
 from app.models.database import Playlist, Track, SystemSetting, get_system_setting, set_system_setting
 from app.services.onboarding_service import (
     extract_video_id_from_filename,
@@ -20,7 +20,7 @@ class TestOnboardingService(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
 
     def tearDown(self):
-        self.db.close()
+        dispose_isolated_test_db(self.test_engine, self.db)
         self.temp_dir.cleanup()
 
     def test_extract_video_id(self):

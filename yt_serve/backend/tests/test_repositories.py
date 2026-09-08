@@ -3,7 +3,7 @@ Unit tests for Central Data Access Layer (DAL) Repositories and Session Context 
 Strictly isolated using in-memory SQLite sandbox.
 """
 import unittest
-from tests.test_db_helper import create_isolated_test_db
+from tests.test_db_helper import create_isolated_test_db, dispose_isolated_test_db
 from app.repositories import (
     PlaylistRepository,
     TrackRepository,
@@ -20,7 +20,7 @@ class TestRepositories(unittest.TestCase):
         self.db = self.TestingSession()
 
     def tearDown(self):
-        self.db.close()
+        dispose_isolated_test_db(self.test_engine, self.db)
 
     def test_playlist_repository(self):
         # Create playlist

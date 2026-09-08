@@ -1,21 +1,34 @@
-"""
-Isolated In-Memory Database Sandbox for Unit Tests.
-Guarantees that production yt_manager.db is never touched by test suites.
-"""
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from app.models.database import Base
 
 
 def create_isolated_test_db():
     """
     Creates an isolated in-memory SQLite test engine and sessionmaker.
-    This guarantees 100% test isolation from the production yt_manager.db.
+    Uses StaticPool so connections are deterministic and safely disposable.
     """
     test_engine = create_engine(
         "sqlite:///:memory:",
-        connect_args={"check_same_thread": False}
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool
     )
     Base.metadata.create_all(bind=test_engine)
     TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
     return test_engine, TestingSession
+
+
+def dispose_isolated_test_db(test_engine, session=None):
+    """Clean up session and dispose of the test engine connection pool to prevent ResourceWarning."""
+    if session:
+        try:
+            session.close()
+        except Exception:
+            pass
+    if test_engine:
+        try:
+            test_engine.dispose()
+        except Exception:
+            pass
+

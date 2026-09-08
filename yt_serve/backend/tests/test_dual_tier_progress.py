@@ -1,16 +1,17 @@
 import unittest
 import time
 from app.core import yt_playlist_audio_tools as tools
-from app.models.database import SessionLocal, Job, _auto_migrate_sqlite_columns
+from app.models.database import Job
+from tests.test_db_helper import create_isolated_test_db, dispose_isolated_test_db
 
 class TestDualTierProgress(unittest.TestCase):
 
     def setUp(self):
-        _auto_migrate_sqlite_columns()
-        self.db = SessionLocal()
+        self.test_engine, self.TestingSession = create_isolated_test_db()
+        self.db = self.TestingSession()
 
     def tearDown(self):
-        self.db.close()
+        dispose_isolated_test_db(self.test_engine, self.db)
         tools.GLOBAL_INFLIGHT_PROGRESS_CALLBACK = None
 
     def test_inflight_progress_hook_callback(self):

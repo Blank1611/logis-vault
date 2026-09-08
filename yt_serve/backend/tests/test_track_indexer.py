@@ -1,7 +1,7 @@
 import unittest
 import os
 import tempfile
-from tests.test_db_helper import create_isolated_test_db
+from tests.test_db_helper import create_isolated_test_db, dispose_isolated_test_db
 from app.models.database import Track, MovedTrackHistory, Playlist
 from app.core.track_indexer import (
     create_hardlink_or_copy,
@@ -28,7 +28,7 @@ class TestTrackIndexer(unittest.TestCase):
         self.db.refresh(self.p2)
 
     def tearDown(self):
-        self.db.close()
+        dispose_isolated_test_db(self.test_engine, self.db)
         self.temp_dir.cleanup()
 
     def test_hardlink_creation(self):

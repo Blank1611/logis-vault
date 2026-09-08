@@ -6,7 +6,7 @@ Strictly isolated using in-memory SQLite sandbox (never touches production yt_ma
 import unittest
 import os
 import tempfile
-from tests.test_db_helper import create_isolated_test_db
+from tests.test_db_helper import create_isolated_test_db, dispose_isolated_test_db
 from app.services.deduplication_service import (
     scan_library_duplicates,
     apply_library_deduplication,
@@ -25,7 +25,7 @@ class TestDeduplicationService(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
 
     def tearDown(self):
-        self.db.close()
+        dispose_isolated_test_db(self.test_engine, self.db)
         self.temp_dir.cleanup()
 
     def test_format_bytes(self):

@@ -214,6 +214,13 @@ def _auto_migrate_sqlite_columns():
 
 _auto_migrate_sqlite_columns()
 
+# Dispose connection pool after import-time table creation and auto-migration
+engine.dispose()
+
+import atexit
+atexit.register(engine.dispose)
+
+
 # Dependency for FastAPI
 def get_db():
     """Get database session for FastAPI request lifecycle"""
