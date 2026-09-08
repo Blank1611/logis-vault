@@ -1,48 +1,91 @@
-# Tests
+# `yt_serve` Backend Test Suite
 
-Pytest test suite for the backend.
+Comprehensive unit and integration test suite for `yt_serve`.
 
-## Structure
+> **Important**: Tests should always be run inside the Docker test container (`yt_serve:test`) to ensure consistent dependencies, binary tools (`ffmpeg`, `ffprobe`), and Python runtimes.
+
+---
+
+## 1. Test Suite Structure
 
 ```
-tests/
-├── conftest.py         # Pytest fixtures
-├── test_api/          # API endpoint tests
-├── test_services/     # Service layer tests
-├── test_models/       # Database model tests
-└── test_utils/        # Utility function tests
+yt_serve/backend/tests/
+├── conftest.py                     # Pytest fixtures (for pytest environments)
+├── test_db_helper.py               # Isolated in-memory SQLite sandbox & disposal helpers
+├── test_adhoc_downloads.py         # On-demand / single-track video download workflows
+├── test_batch_recovery_guards.py   # Atomic Git sync, commit scheduling, lock recovery
+├── test_cancellation.py            # CancellationToken and worker thread termination
+├── test_deduplication_service.py   # Zero-space hardlinking & deduplication analysis
+├── test_dual_tier_progress.py      # Dual-tier progress hooks and in-flight job fields
+├── test_logging_engine.py          # Structured logs, ring-buffer eviction, SSE queues
+├── test_onboarding_service.py      # Video ID extraction & existing library indexing
+├── test_repositories.py            # Central Data Access Layer (DAL) repositories
+└── test_track_indexer.py           # Track movements, hardlinks, metadata indexing
 ```
 
-## Running Tests
+---
 
+## 2. Running Tests via Docker CLI
+
+### Step 1: Refresh Test Container Target
+The test target (`backend-test`) bypasses Node.js and frontend compilation, rebuilding in ~2–3 seconds with Docker cache:
 ```bash
-# Run all tests
-pytest
+# From workspace root:
+./yt_serve/dist_utils/build_image.py -e test
 
-# Run with coverage
-pytest --cov=app
+# Or from yt_serve/ directory:
+./dist_utils/build_image.py -e test
+```
+*(Note: Do not prepend `python3`; `build_image.py` has executable permissions and a `#!/usr/bin/env python3` shebang).*
 
-# Run specific test file
-pytest tests/test_api/test_playlists.py
+### Step 2: Run Tests
 
-# Run with verbose output
-pytest -v
+#### Run All Test Suites
+```bash
+docker run --rm yt_serve:test
 ```
 
-## Writing Tests
+#### Run a Specific Test Module
+```bash
+docker run --rm yt_serve:test tests.test_logging_engine
+```
+
+#### Run a Specific Test Case or Method
+```bash
+docker run --rm yt_serve:test tests.test_logging_engine.TestLoggingEngine.test_buffer_capacity_eviction
+```
+
+#### Verify Clean Teardown (Zero ResourceWarnings)
+```bash
+docker run --rm --entrypoint python yt_serve:test -W error::ResourceWarning -m unittest discover tests
+```
+
+---
+
+## 3. Running Tests in VS Code (UI Tasks)
+
+Preconfigured tasks in [`.vscode/tasks.json`](../../../.vscode/tasks.json) allow running tests directly from the VS Code command palette (**Terminal $\rightarrow$ Run Task...**):
+
+1. **`Docker: Run All Tests`**: Executes the entire test suite inside a transient container.
+2. **`Docker: Run Specific Test`**: Prompts with an input box for the test namespace (e.g. `tests.test_logging_engine` or `tests.test_adhoc_downloads.TestAdhocDownloads.test_format_duration`).
+
+---
+
+## 4. Writing Isolated Database Tests
+
+All tests requiring database access must use the in-memory SQLite sandbox helper in [`test_db_helper.py`](test_db_helper.py):
 
 ```python
-# tests/test_api/test_playlists.py
-def test_create_playlist(client):
-    response = client.post("/api/v1/playlists", json={
-        "url": "https://youtube.com/playlist?list=..."
-    })
-    assert response.status_code == 200
+import unittest
+from tests.test_db_helper import create_isolated_test_db, dispose_isolated_test_db
+
+class ExampleTest(unittest.TestCase):
+
+    def setUp(self):
+        self.test_engine, self.TestingSession = create_isolated_test_db()
+        self.db = self.TestingSession()
+
+    def tearDown(self):
+        dispose_isolated_test_db(self.test_engine, self.db)
 ```
-
-## Fixtures
-
-Common fixtures in `conftest.py`:
-- `client` - TestClient for API testing
-- `db` - Database session
-- `mock_ytdlp` - Mocked yt-dlp service
+Using `dispose_isolated_test_db` guarantees connection pools are explicitly closed, preventing `ResourceWarning: unclosed database` warnings in Python 3.12+.
