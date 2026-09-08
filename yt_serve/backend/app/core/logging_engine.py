@@ -11,7 +11,7 @@ import threading
 import asyncio
 from logging.handlers import RotatingFileHandler
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional, Set, Any
 from pathlib import Path
 
@@ -37,7 +37,7 @@ class JSONLogFormatter(logging.Formatter):
     """Structured JSON Formatter for Grafana Loki / Promtail / Vector log shippers"""
     def format(self, record: logging.LogRecord) -> str:
         log_obj = {
-            "timestamp": datetime.utcfromtimestamp(record.created).isoformat() + "Z",
+            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -66,7 +66,7 @@ class RingBufferHandler(logging.Handler):
             msg = self.format(record)
             entry: Dict[str, Any] = {
                 "id": f"{int(record.created * 1000)}-{record.msecs:.0f}",
-                "timestamp": datetime.utcfromtimestamp(record.created).isoformat() + "Z",
+                "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
                 "level": record.levelname,
                 "logger": record.name,
                 "message": record.getMessage(),

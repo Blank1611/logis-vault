@@ -39,6 +39,46 @@
             }
         },
         {
+            "label": "Docker: Run All Tests",
+            "type": "shell",
+            "command": "docker",
+            "args": [
+                "run",
+                "--rm",
+                "yt_serve:test"
+            ],
+            "dependsOn": "Docker: Build Test Image",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true
+            }
+        },
+        {
+            "label": "Docker: Run Specific Test",
+            "type": "shell",
+            "command": "docker",
+            "args": [
+                "run",
+                "--rm",
+                "yt_serve:test",
+                "${input:testNamespace}"
+            ],
+            "dependsOn": "Docker: Build Test Image",
+            "group": "test",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true
+            }
+        },
+        {
             "label": "Docker: Build Dev Image",
             "type": "shell",
             "command": "python3",
@@ -93,6 +133,14 @@
                 "reveal": "always",
                 "panel": "shared"
             }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "testNamespace",
+            "type": "promptString",
+            "description": "Enter test namespace (e.g. tests.test_logging_engine or tests.test_logging_engine.TestLoggingEngine.test_buffer_capacity_eviction):",
+            "default": "tests.test_logging_engine"
         }
     ]
 }

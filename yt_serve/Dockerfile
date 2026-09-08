@@ -1,18 +1,5 @@
 # ==============================================================================
-# Stage 1: Build Frontend Assets (React + Vite)
-# ==============================================================================
-FROM node:18-alpine AS frontend-builder
-LABEL project="yt_serve"
-WORKDIR /app/frontend
-
-COPY frontend/package*.json ./
-RUN npm ci
-
-COPY frontend/ ./
-RUN npm run build
-
-# ==============================================================================
-# Stage 2: Shared Backend Base (Python 3.14 + Static FFmpeg + Git + Dependencies)
+# Stage 1: Shared Backend Base (Python 3.14 + Static FFmpeg + Git + Dependencies)
 # ==============================================================================
 FROM python:3.14-slim AS backend-base
 WORKDIR /app/backend
@@ -40,14 +27,28 @@ LABEL org.opencontainers.image.source="https://github.com/Blank1611/yt_playlist_
       project="yt_serve"
 
 # ==============================================================================
-# Stage 3: Test Target (Fast Backend Unit, Integration & Recovery Tests)
+# Stage 2: Test Target (Fast Backend Unit, Integration & Recovery Tests)
 # ==============================================================================
 FROM backend-base AS backend-test
 # Copy backend source code & tests (skips Node/frontend compilation entirely!)
 COPY backend/ ./
 
-# Test entrypoint: runs automated test suite
-ENTRYPOINT ["python", "-m", "unittest", "discover", "tests"]
+# Test entrypoint and default argument list
+ENTRYPOINT ["python", "-m", "unittest"]
+CMD ["discover", "tests"]
+
+# ==============================================================================
+# Stage 3: Build Frontend Assets (React + Vite)
+# ==============================================================================
+FROM node:18-alpine AS frontend-builder
+LABEL project="yt_serve"
+WORKDIR /app/frontend
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
 
 # ==============================================================================
 # Stage 4: Production Runner (Full-Stack Container with Compiled Static Assets)

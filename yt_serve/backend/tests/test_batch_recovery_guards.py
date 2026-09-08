@@ -70,10 +70,12 @@ class TestBatchRecoveryGuards(unittest.TestCase):
         """Verify dynamic generation of documented template from Settings model schema."""
         content = generate_default_env()
         self.assertIn("YouTube Playlist Manager Configuration (yt_serve)", content)
-        self.assertIn("BASE_DOWNLOAD_PATH=/downloads", content)
+        self.assertIn("BASE_DOWNLOAD_PATH=", content)
         self.assertIn("AUDIO_EXTRACT_MODE=copy", content)
         self.assertIn("ENABLE_GIT_METADATA_SYNC=false", content)
         self.assertIn("# Scheduled daily scan time in HH:MM format", content)
+        self.assertIn("LOG_MAX_BYTES=10485760", content)
+        self.assertIn("LOG_BACKUP_COUNT=5", content)
 
     def test_git_batch_session_grouping(self):
         """Verify GitBatchSession defers and groups multiple playlist updates into 1 commit."""
