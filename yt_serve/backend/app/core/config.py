@@ -59,6 +59,11 @@ _cli_no_auto_discovery = _has_cli_flag(["--no-auto-discovery", "--disable-auto-d
 _cli_auto_discovery_interval = _resolve_cli_flag("--auto-discovery-interval")
 _cli_git_user_name = _resolve_cli_flag("--git.user.name")
 _cli_git_user_email = _resolve_cli_flag("--git.user.email")
+_cli_log_max_bytes = _resolve_cli_flag("--log.max-bytes")
+_cli_log_backup_count = _resolve_cli_flag("--log.backup-count")
+_cli_log_ring_buffer_size = _resolve_cli_flag("--log.ring-buffer-size")
+_cli_job_log_max_days = _resolve_cli_flag("--job-log.max-days")
+_cli_job_log_max_files = _resolve_cli_flag("--job-log.max-files")
 
 class Settings(BaseSettings):
     """Application settings"""
@@ -205,6 +210,28 @@ class Settings(BaseSettings):
         description="Whether to use ADHOC_DOWNLOAD_PATH instead of default _adhoc_downloads"
     )
 
+    # Logging & Retention
+    LOG_MAX_BYTES: int = Field(
+        default=10 * 1024 * 1024,
+        description="Max bytes before yt_manager.log rotates (default: 10MB)"
+    )
+    LOG_BACKUP_COUNT: int = Field(
+        default=5,
+        description="Number of rotated yt_manager.log historical files to keep (default: 5)"
+    )
+    LOG_RING_BUFFER_SIZE: int = Field(
+        default=1000,
+        description="In-memory circular buffer capacity for live logs (default: 1000, min: 100, max: 50000)"
+    )
+    JOB_LOG_MAX_DAYS: int = Field(
+        default=30,
+        description="Max age in days before job_{id}.log files are purged (default: 30)"
+    )
+    JOB_LOG_MAX_FILES: int = Field(
+        default=100,
+        description="Max number of recent job_{id}.log files to retain (default: 100)"
+    )
+
     def get_adhoc_download_path(self) -> str:
         """Resolve absolute ad-hoc downloads directory"""
         if self.USE_CUSTOM_ADHOC_PATH and self.ADHOC_DOWNLOAD_PATH:
@@ -246,6 +273,37 @@ class Settings(BaseSettings):
             self.GIT_USER_NAME = _cli_git_user_name
         if _cli_git_user_email:
             self.GIT_USER_EMAIL = _cli_git_user_email
+
+        # Logging & retention CLI flag overrides
+        if _cli_log_max_bytes:
+            try:
+                self.LOG_MAX_BYTES = max(1024 * 1024, int(_cli_log_max_bytes))
+            except ValueError:
+                pass
+        if _cli_log_backup_count:
+            try:
+                self.LOG_BACKUP_COUNT = max(1, int(_cli_log_backup_count))
+            except ValueError:
+                pass
+        if _cli_log_ring_buffer_size:
+            try:
+                self.LOG_RING_BUFFER_SIZE = max(100, min(50000, int(_cli_log_ring_buffer_size)))
+            except ValueError:
+                pass
+        else:
+            # Enforce clamp on ring buffer size even if loaded from .env
+            self.LOG_RING_BUFFER_SIZE = max(100, min(50000, self.LOG_RING_BUFFER_SIZE))
+
+        if _cli_job_log_max_days:
+            try:
+                self.JOB_LOG_MAX_DAYS = max(1, int(_cli_job_log_max_days))
+            except ValueError:
+                pass
+        if _cli_job_log_max_files:
+            try:
+                self.JOB_LOG_MAX_FILES = max(1, int(_cli_job_log_max_files))
+            except ValueError:
+                pass
         
         # Normalize empty string temp path to None
         if self.TEMP_DOWNLOAD_PATH and not self.TEMP_DOWNLOAD_PATH.strip():
@@ -308,6 +366,10 @@ def generate_default_env() -> str:
         "Git Metadata Sync & Versioning": [
             "ENABLE_GIT_METADATA_SYNC", "GIT_REMOTE_URL", "GIT_AUTH_TOKEN",
             "GIT_BRANCH", "GIT_USER_NAME", "GIT_USER_EMAIL"
+        ],
+        "Logging & Retention": [
+            "LOG_MAX_BYTES", "LOG_BACKUP_COUNT", "LOG_RING_BUFFER_SIZE",
+            "JOB_LOG_MAX_DAYS", "JOB_LOG_MAX_FILES"
         ],
     }
 

@@ -3,6 +3,8 @@ Job manager for background download/extract tasks
 """
 import asyncio
 import os
+import time
+import logging
 from typing import Dict, Optional, Callable
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -11,6 +13,9 @@ from app.models.database import Job, Playlist
 from app.services.ytdlp_service import DownloadService
 from app.core.config import settings
 from app.core.cancellation import CancellationToken
+from app.core.logging_engine import get_logger
+
+logger = get_logger("app.services.job_manager")
 
 class JobManager:
     """Manages background jobs"""
@@ -43,8 +48,13 @@ class JobManager:
         """Get log file path for a job"""
         return os.path.join(self.logs_dir, f"job_{job_id}.log")
     
-    def _cleanup_old_logs(self, max_days: int = 30, max_files: int = 100):
+    def _cleanup_old_logs(self, max_days: Optional[int] = None, max_files: Optional[int] = None):
         """Clean up old job log files to prevent infinite disk accumulation"""
+        if max_days is None:
+            max_days = getattr(settings, "JOB_LOG_MAX_DAYS", 30)
+        if max_files is None:
+            max_files = getattr(settings, "JOB_LOG_MAX_FILES", 100)
+
         try:
             if not os.path.isdir(self.logs_dir):
                 return
@@ -61,15 +71,19 @@ class JobManager:
             log_files.sort(key=lambda x: x[1], reverse=True)
             
             # Delete files older than max_days or exceeding max_files
+            deleted_count = 0
             for idx, (fpath, mtime) in enumerate(log_files):
                 age_days = (now - mtime) / 86400
                 if age_days > max_days or idx >= max_files:
                     try:
                         os.remove(fpath)
-                    except OSError:
-                        pass
+                        deleted_count += 1
+                    except OSError as oe:
+                        logger.warning(f"Failed to remove stale job log '{fpath}': {oe}")
+            if deleted_count > 0:
+                logger.info(f"Cleaned up {deleted_count} stale job log file(s).")
         except Exception as e:
-            print(f"Warning during log cleanup: {e}")
+            logger.warning(f"Error during job log cleanup: {e}", exc_info=True)
 
     def _write_log(self, job_id: int, message: str, level: Optional[str] = None):
         """Write structured log message to file"""

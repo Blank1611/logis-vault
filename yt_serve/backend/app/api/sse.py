@@ -142,8 +142,10 @@ async def server_logs_generator(request: Request, min_level: Optional[str] = Non
     Yields live Server-Sent Events for all server activity logs.
     """
     from app.core.logging_engine import register_sse_queue, unregister_sse_queue, get_recent_logs
+    from app.core.config import settings
     
-    queue: asyncio.Queue = asyncio.Queue()
+    max_q = max(100, getattr(settings, "LOG_RING_BUFFER_SIZE", 1000))
+    queue: asyncio.Queue = asyncio.Queue(maxsize=max_q)
     register_sse_queue(queue)
 
     level_order = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "WARN": 30, "ERROR": 40, "CRITICAL": 50}

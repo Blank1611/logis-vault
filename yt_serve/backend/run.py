@@ -77,6 +77,46 @@ def parse_args():
         default=None,
         help="Git committer/author email for playlist metadata versioning (e.g. your.email@example.com)"
     )
+
+    parser.add_argument(
+        "--log.max-bytes",
+        dest="log_max_bytes",
+        type=int,
+        default=None,
+        help="Max bytes before yt_manager.log rotates (default: 10485760 / 10MB)"
+    )
+
+    parser.add_argument(
+        "--log.backup-count",
+        dest="log_backup_count",
+        type=int,
+        default=None,
+        help="Number of rotated yt_manager.log historical files to keep (default: 5)"
+    )
+
+    parser.add_argument(
+        "--log.ring-buffer-size",
+        dest="log_ring_buffer_size",
+        type=int,
+        default=None,
+        help="In-memory circular buffer capacity for live logs (default: 1000, min: 100, max: 50000)"
+    )
+
+    parser.add_argument(
+        "--job-log.max-days",
+        dest="job_log_max_days",
+        type=int,
+        default=None,
+        help="Max age in days before job_{id}.log files are purged (default: 30)"
+    )
+
+    parser.add_argument(
+        "--job-log.max-files",
+        dest="job_log_max_files",
+        type=int,
+        default=None,
+        help="Max number of recent job_{id}.log files to retain (default: 100)"
+    )
     
     return parser.parse_known_args()
 
@@ -87,6 +127,16 @@ if __name__ == "__main__":
         os.environ["GIT_USER_NAME"] = args.git_user_name
     if args.git_user_email:
         os.environ["GIT_USER_EMAIL"] = args.git_user_email
+    if args.log_max_bytes is not None:
+        os.environ["LOG_MAX_BYTES"] = str(args.log_max_bytes)
+    if args.log_backup_count is not None:
+        os.environ["LOG_BACKUP_COUNT"] = str(args.log_backup_count)
+    if args.log_ring_buffer_size is not None:
+        os.environ["LOG_RING_BUFFER_SIZE"] = str(args.log_ring_buffer_size)
+    if args.job_log_max_days is not None:
+        os.environ["JOB_LOG_MAX_DAYS"] = str(args.job_log_max_days)
+    if args.job_log_max_files is not None:
+        os.environ["JOB_LOG_MAX_FILES"] = str(args.job_log_max_files)
     
     # Parse host and port from --web.listen-address
     host = "0.0.0.0"
