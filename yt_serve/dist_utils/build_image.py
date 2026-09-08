@@ -15,6 +15,8 @@ import subprocess
 import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Any
+from collections import defaultdict
+
 
 # Root directory of yt_serve (auto-anchored)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -161,66 +163,182 @@ def parse_semver_key(tag_name: str) -> Tuple[int, int, int]:
     return 0, 0, 0
 
 
+def normalize_image_id(img_id: Optional[str]) -> str:
+    """Normalize docker image ID to short 12-char hex string without sha256 prefix."""
+    if not img_id:
+        return ""
+    img_id = img_id.strip()
+    if img_id.startswith("sha256:"):
+        img_id = img_id[7:]
+    return img_id[:12]
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from a string for accurate length calculation."""
+    return re.sub(r"\033\[[0-9;]*m", "", text)
+
+
+def pad_colored(text: str, width: int) -> str:
+    """Pad text to width accounting for invisible ANSI escape sequences."""
+    visible_len = len(strip_ansi(text))
+    padding = max(0, width - visible_len)
+    return text + (" " * padding)
+
+
 # ==============================================================================
 # CLI Action Handlers
 # ==============================================================================
 
 def action_list(env_filter: Optional[str] = None):
-    """Display a formatted inspection table of all local yt_serve images."""
+    """Display a formatted inspection table of all local yt_serve images with hierarchical sorting and alias grouping."""
     images = get_local_images()
     if not images:
         logger.info("No local 'yt_serve' Docker images found.")
         return
 
+    # Normalize image IDs for reliable matching
+    for img in images:
+        img["norm_id"] = normalize_image_id(img.get("id"))
+
+    # Map norm_id to list of tags to detect aliases/co-tags
+    id_to_tags = defaultdict(list)
+    for img in images:
+        id_to_tags[img["norm_id"]].append(img["tag"])
+
     # Determine what yt_serve:latest points to
-    latest_id = inspect_image_id("yt_serve:latest")
+    raw_latest_id = inspect_image_id("yt_serve:latest")
+    latest_id = normalize_image_id(raw_latest_id)
+
+    # Classify each image and assign roles (canonical vs alias)
+    classified = []
     pointed_version = None
 
-    filtered_images = []
     for img in images:
         tag = img["tag"]
-        env_type = "DEV"
+        norm_id = img["norm_id"]
+        siblings = id_to_tags[norm_id]
+
+        # Determine Environment and Status
         if ":test" in tag:
             env_type = "TEST"
+            is_alias = False
+            alias_of = None
+            status = "Test target (backend-only)"
         elif re.search(r":v\d+\.\d+\.\d+", tag):
             env_type = "PROD"
+            is_alias = False
+            alias_of = None
+            if latest_id and norm_id == latest_id:
+                status = f"{COLOR_GREEN}★ Active Latest{COLOR_RESET}"
+                pointed_version = tag
+            else:
+                status = "Release"
         elif tag.endswith(":latest"):
             env_type = "PROD"
+            # If another PROD tag shares this ID, latest is its alias
+            prod_siblings = [t for t in siblings if re.search(r":v\d+\.\d+\.\d+", t)]
+            if prod_siblings:
+                is_alias = True
+                alias_of = prod_siblings[0]
+                status = f"{COLOR_CYAN}[floating alias]{COLOR_RESET}"
+                pointed_version = prod_siblings[0]
+            else:
+                is_alias = False
+                alias_of = None
+                status = f"{COLOR_CYAN}[latest pointer]{COLOR_RESET}"
+        elif "-dirty" in tag:
+            env_type = "DEV-DIRTY"
+            is_alias = False
+            alias_of = None
+            status = f"{COLOR_YELLOW}Dirty build (uncommitted){COLOR_RESET}"
+        elif tag.endswith(":dev"):
+            # Check siblings for commit tag
+            commit_siblings = [t for t in siblings if t != tag and ":dev-" in t]
+            if commit_siblings:
+                canonical = commit_siblings[0]
+                is_alias = True
+                alias_of = canonical
+                env_type = "DEV-DIRTY" if "-dirty" in canonical else "DEV"
+                status = f"{COLOR_CYAN}[floating alias]{COLOR_RESET}"
+            else:
+                is_alias = False
+                alias_of = None
+                env_type = "DEV"
+                status = "Dev build"
+        else:
+            # dev-<sha> (clean)
+            env_type = "DEV"
+            is_alias = False
+            alias_of = None
+            status = f"{COLOR_GREEN}Clean (promotable){COLOR_RESET}"
 
-        if latest_id and img["id"] == latest_id and tag != "yt_serve:latest" and env_type == "PROD":
-            pointed_version = tag
+        classified.append({
+            **img,
+            "env": env_type,
+            "is_alias": is_alias,
+            "alias_of": alias_of,
+            "status": status
+        })
 
-        if env_filter:
-            if env_filter.upper() != env_type:
-                continue
+    # Filter if requested
+    if env_filter:
+        ef = env_filter.upper()
+        if ef == "DEV":
+            classified = [img for img in classified if img["env"] in ("DEV", "DEV-DIRTY")]
+        else:
+            classified = [img for img in classified if img["env"] == ef]
 
-        filtered_images.append({**img, "env": env_type})
+    # Sorting Hierarchy:
+    # 1. PROD
+    # 2. DEV (Clean)
+    # 3. DEV-DIRTY
+    # 4. TEST
+    env_priority = {
+        "PROD": 1,
+        "DEV": 2,
+        "DEV-DIRTY": 3,
+        "TEST": 4
+    }
 
-    print("\n" + "=" * 88)
+    def sort_key(item):
+        env_rank = env_priority.get(item["env"], 99)
+        # Group siblings with same norm_id together
+        # For PROD: sort semver descending
+        semver = (0, 0, 0)
+        if item["env"] == "PROD":
+            target_tag = item["alias_of"] or item["tag"]
+            semver = parse_semver_key(target_tag)
+        # Canonical first (0), alias second (1)
+        alias_rank = 1 if item["is_alias"] else 0
+        return (env_rank, [-x for x in semver], item["norm_id"], alias_rank, item["tag"])
+
+    classified.sort(key=sort_key)
+
+    print("\n" + "=" * 102)
     print(f"{COLOR_BOLD}LOCAL DOCKER IMAGES (yt_serve){COLOR_RESET}")
-    print("=" * 88)
-    print(f"{'ENV':<6} {'TAG':<32} {'IMAGE ID':<14} {'SIZE':<10} {'STATUS':<20}")
-    print("-" * 88)
+    print("=" * 102)
+    print(f"{'ENV':<11} {'TAG':<35} {'IMAGE ID':<15} {'SIZE':<11} {'STATUS':<30}")
+    print("-" * 102)
 
-    for img in filtered_images:
-        tag = img["tag"]
-        status = ""
-        if latest_id and img["id"] == latest_id:
-            if tag == "yt_serve:latest":
-                status = f"{COLOR_CYAN}[latest alias]{COLOR_RESET}"
-            elif img["env"] == "PROD":
-                status = f"{COLOR_GREEN}★ Active Latest{COLOR_RESET}"
+    for img in classified:
+        tag_display = f"↳ {img['tag']}" if img["is_alias"] else img["tag"]
+        env_col = pad_colored(img["env"], 11)
+        tag_col = pad_colored(tag_display, 35)
+        id_col = pad_colored(img["norm_id"], 15)
+        size_col = pad_colored(img["size"], 11)
+        status_col = pad_colored(img["status"], 30)
 
-        print(f"{img['env']:<6} {tag:<32} {img['id']:<14} {img['size']:<10} {status}")
+        print(f"{env_col} {tag_col} {id_col} {size_col} {status_col}")
 
-    print("-" * 88)
+    print("-" * 102)
     if latest_id and pointed_version:
-        print(f"Production 'latest' Pointer: {COLOR_BOLD}yt_serve:latest ➔ {pointed_version}{COLOR_RESET} ({latest_id[:12]})")
+        print(f"Production 'latest' Pointer: {COLOR_BOLD}yt_serve:latest ➔ {pointed_version}{COLOR_RESET} ({latest_id})")
     elif latest_id:
-        print(f"Production 'latest' Pointer: {COLOR_BOLD}yt_serve:latest ➔ {latest_id[:12]}{COLOR_RESET}")
+        print(f"Production 'latest' Pointer: {COLOR_BOLD}yt_serve:latest ➔ ({latest_id}){COLOR_RESET}")
     else:
         print("Production 'latest' Pointer: [Unassigned]")
-    print("=" * 88 + "\n")
+    print("=" * 102 + "\n")
+
 
 
 def action_build_test(fresh_build: bool, dry_run: bool):

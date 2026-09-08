@@ -6,7 +6,9 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
-            "args": ["--list"],
+            "args": [
+                "--list"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/yt_serve"
         },
@@ -15,7 +17,10 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
-            "args": ["-e", "test"],
+            "args": [
+                "-e",
+                "test"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/yt_serve"
         },
@@ -24,7 +29,10 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
-            "args": ["-e", "dev"],
+            "args": [
+                "-e",
+                "dev"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/yt_serve"
         },
@@ -33,7 +41,13 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
-            "args": ["-e", "prod", "-v", "${input:releaseVersion}", "--from-dev"],
+            "args": [
+                "-e",
+                "prod",
+                "-v",
+                "${input:releaseVersion}",
+                "--from-dev"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/yt_serve"
         },
@@ -42,7 +56,14 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
-            "args": ["-e", "prod", "-v", "${input:releaseVersion}", "--from-dev", "${input:devSha}"],
+            "args": [
+                "-e",
+                "prod",
+                "-v",
+                "${input:releaseVersion}",
+                "--from-dev",
+                "${input:devSha}"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/yt_serve"
         },
@@ -51,7 +72,12 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
-            "args": ["-e", "prod", "-v", "${input:releaseVersion}"],
+            "args": [
+                "-e",
+                "prod",
+                "-v",
+                "${input:releaseVersion}"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/yt_serve"
         },
@@ -60,7 +86,9 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
-            "args": ["--rollback"],
+            "args": [
+                "--rollback"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/yt_serve"
         },
@@ -69,7 +97,10 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
-            "args": ["--rollback", "${input:rollbackVersion}"],
+            "args": [
+                "--rollback",
+                "${input:rollbackVersion}"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/yt_serve"
         },
@@ -78,7 +109,10 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
-            "args": ["--promote-latest", "${input:releaseVersion}"],
+            "args": [
+                "--promote-latest",
+                "${input:releaseVersion}"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/yt_serve"
         },
@@ -87,7 +121,9 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/yt_serve/dist_utils/build_image.py",
-            "args": ["--prune"],
+            "args": [
+                "--prune"
+            ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/yt_serve"
         }
