@@ -6,12 +6,15 @@ import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { Loader2, Copy } from 'lucide-react'
 
+import { useToast } from '../../context'
+
 export interface LogsModalProps {
   job: Job
   onClose: () => void
 }
 
 export const LogsModal: React.FC<LogsModalProps> = ({ job, onClose }) => {
+  const { toast } = useToast()
   const logsEndRef = useRef<HTMLDivElement>(null)
 
   // Fetch logs with auto-refresh
@@ -33,7 +36,7 @@ export const LogsModal: React.FC<LogsModalProps> = ({ job, onClose }) => {
     if (logs) {
       const logText = logs.map(l => l.message).join('\n')
       navigator.clipboard.writeText(logText)
-      alert('Logs copied to clipboard!')
+      toast.success('Logs copied to clipboard!')
     }
   }
 

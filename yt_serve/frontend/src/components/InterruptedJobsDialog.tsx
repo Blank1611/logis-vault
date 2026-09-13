@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AlertTriangle, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
+import { useToast } from '../context/ToastContext'
 
 interface InterruptedJob {
   id: number
@@ -24,6 +25,7 @@ export function InterruptedJobsDialog({
   onIndividual,
   isLoading,
 }: InterruptedJobsDialogProps) {
+  const { toast } = useToast()
   const [mode, setMode] = useState<'individual' | null>(null)
   const [individualDecisions, setIndividualDecisions] = useState<Record<string, 'resume' | 'cancel'>>({})
   const [processingAction, setProcessingAction] = useState(false)
@@ -50,7 +52,7 @@ export function InterruptedJobsDialog({
     // Check if all jobs have decisions
     const allDecided = jobs.every(job => individualDecisions[job.id])
     if (!allDecided) {
-      alert('Please make a decision for all jobs')
+      toast.info('Please make a decision for all jobs')
       return
     }
 

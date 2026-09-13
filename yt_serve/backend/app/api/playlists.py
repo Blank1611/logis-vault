@@ -119,6 +119,7 @@ async def list_playlists_no_slash(db: Session = Depends(get_db)):
     """Get all playlists (no trailing slash version)"""
     return await list_playlists(db)
 
+@router.post("", response_model=PlaylistResponse, status_code=201)
 @router.post("/", response_model=PlaylistResponse, status_code=201)
 async def create_playlist(
     playlist: PlaylistCreate,

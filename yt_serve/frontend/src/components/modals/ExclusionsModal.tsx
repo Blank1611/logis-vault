@@ -7,6 +7,8 @@ import { Button } from '../ui/Button'
 import { StatusBadge } from '../ui/StatusBadge'
 import { X, Search } from 'lucide-react'
 
+import { useToast } from '../../context/ToastContext'
+
 export interface ExclusionsModalProps {
   playlist: Playlist
   onClose: () => void
@@ -14,6 +16,7 @@ export interface ExclusionsModalProps {
 
 export const ExclusionsModal: React.FC<ExclusionsModalProps> = ({ playlist, onClose }) => {
   const queryClient = useQueryClient()
+  const { toast } = useToast()
   const [excludedIds, setExcludedIds] = useState<string[]>(playlist.excluded_ids || [])
   const [newId, setNewId] = useState('')
 
@@ -30,7 +33,7 @@ export const ExclusionsModal: React.FC<ExclusionsModalProps> = ({ playlist, onCl
     mutationFn: (data: Partial<Playlist>) => playlistsApi.update(playlist.id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['playlists'] })
-      alert('Exclusions updated successfully!')
+      toast.success('Exclusions updated successfully!')
       onClose()
     },
   })

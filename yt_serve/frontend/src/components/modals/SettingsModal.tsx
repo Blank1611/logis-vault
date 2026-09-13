@@ -4,117 +4,11 @@ import { configApi, onboardingApi, type Config } from '../../services/api'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { 
-  FolderOpen, Loader2, Info, Zap, Music, Sparkles, Search, HardDrive 
+  FolderOpen, Loader2, Sparkles, Search, HardDrive 
 } from 'lucide-react'
+import { useToast, useConfirm } from '../../context'
 
-// Helper Component for interactive field headers with recommendations and toggleable info
-export function FieldHeader({
-  label,
-  required = false,
-  recommended,
-  infoText,
-  id
-}: {
-  label: string
-  required?: boolean
-  recommended?: string
-  infoText?: string
-  id?: string
-}) {
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="mb-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <label htmlFor={id} className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-1.5 flex-wrap">
-          <span>{label}</span>
-          {required && <span className="text-rose-500 font-bold">*</span>}
-          {recommended && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
-              {recommended}
-            </span>
-          )}
-        </label>
-        {infoText && (
-          <button
-            type="button"
-            onClick={() => setOpen(!open)}
-            className={`px-2 py-0.5 rounded text-xs transition-colors flex items-center gap-1 shrink-0 ${
-              open 
-                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-200' 
-                : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-            }`}
-            title="Click to toggle explanation"
-          >
-            <Info className="w-3.5 h-3.5" />
-            <span className="text-[11px] font-medium">{open ? 'Hide info' : 'Info'}</span>
-          </button>
-        )}
-      </div>
-      {open && infoText && (
-        <div className="mt-1.5 p-2.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/80 rounded-lg text-xs text-blue-950 dark:text-blue-200 leading-relaxed shadow-sm">
-          {infoText}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// Helper Component for dynamic Audio Extraction Mode preview card
-export function AudioModeCard({ mode }: { mode: string }) {
-  if (mode === 'copy') {
-    return (
-      <div className="mt-2 p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-lg text-xs space-y-1">
-        <div className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-          <Zap className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-          Direct Stream Copy (Lossless & Instantaneous)
-        </div>
-        <p className="text-emerald-700 dark:text-emerald-300/90 leading-relaxed">
-          Extracts YouTube's original native audio track (<code className="font-mono bg-emerald-100 dark:bg-emerald-900/60 px-1 py-0.5 rounded">.m4a</code> for AAC, <code className="font-mono bg-emerald-100 dark:bg-emerald-900/60 px-1 py-0.5 rounded">.opus</code> for Opus) without transcoding. Takes ~0.2s per song with zero CPU load and zero acoustic compression loss.
-        </p>
-      </div>
-    )
-  }
-  if (mode === 'mp3_best') {
-    return (
-      <div className="mt-2 p-3 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 rounded-lg text-xs space-y-1">
-        <div className="font-semibold text-indigo-800 dark:text-indigo-300 flex items-center gap-1.5">
-          <Music className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-          MP3 Best Quality (VBR ~250–320 kbps)
-        </div>
-        <p className="text-indigo-700 dark:text-indigo-300/90 leading-relaxed">
-          Re-encodes audio to universal MP3 at maximum variable bitrate (<code className="font-mono bg-indigo-100 dark:bg-indigo-900/60 px-1 py-0.5 rounded">libmp3lame -q:a 0</code>). 100% compatible with older car stereos and legacy MP3 players.
-        </p>
-      </div>
-    )
-  }
-  if (mode === 'mp3_high') {
-    return (
-      <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/60 rounded-lg text-xs space-y-1">
-        <div className="font-semibold text-blue-800 dark:text-blue-300 flex items-center gap-1.5">
-          <Music className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-          MP3 High Quality (VBR ~190–250 kbps)
-        </div>
-        <p className="text-blue-700 dark:text-blue-300/90 leading-relaxed">
-          Standard high-quality MP3 encoding (<code className="font-mono bg-blue-100 dark:bg-blue-900/60 px-1 py-0.5 rounded">libmp3lame -q:a 2</code>). Great balance of smaller file sizes and high audio fidelity.
-        </p>
-      </div>
-    )
-  }
-  if (mode === 'opus') {
-    return (
-      <div className="mt-2 p-3 bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/60 rounded-lg text-xs space-y-1">
-        <div className="font-semibold text-purple-800 dark:text-purple-300 flex items-center gap-1.5">
-          <Sparkles className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-          Opus Codec (128 kbps)
-        </div>
-        <p className="text-purple-700 dark:text-purple-300/90 leading-relaxed">
-          Uses the next-generation open Opus audio codec. Delivers crystal-clear acoustic transparency at half the file size of traditional MP3s.
-        </p>
-      </div>
-    )
-  }
-  return null
-}
+import { FieldHeader, AudioModeCard } from '../ui/FormField'
 
 export interface SettingsModalProps {
   onClose: () => void
@@ -122,6 +16,8 @@ export interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDeduplicate }) => {
+  const { toast } = useToast()
+  const confirm = useConfirm()
   const queryClient = useQueryClient()
   
   const { data: config, isLoading } = useQuery({
@@ -144,14 +40,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDed
     mutationFn: () => configApi.updateYtdlp(),
     onSuccess: (res) => {
       if (res.data.success) {
-        alert(`yt-dlp updated successfully to version ${res.data.new_version}`)
+        toast.success(`yt-dlp updated successfully to version ${res.data.new_version}`)
         refetchYtdlp()
       } else {
-        alert(`Failed to update yt-dlp: ${res.data.message}`)
+        toast.error(`Failed to update yt-dlp: ${res.data.message}`)
       }
     },
     onError: (err: any) => {
-      alert(`Error updating yt-dlp: ${err.message}`)
+      toast.error(`Error updating yt-dlp: ${err.message}`)
     },
   })
 
@@ -159,13 +55,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDed
     mutationFn: (url?: string) => configApi.testFlareSolverr(url),
     onSuccess: (res) => {
       if (res.data.success) {
-        alert(`✓ ${res.data.message} (${res.data.response_time_ms}ms)`)
+        toast.success(`✓ ${res.data.message} (${res.data.response_time_ms}ms)`)
       } else {
-        alert(`✗ ${res.data.message}`)
+        toast.error(`✗ ${res.data.message}`)
       }
     },
     onError: (err: any) => {
-      alert(`Error testing FlareSolverr: ${err.message}`)
+      toast.error(`Error testing FlareSolverr: ${err.message}`)
     },
   })
 
@@ -182,10 +78,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDed
     onSuccess: (res) => {
       refetchCookieStatus()
       queryClient.invalidateQueries({ queryKey: ['config'] })
-      alert(`✓ ${res.data.status_message}`)
+      toast.success(`✓ ${res.data.status_message}`)
     },
     onError: (err: any) => {
-      alert(`Failed to upload cookies: ${err.message}`)
+      toast.error(`Failed to upload cookies: ${err.message}`)
     },
   })
 
@@ -194,20 +90,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDed
     onSuccess: () => {
       refetchCookieStatus()
       queryClient.invalidateQueries({ queryKey: ['config'] })
-      alert('✓ Cookies removed. Downloads will use mobile client emulation.')
+      toast.success('✓ Cookies removed. Downloads will use mobile client emulation.')
     },
     onError: (err: any) => {
-      alert(`Failed to remove cookies: ${err.message}`)
+      toast.error(`Failed to remove cookies: ${err.message}`)
     },
   })
 
   const testGitSyncMutation = useMutation({
     mutationFn: () => configApi.testGitSync(),
     onSuccess: (res) => {
-      alert(res.data.success ? `✓ ${res.data.message}` : `✗ ${res.data.message}`)
+      if (res.data.success) {
+        toast.success(`✓ ${res.data.message}`)
+      } else {
+        toast.error(`✗ ${res.data.message}`)
+      }
     },
     onError: (err: any) => {
-      alert(`Git test failed: ${err.message}`)
+      toast.error(`Git test failed: ${err.message}`)
     },
   })
 
@@ -223,11 +123,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDed
     mutationFn: (data: Partial<Config>) => configApi.update(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['config'] })
-      alert('Settings saved! Restart the backend for changes to take effect.')
+      toast.success('Settings saved! Restart the backend for changes to take effect.')
       onClose()
     },
     onError: (err: any) => {
-      alert(`Failed to save settings: ${err.response?.data?.detail || err.message}`)
+      toast.error(`Failed to save settings: ${err.response?.data?.detail || err.message}`)
     },
   })
 
@@ -527,17 +427,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onOpenDed
                         const scanRes = await onboardingApi.scan(formData.base_download_path)
                         const count = scanRes.data.discovered_playlists.length
                         if (count > 0) {
-                          if (confirm(`Discovered ${count} playlists (${scanRes.data.total_estimated_tracks} tracks). Import and index them into database now?`)) {
+                          const confirmed = await confirm({
+                            title: 'Import Discovered Playlists',
+                            message: `Discovered ${count} playlists (${scanRes.data.total_estimated_tracks} tracks). Import and index them into database now?`,
+                            confirmText: 'Import Now',
+                          })
+                          if (confirmed) {
                             const res = await onboardingApi.confirm({ base_path: formData.base_download_path, items: scanRes.data.discovered_playlists })
-                            alert(`✓ Success! ${res.data.playlists_imported} new playlists imported, ${res.data.tracks_indexed} tracks indexed.`)
+                            toast.success(`✓ Success! ${res.data.playlists_imported} new playlists imported, ${res.data.tracks_indexed} tracks indexed.`)
                             queryClient.invalidateQueries({ queryKey: ['playlists'] })
                             queryClient.invalidateQueries({ queryKey: ['track-index'] })
                           }
                         } else {
-                          alert('✓ Library is in sync. No new unmanaged playlist folders detected.')
+                          toast.info('✓ Library is in sync. No new unmanaged playlist folders detected.')
                         }
                       } catch (err: any) {
-                        alert(`Scan failed: ${err.message}`)
+                        toast.error(`Scan failed: ${err.message}`)
                       }
                     }}
                     className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-colors"

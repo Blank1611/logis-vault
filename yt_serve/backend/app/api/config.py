@@ -27,6 +27,8 @@ class ConfigResponse(BaseModel):
     enable_daily_auto_refresh: bool = True
     daily_refresh_time: str = "04:00"
     daily_refresh_timezone: str = "Asia/Kolkata"
+    daily_refresh_mode: str = "scheduled"
+    daily_refresh_interval_minutes: int = 1440
     enable_git_metadata_sync: bool = True
     git_remote_url: Optional[str] = None
     git_auth_token: Optional[str] = None
@@ -45,6 +47,8 @@ class ConfigResponse(BaseModel):
     adhoc_download_path: Optional[str] = None
     use_custom_adhoc_path: bool = False
     effective_adhoc_download_path: str = ""
+    excluded_dirs: str = ""
+    rename_folder_on_link: bool = False
 
 class ConfigUpdate(BaseModel):
     """Configuration update model"""
@@ -60,6 +64,8 @@ class ConfigUpdate(BaseModel):
     enable_daily_auto_refresh: Optional[bool] = None
     daily_refresh_time: Optional[str] = None
     daily_refresh_timezone: Optional[str] = None
+    daily_refresh_mode: Optional[str] = None
+    daily_refresh_interval_minutes: Optional[int] = None
     enable_git_metadata_sync: Optional[bool] = None
     git_remote_url: Optional[str] = None
     git_auth_token: Optional[str] = None
@@ -76,6 +82,8 @@ class ConfigUpdate(BaseModel):
     setup_completed: Optional[bool] = None
     adhoc_download_path: Optional[str] = None
     use_custom_adhoc_path: Optional[bool] = None
+    excluded_dirs: Optional[str] = None
+    rename_folder_on_link: Optional[bool] = None
 
 def _check_needs_setup(db=None) -> bool:
     """Check if initial setup is needed (requires explicit completion or opt-out flag)"""
@@ -119,6 +127,8 @@ async def get_config(db: Session = Depends(get_db)):
         enable_daily_auto_refresh=getattr(settings, "ENABLE_DAILY_AUTO_REFRESH", True),
         daily_refresh_time=getattr(settings, "DAILY_REFRESH_TIME", "04:00") or "04:00",
         daily_refresh_timezone=getattr(settings, "DAILY_REFRESH_TIMEZONE", "Asia/Kolkata") or "Asia/Kolkata",
+        daily_refresh_mode=getattr(settings, "DAILY_REFRESH_MODE", "scheduled") or "scheduled",
+        daily_refresh_interval_minutes=getattr(settings, "DAILY_REFRESH_INTERVAL_MINUTES", 1440) or 1440,
         enable_git_metadata_sync=getattr(settings, "ENABLE_GIT_METADATA_SYNC", True),
         git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
         git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
@@ -136,7 +146,9 @@ async def get_config(db: Session = Depends(get_db)):
         needs_setup=_check_needs_setup(db=db),
         adhoc_download_path=getattr(settings, "ADHOC_DOWNLOAD_PATH", None),
         use_custom_adhoc_path=getattr(settings, "USE_CUSTOM_ADHOC_PATH", False),
-        effective_adhoc_download_path=settings.get_adhoc_download_path()
+        effective_adhoc_download_path=settings.get_adhoc_download_path(),
+        excluded_dirs=getattr(settings, "EXCLUDED_DIRS", "") or "",
+        rename_folder_on_link=getattr(settings, "RENAME_FOLDER_ON_LINK", False),
     )
 
 def _save_to_env(config: ConfigUpdate):
@@ -179,6 +191,10 @@ def _save_to_env(config: ConfigUpdate):
         env_content['DAILY_REFRESH_TIME'] = config.daily_refresh_time
     if config.daily_refresh_timezone is not None:
         env_content['DAILY_REFRESH_TIMEZONE'] = config.daily_refresh_timezone
+    if config.daily_refresh_mode is not None:
+        env_content['DAILY_REFRESH_MODE'] = config.daily_refresh_mode
+    if config.daily_refresh_interval_minutes is not None:
+        env_content['DAILY_REFRESH_INTERVAL_MINUTES'] = str(config.daily_refresh_interval_minutes)
     if config.enable_git_metadata_sync is not None:
         env_content['ENABLE_GIT_METADATA_SYNC'] = 'true' if config.enable_git_metadata_sync else 'false'
     if config.git_remote_url is not None:
@@ -209,6 +225,10 @@ def _save_to_env(config: ConfigUpdate):
         env_content['ADHOC_DOWNLOAD_PATH'] = config.adhoc_download_path if config.adhoc_download_path else ''
     if config.use_custom_adhoc_path is not None:
         env_content['USE_CUSTOM_ADHOC_PATH'] = 'true' if config.use_custom_adhoc_path else 'false'
+    if config.excluded_dirs is not None:
+        env_content['EXCLUDED_DIRS'] = config.excluded_dirs if config.excluded_dirs else ''
+    if config.rename_folder_on_link is not None:
+        env_content['RENAME_FOLDER_ON_LINK'] = 'true' if config.rename_folder_on_link else 'false'
     
     # Write back to .env
     with open(env_path, 'w', encoding='utf-8') as f:
@@ -247,6 +267,10 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         settings.DAILY_REFRESH_TIME = config.daily_refresh_time
     if config.daily_refresh_timezone is not None:
         settings.DAILY_REFRESH_TIMEZONE = config.daily_refresh_timezone
+    if config.daily_refresh_mode is not None:
+        settings.DAILY_REFRESH_MODE = config.daily_refresh_mode
+    if config.daily_refresh_interval_minutes is not None:
+        settings.DAILY_REFRESH_INTERVAL_MINUTES = config.daily_refresh_interval_minutes
     if config.enable_git_metadata_sync is not None:
         settings.ENABLE_GIT_METADATA_SYNC = config.enable_git_metadata_sync
     if config.git_remote_url is not None:
@@ -281,6 +305,10 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         settings.ADHOC_DOWNLOAD_PATH = config.adhoc_download_path
     if config.use_custom_adhoc_path is not None:
         settings.USE_CUSTOM_ADHOC_PATH = config.use_custom_adhoc_path
+    if config.excluded_dirs is not None:
+        settings.EXCLUDED_DIRS = config.excluded_dirs
+    if config.rename_folder_on_link is not None:
+        settings.RENAME_FOLDER_ON_LINK = config.rename_folder_on_link
     if config.setup_completed is not None:
         from app.models.database import set_system_setting
         set_system_setting("setup_completed", "true" if config.setup_completed else "false", db=db)
@@ -304,10 +332,14 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         enable_daily_auto_refresh=getattr(settings, "ENABLE_DAILY_AUTO_REFRESH", True),
         daily_refresh_time=getattr(settings, "DAILY_REFRESH_TIME", "04:00") or "04:00",
         daily_refresh_timezone=getattr(settings, "DAILY_REFRESH_TIMEZONE", "Asia/Kolkata") or "Asia/Kolkata",
+        daily_refresh_mode=getattr(settings, "DAILY_REFRESH_MODE", "scheduled") or "scheduled",
+        daily_refresh_interval_minutes=getattr(settings, "DAILY_REFRESH_INTERVAL_MINUTES", 1440) or 1440,
         enable_git_metadata_sync=getattr(settings, "ENABLE_GIT_METADATA_SYNC", True),
         git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
         git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
         git_branch=getattr(settings, "GIT_BRANCH", "main") or "main",
+        git_user_name=get_system_setting("git_user_name", default=getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"), db=db),
+        git_user_email=get_system_setting("git_user_email", default=getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"), db=db),
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
@@ -319,7 +351,9 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         needs_setup=_check_needs_setup(db=db),
         adhoc_download_path=getattr(settings, "ADHOC_DOWNLOAD_PATH", None),
         use_custom_adhoc_path=getattr(settings, "USE_CUSTOM_ADHOC_PATH", False),
-        effective_adhoc_download_path=settings.get_adhoc_download_path()
+        effective_adhoc_download_path=settings.get_adhoc_download_path(),
+        excluded_dirs=getattr(settings, "EXCLUDED_DIRS", "") or "",
+        rename_folder_on_link=getattr(settings, "RENAME_FOLDER_ON_LINK", False),
     )
 
 class YtDlpVersionResponse(BaseModel):
@@ -675,6 +709,62 @@ async def confirm_onboarding_ingest(
     res = ingest_discovered_library(discovered_items=payload.items, base_path=target, db=db)
     set_system_setting("setup_completed", "true", db=db)
     return res
+
+
+class BatchLinkItem(BaseModel):
+    folder_path: Optional[str] = None
+    folder_name: Optional[str] = None
+    playlist_url: str
+    rename_folder: Optional[bool] = None
+
+
+class BatchLinkRequest(BaseModel):
+    items: List[BatchLinkItem]
+    global_rename: Optional[bool] = None
+
+
+class BatchExcludeRequest(BaseModel):
+    folder_names: List[str]
+
+
+@router.get("/unmanaged-folders")
+async def get_unmanaged_folders():
+    """Scan base download directory and return all unmanaged folders"""
+    from app.services.onboarding_service import scan_download_directory
+    scan_res = scan_download_directory(settings.BASE_DOWNLOAD_PATH)
+    return {
+        "base_path": settings.BASE_DOWNLOAD_PATH,
+        "unmanaged_folders_count": scan_res.get("unmanaged_folders_count", 0),
+        "unmanaged_folders": scan_res.get("unmanaged_folders", [])
+    }
+
+
+@router.post("/batch-link-unmanaged-folders")
+async def batch_link_folders(payload: BatchLinkRequest, db: Session = Depends(get_db)):
+    """Batch link unmanaged folders to YouTube playlists"""
+    from app.services.onboarding_service import batch_link_unmanaged_folders
+    raw_items = [item.dict() for item in payload.items]
+    return batch_link_unmanaged_folders(items=raw_items, global_rename=payload.global_rename, db=db)
+
+
+@router.post("/batch-exclude-folders")
+async def batch_exclude_folders(payload: BatchExcludeRequest):
+    """Add folders to EXCLUDED_DIRS so they are ignored by auto-discovery"""
+    current_excluded = set(x.strip().lower() for x in (getattr(settings, "EXCLUDED_DIRS", "") or "").split(",") if x.strip())
+    for f in payload.folder_names:
+        cleaned = f.strip().lower()
+        if cleaned:
+            current_excluded.add(cleaned)
+    new_excluded_str = ",".join(sorted(current_excluded))
+    settings.EXCLUDED_DIRS = new_excluded_str
+    
+    # Persist to .env
+    _save_to_env(ConfigUpdate(excluded_dirs=new_excluded_str))
+    return {
+        "success": True,
+        "excluded_dirs": new_excluded_str
+    }
+
 
 
 

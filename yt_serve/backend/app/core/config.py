@@ -134,6 +134,14 @@ class Settings(BaseSettings):
         default="Asia/Kolkata",
         description="Timezone for scheduled daily scan"
     )
+    DAILY_REFRESH_MODE: str = Field(
+        default="scheduled",
+        description="Daily refresh execution mode: 'scheduled' (fixed daily clock time) or 'interval' (periodic duration)"
+    )
+    DAILY_REFRESH_INTERVAL_MINUTES: int = Field(
+        default=1440,
+        description="Periodic metadata refresh interval in minutes if DAILY_REFRESH_MODE == 'interval' (default: 1440 / 24h)"
+    )
     
     # Git Metadata Sync (Disabled by default until repository and token are configured)
     ENABLE_GIT_METADATA_SYNC: bool = Field(
@@ -193,8 +201,8 @@ class Settings(BaseSettings):
         description="Automatically discover and import playlists from download directory on boot"
     )
     AUTO_DISCOVERY_INTERVAL_MINUTES: int = Field(
-        default=60,
-        description="Periodic auto-discovery interval in minutes (0 = startup only)"
+        default=1440,
+        description="Periodic auto-discovery interval in minutes (default: 1440 / 24h)"
     )
     CLI_DISABLE_ONBOARDING: bool = Field(
         default=False,
@@ -232,12 +240,35 @@ class Settings(BaseSettings):
         default=100,
         description="Max number of recent job_{id}.log files to retain (default: 100)"
     )
+    EXCLUDED_DIRS: str = Field(
+        default="",
+        description="Comma-separated list of directory names to exclude from auto-discovery"
+    )
+    RENAME_FOLDER_ON_LINK: bool = Field(
+        default=False,
+        description="Default policy whether to rename folder on disk when linking to playlist (default: False)"
+    )
 
     def get_adhoc_download_path(self) -> str:
         """Resolve absolute ad-hoc downloads directory"""
         if self.USE_CUSTOM_ADHOC_PATH and self.ADHOC_DOWNLOAD_PATH:
             return os.path.abspath(self.ADHOC_DOWNLOAD_PATH)
         return os.path.abspath(os.path.join(self.BASE_DOWNLOAD_PATH, "_adhoc_downloads"))
+
+    def get_excluded_directories(self) -> List[str]:
+        """Return list of lowercase directory names to strictly exclude from auto-discovery"""
+        excluded = {
+            "temp", "logs", "scratch", "node_modules", ".git", ".cache", "lost+found",
+            "_adhoc_downloads"
+        }
+        if self.ADHOC_DOWNLOAD_PATH:
+            excluded.add(os.path.basename(self.ADHOC_DOWNLOAD_PATH).lower())
+        if self.EXCLUDED_DIRS:
+            for item in self.EXCLUDED_DIRS.split(","):
+                cleaned = item.strip().lower()
+                if cleaned:
+                    excluded.add(cleaned)
+        return list(excluded)
 
     class Config:
         env_file = str(ENV_FILE) if ENV_FILE.is_file() else None

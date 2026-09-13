@@ -1,22 +1,25 @@
 import React, { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { playlistsApi } from '../../services/api'
+import { useToast } from '../../context/ToastContext'
 import { Button } from '../ui/Button'
 import { Plus } from 'lucide-react'
 
 export const AddPlaylistBar: React.FC = () => {
   const [url, setUrl] = useState('')
   const queryClient = useQueryClient()
+  const { toast } = useToast()
 
   const addPlaylist = useMutation({
     mutationFn: (newUrl: string) => playlistsApi.create(newUrl),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['playlists'] })
       setUrl('')
+      toast.success('Playlist added successfully!')
     },
     onError: (err: any) => {
       const msg = err.response?.data?.detail || err.message
-      alert(`Failed to add playlist:\n\n${msg}`)
+      toast.error(`Failed to add playlist: ${msg}`)
     },
   })
 

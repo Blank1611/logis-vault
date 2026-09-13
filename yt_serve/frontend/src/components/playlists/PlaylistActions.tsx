@@ -2,36 +2,42 @@ import React from 'react'
 import type { Playlist, Job } from '../../services/types'
 import { Button } from '../ui/Button'
 import { PlayCircle, Download, Music, RefreshCw, Trash2, Edit3 } from 'lucide-react'
+import { useConfirm } from '../../context/ConfirmContext'
 
 export interface PlaylistActionsProps {
   playlist: Playlist
   runningJob?: Job
+  isRefreshing?: boolean
+  isCancelling?: boolean
+  isOpeningFolder?: boolean
   isScanning?: boolean
   currentScanningPlaylist?: string | null
-  onStartJob: (jobType: 'download' | 'extract' | 'both') => void
+  compact?: boolean
+  onStartJob: (type: 'download' | 'extract' | 'both') => void
   onCancelJob: (jobId: number) => void
   onRefresh: () => void
   onDelete: () => void
+  onOpenFolder?: () => void
   onEditExclusions?: () => void
-  isRefreshing?: boolean
-  isCancelling?: boolean
-  compact?: boolean
 }
 
 export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
   playlist,
   runningJob,
+  isRefreshing = false,
+  isCancelling = false,
+  isOpeningFolder: _isOpeningFolder = false,
   isScanning = false,
-  currentScanningPlaylist,
+  currentScanningPlaylist = null,
+  compact = false,
   onStartJob,
   onCancelJob,
   onRefresh,
   onDelete,
+  onOpenFolder: _onOpenFolder = () => {},
   onEditExclusions,
-  isRefreshing = false,
-  isCancelling = false,
-  compact = false,
 }) => {
+  const confirm = useConfirm()
   const isCaughtUp = playlist.local_count >= playlist.playlist_count && playlist.playlist_count > 0
 
   if (runningJob) {
@@ -39,8 +45,14 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
       <Button
         variant="danger"
         size={compact ? 'sm' : 'md'}
-        onClick={() => {
-          if (confirm('Cancel this job? The current video download will complete first.')) {
+        onClick={async () => {
+          const ok = await confirm({
+            title: 'Cancel Download Job',
+            message: 'Cancel this job? The current video download will complete first.',
+            confirmText: 'Cancel Job',
+            isDestructive: true,
+          })
+          if (ok) {
             onCancelJob(runningJob.id)
           }
         }}
@@ -151,14 +163,14 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
       <Button
         variant="ghost"
         size={compact ? 'sm' : 'md'}
-        onClick={() => {
-          if (
-            confirm(
-              `Remove "${playlist.title}" from manager?\n\n` +
-              'This will only remove the playlist entry from the database.\n' +
-              'Downloaded files and folders will remain intact.'
-            )
-          ) {
+        onClick={async () => {
+          const ok = await confirm({
+            title: `Remove "${playlist.title}"`,
+            message: 'Remove this playlist entry from the database?\n\nDownloaded files and folders on disk will remain 100% intact.',
+            confirmText: 'Remove Playlist',
+            isDestructive: true,
+          })
+          if (ok) {
             onDelete()
           }
         }}

@@ -213,14 +213,22 @@ async def _daily_scheduler_loop():
     while True:
         try:
             # Refresh config values in case user updated them via Settings UI
+            mode = getattr(settings, "DAILY_REFRESH_MODE", "scheduled") or "scheduled"
             target_time_str = getattr(settings, "DAILY_REFRESH_TIME", "04:00") or "04:00"
             tz_name = getattr(settings, "DAILY_REFRESH_TIMEZONE", "Asia/Kolkata") or "Asia/Kolkata"
+            interval_mins = getattr(settings, "DAILY_REFRESH_INTERVAL_MINUTES", 1440) or 1440
 
-            sleep_seconds, next_run_dt = calculate_seconds_until_next_run(target_time_str, tz_name)
-            next_run_str = next_run_dt.strftime('%Y-%m-%d %H:%M:%S %Z')
-            _SCHEDULER_STATE["next_scan_at"] = next_run_str
-
-            print(f"[SCHEDULER] Next daily metadata scan scheduled at: {next_run_str} (in {sleep_seconds/3600:.2f} hours)")
+            if mode == "interval":
+                sleep_seconds = max(60.0, float(interval_mins * 60))
+                next_run_dt = datetime.now() + timedelta(seconds=sleep_seconds)
+                next_run_str = next_run_dt.strftime('%Y-%m-%d %H:%M:%S')
+                _SCHEDULER_STATE["next_scan_at"] = next_run_str
+                print(f"[SCHEDULER] Next periodic metadata scan in {interval_mins} mins (at {next_run_str})")
+            else:
+                sleep_seconds, next_run_dt = calculate_seconds_until_next_run(target_time_str, tz_name)
+                next_run_str = next_run_dt.strftime('%Y-%m-%d %H:%M:%S %Z')
+                _SCHEDULER_STATE["next_scan_at"] = next_run_str
+                print(f"[SCHEDULER] Next daily metadata scan scheduled at: {next_run_str} (in {sleep_seconds/3600:.2f} hours)")
 
             await asyncio.sleep(sleep_seconds)
 

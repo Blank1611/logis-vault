@@ -30,7 +30,7 @@ class TestOnboardingService(unittest.TestCase):
         self.assertIsNone(extract_video_id_from_filename("invalid_filename.mp4"))
 
     def test_scan_and_ingest_existing_library(self):
-        # Create Playlist A folder
+        # Create Playlist A folder (Managed with playlist_info.json)
         pl_a = os.path.join(self.temp_dir.name, "Classic Rock")
         os.makedirs(pl_a, exist_ok=True)
         with open(os.path.join(pl_a, "playlist_info.json"), "w") as f:
@@ -43,7 +43,7 @@ class TestOnboardingService(unittest.TestCase):
         with open(os.path.join(pl_a, "Queen - Bohemian Rhapsody [fJ9rUzIMcZQ].mp4"), "w") as f:
             f.write("dummy video stream")
 
-        # Create Playlist B folder
+        # Create Playlist B folder (Unmanaged without playlist_info.json)
         pl_b = os.path.join(self.temp_dir.name, "Workout Tracks")
         os.makedirs(pl_b, exist_ok=True)
         # Create media file in Playlist B
@@ -53,21 +53,43 @@ class TestOnboardingService(unittest.TestCase):
         # 1. Scan directory
         scan_res = scan_download_directory(self.temp_dir.name)
         self.assertTrue(scan_res["exists"])
-        self.assertEqual(scan_res["discovered_playlists_count"], 2)
+        # Strict qualification: Only Playlist A qualifies as discovered playlist
+        self.assertEqual(scan_res["discovered_playlists_count"], 1)
+        self.assertEqual(scan_res["unmanaged_folders_count"], 1)
 
         # Verify Playlist A parsed metadata
-        found_a = next(p for p in scan_res["discovered_playlists"] if p["folder_name"] == "Classic Rock")
+        found_a = scan_res["discovered_playlists"][0]
         self.assertEqual(found_a["title"], "Classic Rock Hits")
         self.assertEqual(found_a["url"], "https://www.youtube.com/playlist?list=PL_ROCK_123")
         self.assertEqual(found_a["video_count"], 1)
 
-        # 2. Ingest into isolated test SQLite database
+        # Verify Playlist B is classified in unmanaged_folders
+        found_b = scan_res["unmanaged_folders"][0]
+        self.assertEqual(found_b["folder_name"], "Workout Tracks")
+        self.assertEqual(found_b["audio_count"], 1)
+
+        # 2. Ingest discovered playlists into isolated test SQLite database
         ingest_res = ingest_discovered_library(discovered_items=scan_res["discovered_playlists"], db=self.db)
         self.assertEqual(ingest_res["status"], "success")
-        self.assertEqual(ingest_res["playlists_imported"], 2)
-        self.assertEqual(ingest_res["tracks_indexed"], 2)
+        self.assertEqual(ingest_res["playlists_imported"], 1)
+        self.assertEqual(ingest_res["tracks_indexed"], 1)
 
-        # Verify records in isolated database
+        # 3. Test batch linking the unmanaged folder (Playlist B)
+        from app.services.onboarding_service import batch_link_unmanaged_folders
+        link_res = batch_link_unmanaged_folders(
+            items=[{
+                "folder_path": pl_b,
+                "playlist_url": "https://www.youtube.com/playlist?list=PL_WORKOUT_456"
+            }],
+            db=self.db
+        )
+        self.assertTrue(link_res["success"])
+        self.assertEqual(link_res["linked_count"], 1)
+
+        # Verify playlist_info.json was written to disk
+        self.assertTrue(os.path.isfile(os.path.join(pl_b, "playlist_info.json")))
+
+        # Verify records in isolated database (now both playlists are present and indexed)
         db_playlists = self.db.query(Playlist).all()
         self.assertEqual(len(db_playlists), 2)
 
@@ -90,5 +112,37 @@ class TestOnboardingService(unittest.TestCase):
         needs_setup = _check_needs_setup(db=self.db)
         self.assertFalse(needs_setup)
 
+    def test_phantom_playlist_safe_purge(self):
+        from app.services.recovery_service import RecoveryService
+        # Create phantom record in DB
+        phantom = Playlist(
+            title="test_custom",
+            url="https://www.youtube.com/playlist?list=test_custom",
+            playlist_count=0,
+            local_count=0
+        )
+        self.db.add(phantom)
+        self.db.commit()
+        self.assertEqual(self.db.query(Playlist).count(), 1)
+
+        # Create dummy directory on disk for test_custom
+        custom_dir = os.path.join(self.temp_dir.name, "test_custom")
+        os.makedirs(custom_dir, exist_ok=True)
+        dummy_file = os.path.join(custom_dir, "keep_me.txt")
+        with open(dummy_file, "w") as f:
+            f.write("user data that must never be deleted")
+
+        # Run recovery phantom cleanup
+        purged = RecoveryService.cleanup_phantom_playlists(self.db)
+        self.assertEqual(purged, 1)
+
+        # Verify record was purged from DB
+        self.assertEqual(self.db.query(Playlist).count(), 0)
+
+        # Verify disk folder and files remain 100% intact (zero disk deletion guarantee)
+        self.assertTrue(os.path.isdir(custom_dir))
+        self.assertTrue(os.path.isfile(dummy_file))
+
 if __name__ == "__main__":
     unittest.main()
+

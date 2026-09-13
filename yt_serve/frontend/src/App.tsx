@@ -4,14 +4,16 @@ import { playlistsApi, jobsApi, configApi } from './services/api'
 import type { Playlist, Job } from './services/types'
 import { useWebSocketEvents } from './hooks/useWebSocket'
 import { ThemeProvider } from './context/ThemeContext'
+import { ToastProvider, ConfirmProvider, useToast } from './context'
 import { Header, SchedulerBanner, type TabType } from './components/layout'
-import { PlaylistsPage, LogsPage, type ActivityLog } from './pages'
+import { PlaylistsPage, LogsPage, SettingsPage, type ActivityLog } from './pages'
 import { QuickDownloadCard } from './components/adhoc/QuickDownloadCard'
 import { 
-  SettingsModal, ExclusionsModal, LogsModal, InitialSetupModal, InterruptedJobsDialog, ReorganizeModal, DeduplicateModal 
+  ExclusionsModal, LogsModal, InitialSetupModal, InterruptedJobsDialog, ReorganizeModal, DeduplicateModal 
 } from './components/modals'
 
 function AppContent() {
+  const { toast } = useToast()
   const [activeTab, setActiveTab] = useState<TabType>('playlists')
   const [showSettings, setShowSettings] = useState(false)
   const [showReorganize, setShowReorganize] = useState(false)
@@ -213,7 +215,7 @@ function AppContent() {
     onError: (err: any) => {
       setRefreshingPlaylistId(null)
       const msg = err.response?.data?.detail || err.message
-      alert(`Cannot refresh playlist:\n\n${msg}`)
+      toast.error(`Cannot refresh playlist:\n\n${msg}`)
     },
   })
 
@@ -225,7 +227,7 @@ function AppContent() {
     },
     onError: (err: any) => {
       const msg = err.response?.data?.detail || err.message
-      alert(`Cannot start job:\n\n${msg}`)
+      toast.error(`Cannot start job:\n\n${msg}`)
     },
   })
 
@@ -250,7 +252,7 @@ function AppContent() {
     },
     onError: (error: any) => {
       const errorDetail = error.response?.data?.detail || error.message
-      alert(`Error opening folder:\n\n${errorDetail}`)
+      toast.error(`Error opening folder:\n\n${errorDetail}`)
     },
   })
 
@@ -274,69 +276,73 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
-      {/* Header */}
-      <Header
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        runningJobsCount={runningJobsCount}
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
-        onOpenSettings={() => setShowSettings(true)}
-        onOpenReorganize={() => setShowReorganize(true)}
-        onOpenDeduplicate={() => setShowDeduplicate(true)}
-      />
-
-      {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-4 py-8">
-        <SchedulerBanner schedulerStatus={schedulerStatus} />
-
-        {activeTab === 'playlists' && (
-          <PlaylistsPage
-            playlists={playlists}
-            jobs={jobs}
-            isLoading={playlistsLoading}
-            viewMode={viewMode}
-            expandedRows={expandedRows}
-            onToggleRow={toggleRow}
-            isScanning={schedulerStatus?.is_scanning}
-            currentScanningPlaylist={schedulerStatus?.current_playlist}
-            onStartJob={(playlistId, jobType) => startJob.mutate({ playlistId, jobType })}
-            onCancelJob={(jobId) => cancelJob.mutate(jobId)}
-            onRefresh={(playlistId) => refreshPlaylist.mutate(playlistId)}
-            onDelete={(playlistId) => deletePlaylist.mutate(playlistId)}
-            onOpenFolder={(playlistId) => openFolder.mutate(playlistId)}
-            onEditExclusions={(playlist) => setEditingExclusions(playlist)}
-            onViewLogs={(job) => setViewingLogs(job)}
-            refreshingPlaylistId={refreshingPlaylistId}
-            cancellingJobId={cancellingJobId}
-            openFolderPlaylistId={openFolderPlaylistId}
-          />
-        )}
-
-        {activeTab === 'quick-download' && (
-          <div className="space-y-6">
-            <QuickDownloadCard onJobStarted={() => {
-              // Stay on page and let user see active progress
-            }} />
-          </div>
-        )}
-
-        {activeTab === 'logs' && (
-          <LogsPage
-            jobs={jobs}
-            playlists={playlists}
-            activityLogs={activityLogs}
-            onClearActivity={() => setActivityLogs([])}
-          />
-        )}
-      </main>
-
-      {/* Modals & Dialogs */}
-      {showSettings && (
-        <SettingsModal 
-          onClose={() => setShowSettings(false)} 
-          onOpenDeduplicate={() => setShowDeduplicate(true)}
+      {showSettings ? (
+        <SettingsPage
+          onBack={() => setShowSettings(false)}
+          onOpenDeduplicate={() => {
+            setShowSettings(false)
+            setShowDeduplicate(true)
+          }}
         />
+      ) : (
+        <>
+          {/* Header */}
+          <Header
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            runningJobsCount={runningJobsCount}
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
+            onOpenSettings={() => setShowSettings(true)}
+            onOpenReorganize={() => setShowReorganize(true)}
+            onOpenDeduplicate={() => setShowDeduplicate(true)}
+          />
+
+          {/* Main Container */}
+          <main className="max-w-7xl mx-auto px-4 py-8">
+            <SchedulerBanner schedulerStatus={schedulerStatus} />
+
+            {activeTab === 'playlists' && (
+              <PlaylistsPage
+                playlists={playlists}
+                jobs={jobs}
+                isLoading={playlistsLoading}
+                viewMode={viewMode}
+                expandedRows={expandedRows}
+                onToggleRow={toggleRow}
+                isScanning={schedulerStatus?.is_scanning}
+                currentScanningPlaylist={schedulerStatus?.current_playlist}
+                onStartJob={(playlistId, jobType) => startJob.mutate({ playlistId, jobType })}
+                onCancelJob={(jobId) => cancelJob.mutate(jobId)}
+                onRefresh={(playlistId) => refreshPlaylist.mutate(playlistId)}
+                onDelete={(playlistId) => deletePlaylist.mutate(playlistId)}
+                onOpenFolder={(playlistId) => openFolder.mutate(playlistId)}
+                onEditExclusions={(playlist) => setEditingExclusions(playlist)}
+                onViewLogs={(job) => setViewingLogs(job)}
+                refreshingPlaylistId={refreshingPlaylistId}
+                cancellingJobId={cancellingJobId}
+                openFolderPlaylistId={openFolderPlaylistId}
+              />
+            )}
+
+            {activeTab === 'quick-download' && (
+              <div className="space-y-6">
+                <QuickDownloadCard onJobStarted={() => {
+                  // Stay on page and let user see active progress
+                }} />
+              </div>
+            )}
+
+            {activeTab === 'logs' && (
+              <LogsPage
+                jobs={jobs}
+                playlists={playlists}
+                activityLogs={activityLogs}
+                onClearActivity={() => setActivityLogs([])}
+              />
+            )}
+          </main>
+        </>
       )}
 
       {showReorganize && (
@@ -398,7 +404,11 @@ function AppContent() {
 function App() {
   return (
     <ThemeProvider>
-      <AppContent />
+      <ToastProvider>
+        <ConfirmProvider>
+          <AppContent />
+        </ConfirmProvider>
+      </ToastProvider>
     </ThemeProvider>
   )
 }

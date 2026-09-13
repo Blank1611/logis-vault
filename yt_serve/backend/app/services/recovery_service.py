@@ -110,6 +110,53 @@ class RecoveryService:
         # 3. Clean up abandoned temporary download fragments from crash
         cls.cleanup_temp_artifacts(settings.TEMP_DOWNLOAD_PATH)
 
+        # 4. Safely purge phantom database records (e.g., test_custom, _adhoc_downloads) without touching disk files
+        cls.cleanup_phantom_playlists(db)
+
         logger.info("=" * 60)
         logger.info("[STARTUP RECOVERY] Recovery checks completed.")
         logger.info("=" * 60)
+
+    @classmethod
+    def cleanup_phantom_playlists(cls, db: Session) -> int:
+        """
+        Safely purges phantom database entries (e.g. from empty directories or adhoc download folders)
+        where valid playlist metadata was never generated.
+        GUARANTEE: Purely removes database rows; NEVER deletes or touches physical files/folders on disk.
+        """
+        from app.models.database import Track
+        purged_count = 0
+        try:
+            excluded = settings.get_excluded_directories()
+            candidates = db.query(Playlist).filter(
+                (Playlist.url.like("%list=test_custom%")) |
+                (Playlist.url.like("%list=_adhoc_downloads%"))
+            ).all()
+
+            # Also check any playlist whose URL was generated from folder name without playlist_info.json
+            all_pls = db.query(Playlist).all()
+            for p in all_pls:
+                if p in candidates:
+                    continue
+                # If folder title is in excluded dirs or url is list={p.title}
+                if p.title.lower() in excluded or p.url.endswith(f"list={p.title}"):
+                    folder = os.path.join(settings.BASE_DOWNLOAD_PATH, p.title)
+                    info_json = os.path.join(folder, "playlist_info.json")
+                    if not os.path.isfile(info_json):
+                        candidates.append(p)
+
+            for pl in candidates:
+                logger.info(f"[RECOVERY] Safely purging phantom database playlist #{pl.id} '{pl.title}' ({pl.url}) - files on disk are preserved.")
+                for track in db.query(Track).all():
+                    if track.playlists_json and pl.id in track.playlists_json:
+                        track.playlists_json = [pid for pid in track.playlists_json if pid != pl.id]
+                db.delete(pl)
+                purged_count += 1
+
+            if purged_count > 0:
+                db.commit()
+                logger.info(f"[RECOVERY] ✓ Safely purged {purged_count} phantom playlist record(s) from database.")
+        except Exception as e:
+            logger.warning(f"[RECOVERY] Note during phantom playlist cleanup: {e}")
+            db.rollback()
+        return purged_count

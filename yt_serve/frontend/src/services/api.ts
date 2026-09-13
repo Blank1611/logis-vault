@@ -140,6 +140,8 @@ export interface Config {
   enable_daily_auto_refresh?: boolean
   daily_refresh_time?: string
   daily_refresh_timezone?: string
+  daily_refresh_mode?: 'scheduled' | 'interval'
+  daily_refresh_interval_minutes?: number
   enable_git_metadata_sync?: boolean
   git_remote_url?: string | null
   git_auth_token?: string | null
@@ -158,6 +160,16 @@ export interface Config {
   adhoc_download_path?: string | null
   use_custom_adhoc_path?: boolean
   effective_adhoc_download_path?: string
+  excluded_dirs?: string
+  rename_folder_on_link?: boolean
+}
+
+export interface UnmanagedFolder {
+  folder_name: string
+  folder_path: string
+  video_count: number
+  audio_count: number
+  total_files: number
 }
 
 export interface SchedulerStatus {
@@ -213,6 +225,23 @@ export const configApi = {
     })
   },
   deleteCookies: () => api.delete<CookieStatus>('/config/cookies'),
+  getUnmanagedFolders: () => api.get<{
+    base_path: string
+    unmanaged_folders_count: number
+    unmanaged_folders: UnmanagedFolder[]
+  }>('/config/unmanaged-folders'),
+  batchLinkUnmanagedFolders: (
+    items: Array<{ folder_path?: string; folder_name?: string; playlist_url: string; rename_folder?: boolean }>,
+    global_rename?: boolean
+  ) =>
+    api.post<{
+      success: boolean
+      linked_count: number
+      failed_count: number
+      results: Array<{ folder_path: string; success: boolean; playlist_id?: number; title?: string; error?: string }>
+    }>('/config/batch-link-unmanaged-folders', { items, global_rename }),
+  batchExcludeFolders: (folder_names: string[]) =>
+    api.post<{ success: boolean; excluded_dirs: string }>('/config/batch-exclude-folders', { folder_names }),
 }
 
 export interface DiscoveredPlaylistItem {
@@ -231,8 +260,10 @@ export interface DiscoveredLibraryPreview {
   exists: boolean
   total_folders_scanned: number
   discovered_playlists_count: number
+  unmanaged_folders_count?: number
   total_estimated_tracks: number
   discovered_playlists: DiscoveredPlaylistItem[]
+  unmanaged_folders?: UnmanagedFolder[]
 }
 
 export interface OnboardingResult {

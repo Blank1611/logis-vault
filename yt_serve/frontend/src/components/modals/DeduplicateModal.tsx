@@ -6,6 +6,7 @@ import { Button } from '../ui/Button'
 import { 
   Sparkles, RefreshCw, HardDrive, Check, Loader2, Music, Search, ShieldCheck 
 } from 'lucide-react'
+import { useConfirm } from '../../context/ConfirmContext'
 
 export interface DeduplicateModalProps {
   isOpen: boolean
@@ -14,6 +15,7 @@ export interface DeduplicateModalProps {
 
 export const DeduplicateModal: React.FC<DeduplicateModalProps> = ({ isOpen, onClose }) => {
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const [searchTerm, setSearchTerm] = useState('')
 
   // 1. Fetch library duplicate scan
@@ -24,14 +26,17 @@ export const DeduplicateModal: React.FC<DeduplicateModalProps> = ({ isOpen, onCl
       return res.data
     },
     enabled: isOpen,
+    staleTime: 60000,
   })
 
-  // 2. Apply deduplication mutation
+  // 2. State for application feedback
   const [applyResult, setApplyResult] = useState<DeduplicationApplyResult | null>(null)
+
+  // 3. Mutation to convert duplicates to hardlinks
   const applyMutation = useMutation({
     mutationFn: async () => {
       const res = await housekeepingApi.applyDeduplication({
-        duplicate_groups: scanData?.duplicate_groups
+        duplicate_groups: scanData?.duplicate_groups,
       })
       return res.data
     },
@@ -49,12 +54,15 @@ export const DeduplicateModal: React.FC<DeduplicateModalProps> = ({ isOpen, onCl
     g.playlists.some(p => p.toLowerCase().includes(searchTerm.toLowerCase()))
   )
 
-  const handleApply = () => {
+  const handleApply = async () => {
     if (!scanData || scanData.total_duplicate_files === 0) return
-    if (confirm(
-      `Convert ${scanData.total_duplicate_files} duplicate files into zero-space NTFS/ext4 hardlinks?\n\n` +
-      `This will safely reclaim ~${scanData.formatted_reclaimable_space} of physical disk space while keeping all songs playable in their playlists.`
-    )) {
+    const ok = await confirm({
+      title: 'Deduplicate Files',
+      message: `Convert ${scanData.total_duplicate_files} duplicate files into zero-space NTFS/ext4 hardlinks?\n\nThis will safely reclaim ~${scanData.formatted_reclaimable_space} of physical disk space while keeping all songs playable in their playlists.`,
+      confirmText: 'Convert to Hardlinks',
+      isDestructive: false,
+    })
+    if (ok) {
       setApplyResult(null)
       applyMutation.mutate()
     }
