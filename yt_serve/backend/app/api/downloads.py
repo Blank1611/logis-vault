@@ -83,6 +83,7 @@ def get_download_service() -> DownloadService:
     })
 
 @router.get("/jobs", response_model=List[JobResponse])
+@router.get("/jobs/", response_model=List[JobResponse])
 async def list_jobs(
     status: Optional[str] = None,
     playlist_id: Optional[int] = None,
@@ -127,6 +128,7 @@ async def list_jobs(
     return result
 
 @router.post("/jobs", response_model=JobResponse, status_code=201)
+@router.post("/jobs/", response_model=JobResponse, status_code=201)
 async def create_job(
     job: JobCreate,
     db: Session = Depends(get_db)
