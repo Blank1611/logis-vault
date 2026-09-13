@@ -13,9 +13,10 @@ import {
 
 export interface InitialSetupModalProps {
   onComplete: () => void
+  onOpenSettings?: (tab?: 'storage' | 'audio' | 'auth' | 'scheduler' | 'git' | 'network') => void
 }
 
-export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete }) => {
+export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete, onOpenSettings }) => {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [currentStep, setCurrentStep] = useState<'config' | 'ingestion' | 'summary'>('config')
@@ -501,7 +502,9 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete
               variant="secondary"
               onClick={() => {
                 onComplete()
-                window.location.href = '/settings?tab=storage'
+                if (onOpenSettings) {
+                  onOpenSettings('storage')
+                }
               }}
               className="w-full sm:w-auto text-xs py-2.5 flex items-center justify-center gap-1.5"
             >

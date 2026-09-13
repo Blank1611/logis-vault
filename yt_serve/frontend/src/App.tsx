@@ -16,6 +16,7 @@ function AppContent() {
   const { toast } = useToast()
   const [activeTab, setActiveTab] = useState<TabType>('playlists')
   const [showSettings, setShowSettings] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<'storage' | 'audio' | 'auth' | 'scheduler' | 'git' | 'network'>('storage')
   const [showReorganize, setShowReorganize] = useState(false)
   const [showDeduplicate, setShowDeduplicate] = useState(false)
   const [showInitialSetup, setShowInitialSetup] = useState(false)
@@ -278,6 +279,7 @@ function AppContent() {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
       {showSettings ? (
         <SettingsPage
+          initialTab={settingsTab}
           onBack={() => setShowSettings(false)}
           onOpenDeduplicate={() => {
             setShowSettings(false)
@@ -378,6 +380,10 @@ function AppContent() {
           onComplete={() => {
             setShowInitialSetup(false)
             queryClient.invalidateQueries({ queryKey: ['config'] })
+          }}
+          onOpenSettings={(tab) => {
+            if (tab) setSettingsTab(tab)
+            setShowSettings(true)
           }}
         />
       )}

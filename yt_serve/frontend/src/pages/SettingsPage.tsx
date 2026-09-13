@@ -14,21 +14,28 @@ import {
   Upload, Trash2, Cpu, RefreshCw
 } from 'lucide-react'
 
-type SettingsTab = 'storage' | 'audio' | 'auth' | 'scheduler' | 'git' | 'network'
+export type SettingsTab = 'storage' | 'audio' | 'auth' | 'scheduler' | 'git' | 'network'
 
 export interface SettingsPageProps {
   onBack: () => void
   onOpenDeduplicate?: () => void
+  initialTab?: SettingsTab
 }
 
-export function SettingsPage({ onBack, onOpenDeduplicate }: SettingsPageProps) {
+export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage' }: SettingsPageProps) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const confirm = useConfirm()
 
-  const [activeTab, setActiveTab] = useState<SettingsTab>('storage')
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'storage')
   const [formData, setFormData] = useState<Partial<Config>>({})
   const [isDirty, setIsDirty] = useState(false)
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab)
+    }
+  }, [initialTab])
 
   // Status queries
   const { data: config, isLoading } = useQuery({
