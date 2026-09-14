@@ -22,6 +22,23 @@ export function UnmanagedFoldersManager() {
 
   const [rowStates, setRowStates] = useState<Record<string, RowState>>({})
   const [globalRename, setGlobalRename] = useState<boolean>(false)
+  const [renameInitialized, setRenameInitialized] = useState<boolean>(false)
+
+  // Fetch app config to read global rename_folder_on_link default
+  const { data: appConfig } = useQuery({
+    queryKey: ['config'],
+    queryFn: async () => {
+      const res = await configApi.get()
+      return res.data
+    },
+  })
+
+  useEffect(() => {
+    if (appConfig && !renameInitialized) {
+      setGlobalRename(Boolean(appConfig.rename_folder_on_link))
+      setRenameInitialized(true)
+    }
+  }, [appConfig, renameInitialized])
 
   // Fetch unmanaged folders
   const { data, isLoading, isFetching, refetch } = useQuery({
@@ -122,25 +139,35 @@ export function UnmanagedFoldersManager() {
     })
   }
 
+  const isValidPlaylistUrl = (url: string) => {
+    const trimmed = url.trim()
+    return trimmed.startsWith('http://') || trimmed.startsWith('https://')
+  }
+
   // Count how many have valid URLs entered
-  const mappedCount = folders.filter((f: UnmanagedFolder) => (rowStates[f.folder_name]?.playlist_url || '').trim()).length
+  const mappedCount = folders.filter((f: UnmanagedFolder) => isValidPlaylistUrl(rowStates[f.folder_name]?.playlist_url || '')).length
   const selectedCount = folders.filter((f: UnmanagedFolder) => rowStates[f.folder_name]?.selected).length
 
   // Handle Apply All Mapped
   const handleApplyMapped = async () => {
-    const itemsToLink = folders
-      .filter((f: UnmanagedFolder) => (rowStates[f.folder_name]?.playlist_url || '').trim())
-      .map((f: UnmanagedFolder) => ({
-        folder_name: f.folder_name,
-        folder_path: f.folder_path,
-        playlist_url: rowStates[f.folder_name].playlist_url.trim(),
-        rename_folder: rowStates[f.folder_name].rename_folder ?? globalRename,
-      }))
-
-    if (itemsToLink.length === 0) {
+    const entered = folders.filter((f: UnmanagedFolder) => (rowStates[f.folder_name]?.playlist_url || '').trim())
+    if (entered.length === 0) {
       toast.info('Please enter at least one YouTube Playlist URL before linking.')
       return
     }
+
+    const invalidItems = entered.filter((f: UnmanagedFolder) => !isValidPlaylistUrl(rowStates[f.folder_name].playlist_url))
+    if (invalidItems.length > 0) {
+      toast.error(`Invalid URL for "${invalidItems[0].folder_name}". URLs must start with http:// or https://`)
+      return
+    }
+
+    const itemsToLink = entered.map((f: UnmanagedFolder) => ({
+      folder_name: f.folder_name,
+      folder_path: f.folder_path,
+      playlist_url: rowStates[f.folder_name].playlist_url.trim(),
+      rename_folder: rowStates[f.folder_name].rename_folder ?? globalRename,
+    }))
 
     batchLinkMutation.mutate({
       items: itemsToLink,
@@ -153,6 +180,10 @@ export function UnmanagedFoldersManager() {
     const url = (rowStates[folder.folder_name]?.playlist_url || '').trim()
     if (!url) {
       toast.info(`Please enter a YouTube playlist URL for folder "${folder.folder_name}".`)
+      return
+    }
+    if (!isValidPlaylistUrl(url)) {
+      toast.error(`Invalid URL for "${folder.folder_name}". URLs must start with http:// or https://`)
       return
     }
 
@@ -342,7 +373,10 @@ export function UnmanagedFoldersManager() {
                     selected: false,
                   }
 
-                  const hasUrl = Boolean(state.playlist_url?.trim())
+                  const urlVal = (state.playlist_url || '').trim()
+                  const hasUrl = Boolean(urlVal)
+                  const isUrlValid = isValidPlaylistUrl(urlVal)
+                  const showUrlError = hasUrl && !isUrlValid
 
                   return (
                     <tr
@@ -393,8 +427,17 @@ export function UnmanagedFoldersManager() {
                           value={state.playlist_url}
                           onChange={(e) => updateRow(folder.folder_name, { playlist_url: e.target.value })}
                           placeholder="https://www.youtube.com/playlist?list=..."
-                          className="w-full px-3 py-1.5 text-xs bg-gray-950 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 font-mono"
+                          className={`w-full px-3 py-1.5 text-xs bg-gray-950 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-1 font-mono ${
+                            showUrlError
+                              ? 'border-rose-500 focus:ring-rose-500 focus:border-rose-500'
+                              : 'border-gray-700 focus:ring-blue-500 focus:border-blue-500'
+                          }`}
                         />
+                        {showUrlError && (
+                          <span className="text-[10px] text-rose-400 mt-1 block">
+                            URL must start with http:// or https://
+                          </span>
+                        )}
                       </td>
 
                       <td className="p-3 text-center">
@@ -412,13 +455,13 @@ export function UnmanagedFoldersManager() {
                           <button
                             type="button"
                             onClick={() => handleLinkSingle(folder)}
-                            disabled={!hasUrl || batchLinkMutation.isPending}
+                            disabled={!hasUrl || !isUrlValid || batchLinkMutation.isPending}
                             className={`p-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 ${
-                              hasUrl
+                              hasUrl && isUrlValid
                                 ? 'bg-blue-600 hover:bg-blue-500 text-white'
                                 : 'bg-gray-800 text-gray-500 cursor-not-allowed'
                             }`}
-                            title="Link this folder"
+                            title={hasUrl && isUrlValid ? 'Link this folder' : 'Enter a valid URL (http:// or https://) to link'}
                           >
                             <LinkIcon className="w-3.5 h-3.5" />
                             <span className="hidden sm:inline">Link</span>

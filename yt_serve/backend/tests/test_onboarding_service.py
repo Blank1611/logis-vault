@@ -75,14 +75,23 @@ class TestOnboardingService(unittest.TestCase):
         self.assertEqual(ingest_res["tracks_indexed"], 1)
 
         # 3. Test batch linking the unmanaged folder (Playlist B)
+        from unittest.mock import patch
         from app.services.onboarding_service import batch_link_unmanaged_folders
-        link_res = batch_link_unmanaged_folders(
-            items=[{
-                "folder_path": pl_b,
-                "playlist_url": "https://www.youtube.com/playlist?list=PL_WORKOUT_456"
-            }],
-            db=self.db
-        )
+
+        mock_meta = {
+            "title": "Workout Tracks",
+            "webpage_url": "https://www.youtube.com/playlist?list=PL_WORKOUT_456",
+            "playlist_count": 1,
+            "entries": []
+        }
+        with patch("app.core.yt_playlist_audio_tools._get_playlist_info", return_value=mock_meta):
+            link_res = batch_link_unmanaged_folders(
+                items=[{
+                    "folder_path": pl_b,
+                    "playlist_url": "https://www.youtube.com/playlist?list=PL_WORKOUT_456"
+                }],
+                db=self.db
+            )
         self.assertTrue(link_res["success"])
         self.assertEqual(link_res["linked_count"], 1)
 

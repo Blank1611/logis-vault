@@ -296,6 +296,10 @@ function AppContent() {
             viewMode={viewMode}
             onViewModeChange={setViewMode}
             onOpenSettings={() => setShowSettings(true)}
+            onOpenSettingsTab={(tab) => {
+              setSettingsTab(tab || 'storage')
+              setShowSettings(true)
+            }}
             onOpenReorganize={() => setShowReorganize(true)}
             onOpenDeduplicate={() => setShowDeduplicate(true)}
           />

@@ -1,7 +1,7 @@
 """
 Configuration API endpoints
 """
-from fastapi import APIRouter, UploadFile, File, Depends
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 import os
@@ -9,8 +9,10 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.logging_engine import get_logger
 from app.models.database import get_db
 
+logger = get_logger("app.api.config")
 router = APIRouter()
 
 class ConfigResponse(BaseModel):
@@ -30,6 +32,7 @@ class ConfigResponse(BaseModel):
     daily_refresh_mode: str = "scheduled"
     daily_refresh_interval_minutes: int = 1440
     enable_git_metadata_sync: bool = True
+    enable_git_remote_push: bool = False
     git_remote_url: Optional[str] = None
     git_auth_token: Optional[str] = None
     git_branch: str = "main"
@@ -38,6 +41,7 @@ class ConfigResponse(BaseModel):
     cookies_file: Optional[str]
     use_browser_cookies: bool
     browser_name: str
+    cookies_auth_mode: str = "cookies_txt"
     enable_stream_integrity_check: bool
     flaresolverr_url: Optional[str]
     enable_auto_discovery: bool = True
@@ -67,6 +71,7 @@ class ConfigUpdate(BaseModel):
     daily_refresh_mode: Optional[str] = None
     daily_refresh_interval_minutes: Optional[int] = None
     enable_git_metadata_sync: Optional[bool] = None
+    enable_git_remote_push: Optional[bool] = None
     git_remote_url: Optional[str] = None
     git_auth_token: Optional[str] = None
     git_branch: Optional[str] = None
@@ -75,6 +80,7 @@ class ConfigUpdate(BaseModel):
     cookies_file: Optional[str] = None
     use_browser_cookies: Optional[bool] = None
     browser_name: Optional[str] = None
+    cookies_auth_mode: Optional[str] = None
     enable_stream_integrity_check: Optional[bool] = None
     flaresolverr_url: Optional[str] = None
     enable_auto_discovery: Optional[bool] = None
@@ -130,6 +136,7 @@ async def get_config(db: Session = Depends(get_db)):
         daily_refresh_mode=getattr(settings, "DAILY_REFRESH_MODE", "scheduled") or "scheduled",
         daily_refresh_interval_minutes=getattr(settings, "DAILY_REFRESH_INTERVAL_MINUTES", 1440) or 1440,
         enable_git_metadata_sync=getattr(settings, "ENABLE_GIT_METADATA_SYNC", True),
+        enable_git_remote_push=getattr(settings, "ENABLE_GIT_REMOTE_PUSH", False),
         git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
         git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
         git_branch=getattr(settings, "GIT_BRANCH", "main") or "main",
@@ -138,6 +145,7 @@ async def get_config(db: Session = Depends(get_db)):
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
+        cookies_auth_mode=getattr(settings, "COOKIES_AUTH_MODE", "cookies_txt"),
         enable_stream_integrity_check=getattr(settings, "ENABLE_STREAM_INTEGRITY_CHECK", False),
         flaresolverr_url=getattr(settings, "FLARESOLVERR_URL", None),
         enable_auto_discovery=getattr(settings, "ENABLE_AUTO_DISCOVERY", True),
@@ -197,10 +205,12 @@ def _save_to_env(config: ConfigUpdate):
         env_content['DAILY_REFRESH_INTERVAL_MINUTES'] = str(config.daily_refresh_interval_minutes)
     if config.enable_git_metadata_sync is not None:
         env_content['ENABLE_GIT_METADATA_SYNC'] = 'true' if config.enable_git_metadata_sync else 'false'
+    if config.enable_git_remote_push is not None:
+        env_content['ENABLE_GIT_REMOTE_PUSH'] = 'true' if config.enable_git_remote_push else 'false'
     if config.git_remote_url is not None:
-        env_content['GIT_REMOTE_URL'] = config.git_remote_url if config.git_remote_url else ''
+        env_content['GIT_REMOTE_URL'] = config.git_remote_url.strip() if config.git_remote_url else ''
     if config.git_auth_token is not None:
-        env_content['GIT_AUTH_TOKEN'] = config.git_auth_token if config.git_auth_token else ''
+        env_content['GIT_AUTH_TOKEN'] = config.git_auth_token.strip() if config.git_auth_token else ''
     if config.git_branch is not None:
         env_content['GIT_BRANCH'] = config.git_branch
     if config.git_user_name is not None:
@@ -213,6 +223,8 @@ def _save_to_env(config: ConfigUpdate):
         env_content['USE_BROWSER_COOKIES'] = 'true' if config.use_browser_cookies else 'false'
     if config.browser_name is not None:
         env_content['BROWSER_NAME'] = config.browser_name
+    if config.cookies_auth_mode is not None:
+        env_content['COOKIES_AUTH_MODE'] = config.cookies_auth_mode
     if config.enable_stream_integrity_check is not None:
         env_content['ENABLE_STREAM_INTEGRITY_CHECK'] = 'true' if config.enable_stream_integrity_check else 'false'
     if config.flaresolverr_url is not None:
@@ -271,12 +283,28 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         settings.DAILY_REFRESH_MODE = config.daily_refresh_mode
     if config.daily_refresh_interval_minutes is not None:
         settings.DAILY_REFRESH_INTERVAL_MINUTES = config.daily_refresh_interval_minutes
+    # Enforce Git Remote Push verification if remote push is being enabled or saved as active
+    target_remote_push = config.enable_git_remote_push if config.enable_git_remote_push is not None else getattr(settings, "ENABLE_GIT_REMOTE_PUSH", False)
+    target_remote_url = (config.git_remote_url.strip() if config.git_remote_url is not None else (getattr(settings, "GIT_REMOTE_URL", None) or "")).strip()
+    target_auth_token = (config.git_auth_token.strip() if config.git_auth_token is not None else (getattr(settings, "GIT_AUTH_TOKEN", None) or "")).strip()
+    target_branch = (config.git_branch.strip() if config.git_branch is not None else (getattr(settings, "GIT_BRANCH", "main") or "main")).strip()
+
+    if target_remote_push:
+        if not target_remote_url:
+            raise HTTPException(status_code=400, detail="Remote Git repository URL is required to enable remote push.")
+        from app.utils.git_sync import test_git_connection_sync
+        ok, err_msg = test_git_connection_sync(target_remote_url, target_auth_token, target_branch)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"Cannot enable remote push: {err_msg}")
+
     if config.enable_git_metadata_sync is not None:
         settings.ENABLE_GIT_METADATA_SYNC = config.enable_git_metadata_sync
+    if config.enable_git_remote_push is not None:
+        settings.ENABLE_GIT_REMOTE_PUSH = config.enable_git_remote_push
     if config.git_remote_url is not None:
-        settings.GIT_REMOTE_URL = config.git_remote_url
+        settings.GIT_REMOTE_URL = config.git_remote_url.strip() if config.git_remote_url.strip() else None
     if config.git_auth_token is not None:
-        settings.GIT_AUTH_TOKEN = config.git_auth_token
+        settings.GIT_AUTH_TOKEN = config.git_auth_token.strip() if config.git_auth_token.strip() else None
     if config.git_branch is not None:
         settings.GIT_BRANCH = config.git_branch
     if config.git_user_name is not None:
@@ -288,11 +316,13 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         from app.models.database import set_system_setting
         set_system_setting("git_user_email", config.git_user_email, db=db)
     if config.cookies_file is not None:
-        settings.COOKIES_FILE = config.cookies_file
+        settings.COOKIES_FILE = config.cookies_file.strip() if config.cookies_file.strip() else None
     if config.use_browser_cookies is not None:
         settings.USE_BROWSER_COOKIES = config.use_browser_cookies
     if config.browser_name is not None:
         settings.BROWSER_NAME = config.browser_name
+    if config.cookies_auth_mode is not None:
+        settings.COOKIES_AUTH_MODE = config.cookies_auth_mode
     if config.enable_stream_integrity_check is not None:
         settings.ENABLE_STREAM_INTEGRITY_CHECK = config.enable_stream_integrity_check
     if config.flaresolverr_url is not None:
@@ -313,6 +343,14 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         from app.models.database import set_system_setting
         set_system_setting("setup_completed", "true" if config.setup_completed else "false", db=db)
     
+    # Synchronize or clean up local origin remote
+    from app.utils.git_sync import sync_git_remote_origin
+    sync_git_remote_origin(
+        settings.BASE_DOWNLOAD_PATH,
+        settings.GIT_REMOTE_URL,
+        getattr(settings, "ENABLE_GIT_REMOTE_PUSH", False)
+    )
+
     # Persist to .env file
     _save_to_env(config)
 
@@ -335,6 +373,7 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         daily_refresh_mode=getattr(settings, "DAILY_REFRESH_MODE", "scheduled") or "scheduled",
         daily_refresh_interval_minutes=getattr(settings, "DAILY_REFRESH_INTERVAL_MINUTES", 1440) or 1440,
         enable_git_metadata_sync=getattr(settings, "ENABLE_GIT_METADATA_SYNC", True),
+        enable_git_remote_push=getattr(settings, "ENABLE_GIT_REMOTE_PUSH", False),
         git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
         git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
         git_branch=getattr(settings, "GIT_BRANCH", "main") or "main",
@@ -343,6 +382,7 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
+        cookies_auth_mode=getattr(settings, "COOKIES_AUTH_MODE", "cookies_txt"),
         enable_stream_integrity_check=getattr(settings, "ENABLE_STREAM_INTEGRITY_CHECK", False),
         flaresolverr_url=getattr(settings, "FLARESOLVERR_URL", None),
         enable_auto_discovery=getattr(settings, "ENABLE_AUTO_DISCOVERY", True),
@@ -467,14 +507,19 @@ async def test_flaresolverr(request: Optional[FlareSolverrTestRequest] = None):
             message=f"Failed to connect to FlareSolverr at {endpoint}: {str(e)}"
         )
 
+class GitTestRequest(BaseModel):
+    git_remote_url: Optional[str] = None
+    git_auth_token: Optional[str] = None
+    git_branch: Optional[str] = None
+
 class GitSyncTestResponse(BaseModel):
     success: bool
     message: str
 
 @router.post("/test-git-sync", response_model=GitSyncTestResponse)
-async def test_git_sync():
-    """Test Git repository initialization and remote push/connectivity"""
-    from app.utils.git_sync import ensure_git_repo, push_to_remote_sync
+async def test_git_sync(body: Optional[GitTestRequest] = None):
+    """Test Git repository initialization and remote push/connectivity using read-only git ls-remote"""
+    from app.utils.git_sync import ensure_git_repo, test_git_connection_sync
     
     base_path = settings.BASE_DOWNLOAD_PATH
     if not ensure_git_repo(base_path):
@@ -482,15 +527,18 @@ async def test_git_sync():
             success=False,
             message=f"Failed to initialize local Git repository in {base_path}"
         )
-        
-    remote_url = getattr(settings, "GIT_REMOTE_URL", None)
+
+    remote_url = (body.git_remote_url if (body and body.git_remote_url is not None) else getattr(settings, "GIT_REMOTE_URL", None))
     if not remote_url or not remote_url.strip():
         return GitSyncTestResponse(
             success=True,
-            message="Local Git repository initialized successfully! (No remote URL configured)"
+            message="Local Git repository is initialized and ready. Enter a remote URL to test remote connectivity."
         )
-        
-    success, msg = push_to_remote_sync()
+
+    auth_token = (body.git_auth_token if (body and body.git_auth_token is not None) else getattr(settings, "GIT_AUTH_TOKEN", None))
+    branch = (body.git_branch if (body and body.git_branch is not None) else getattr(settings, "GIT_BRANCH", "main")) or "main"
+
+    success, msg = test_git_connection_sync(remote_url, auth_token, branch)
     return GitSyncTestResponse(success=success, message=msg)
 
 class SchedulerStatusResponse(BaseModel):
@@ -750,6 +798,7 @@ async def batch_link_folders(payload: BatchLinkRequest, db: Session = Depends(ge
 @router.post("/batch-exclude-folders")
 async def batch_exclude_folders(payload: BatchExcludeRequest):
     """Add folders to EXCLUDED_DIRS so they are ignored by auto-discovery"""
+    logger.info(f"[Unmanaged Exclude] Received request to exclude folders: {payload.folder_names}")
     current_excluded = set(x.strip().lower() for x in (getattr(settings, "EXCLUDED_DIRS", "") or "").split(",") if x.strip())
     for f in payload.folder_names:
         cleaned = f.strip().lower()
@@ -760,6 +809,7 @@ async def batch_exclude_folders(payload: BatchExcludeRequest):
     
     # Persist to .env
     _save_to_env(ConfigUpdate(excluded_dirs=new_excluded_str))
+    logger.info(f"[Unmanaged Exclude] Successfully updated EXCLUDED_DIRS to: '{new_excluded_str}'")
     return {
         "success": True,
         "excluded_dirs": new_excluded_str

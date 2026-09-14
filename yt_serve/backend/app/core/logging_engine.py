@@ -240,12 +240,46 @@ def setup_logging(
     )
     file_handler.setLevel(level)
     file_handler.setFormatter(standard_formatter)
-    root_logger.addHandler(file_handler)
+    # 4. Intercept Uvicorn loggers to use root handlers and standard formatting
+    for uvi_logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uvi_logger = logging.getLogger(uvi_logger_name)
+        uvi_logger.handlers.clear()
+        uvi_logger.propagate = True
 
     _initialized = True
     logging.getLogger("app.core.logging_engine").info(
         f"Logging engine initialized (maxBytes={max_bytes}, backupCount={backup_count}, ringCapacity={ring_buffer_size}). File sink: {log_file_path}"
     )
+
+
+class YTDLPLoggerAdapter:
+    """
+    Adapter routing yt-dlp logger callbacks into the standard logging engine.
+    Ensures yt-dlp messages conform to the application's standard log format
+    and don't write directly/unformatted to sys.stderr.
+    """
+    def __init__(self, logger_name: str = "app.services.ytdlp"):
+        self.logger = logging.getLogger(logger_name)
+
+    def debug(self, msg: str):
+        msg_str = str(msg).strip()
+        if msg_str:
+            self.logger.debug(msg_str)
+
+    def info(self, msg: str):
+        msg_str = str(msg).strip()
+        if msg_str:
+            self.logger.info(msg_str)
+
+    def warning(self, msg: str):
+        msg_str = str(msg).strip()
+        if msg_str:
+            self.logger.warning(msg_str)
+
+    def error(self, msg: str):
+        msg_str = str(msg).strip()
+        if msg_str:
+            self.logger.error(msg_str)
 
 
 def get_logger(name: str) -> logging.Logger:

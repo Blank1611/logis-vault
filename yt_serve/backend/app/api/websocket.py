@@ -6,6 +6,9 @@ from typing import Dict, Set
 import json
 import asyncio
 
+from app.core.logging_engine import get_logger
+
+logger = get_logger("app.api.websocket")
 router = APIRouter()
 
 # Active WebSocket connections
@@ -58,14 +61,14 @@ global_connections: Set[WebSocket] = set()
 async def broadcast_event(event_type: str, data: dict):
     """Broadcast an event to all global connections"""
     message = {"type": event_type, "data": data}
-    print(f"[WebSocket] Broadcasting event '{event_type}' to {len(global_connections)} connection(s): {data}")
+    logger.debug(f"[WebSocket] Broadcasting event '{event_type}' to {len(global_connections)} connection(s): {data}")
     
     disconnected = set()
     for connection in global_connections:
         try:
             await connection.send_json(message)
         except Exception as e:
-            print(f"[WebSocket] Error sending to connection: {e}")
+            logger.warning(f"[WebSocket] Error sending to connection: {e}")
             disconnected.add(connection)
     
     # Remove disconnected connections
@@ -73,7 +76,7 @@ async def broadcast_event(event_type: str, data: dict):
         global_connections.discard(conn)
     
     if not global_connections:
-        print("[WebSocket] Warning: No active connections to broadcast to!")
+        logger.debug("[WebSocket] No active connections to broadcast to.")
 
 @router.websocket("/logs/{job_id}")
 async def websocket_logs(websocket: WebSocket, job_id: int):
@@ -105,7 +108,7 @@ async def websocket_events(websocket: WebSocket):
     """WebSocket endpoint for global events (playlist updates, etc.)"""
     await websocket.accept()
     global_connections.add(websocket)
-    print(f"[WebSocket] New connection established. Total connections: {len(global_connections)}")
+    logger.info(f"[WebSocket] New connection established. Total connections: {len(global_connections)}")
     try:
         while True:
             # Keep connection alive
@@ -113,7 +116,7 @@ async def websocket_events(websocket: WebSocket):
             await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
         global_connections.discard(websocket)
-        print(f"[WebSocket] Connection closed. Total connections: {len(global_connections)}")
+        logger.info(f"[WebSocket] Connection closed. Total connections: {len(global_connections)}")
 
 # Helper function to send updates (called from background tasks)
 async def send_log_update(job_id: int, log_message: str):

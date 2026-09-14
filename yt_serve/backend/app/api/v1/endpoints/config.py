@@ -26,12 +26,14 @@ class ConfigResponse(BaseModel):
     daily_refresh_time: str = "04:00"
     daily_refresh_timezone: str = "Asia/Kolkata"
     enable_git_metadata_sync: bool = True
+    enable_git_remote_push: bool = False
     git_remote_url: Optional[str] = None
     git_auth_token: Optional[str] = None
     git_branch: str = "main"
     cookies_file: Optional[str]
     use_browser_cookies: bool
     browser_name: str
+    cookies_auth_mode: str = "cookies_txt"
     enable_stream_integrity_check: bool
     flaresolverr_url: Optional[str]
     needs_setup: bool  # Flag for first-run setup
@@ -51,12 +53,14 @@ class ConfigUpdate(BaseModel):
     daily_refresh_time: Optional[str] = None
     daily_refresh_timezone: Optional[str] = None
     enable_git_metadata_sync: Optional[bool] = None
+    enable_git_remote_push: Optional[bool] = None
     git_remote_url: Optional[str] = None
     git_auth_token: Optional[str] = None
     git_branch: Optional[str] = None
     cookies_file: Optional[str] = None
     use_browser_cookies: Optional[bool] = None
     browser_name: Optional[str] = None
+    cookies_auth_mode: Optional[str] = None
     enable_stream_integrity_check: Optional[bool] = None
     flaresolverr_url: Optional[str] = None
 
@@ -95,12 +99,14 @@ async def get_config():
         daily_refresh_time=getattr(settings, "DAILY_REFRESH_TIME", "04:00") or "04:00",
         daily_refresh_timezone=getattr(settings, "DAILY_REFRESH_TIMEZONE", "Asia/Kolkata") or "Asia/Kolkata",
         enable_git_metadata_sync=getattr(settings, "ENABLE_GIT_METADATA_SYNC", True),
+        enable_git_remote_push=getattr(settings, "ENABLE_GIT_REMOTE_PUSH", False),
         git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
         git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
         git_branch=getattr(settings, "GIT_BRANCH", "main") or "main",
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
+        cookies_auth_mode=getattr(settings, "COOKIES_AUTH_MODE", "cookies_txt"),
         enable_stream_integrity_check=getattr(settings, "ENABLE_STREAM_INTEGRITY_CHECK", False),
         flaresolverr_url=getattr(settings, "FLARESOLVERR_URL", None),
         needs_setup=_check_needs_setup()
@@ -359,14 +365,19 @@ async def test_flaresolverr(request: Optional[FlareSolverrTestRequest] = None):
             message=f"Failed to connect to FlareSolverr at {endpoint}: {str(e)}"
         )
 
+class GitTestRequest(BaseModel):
+    git_remote_url: Optional[str] = None
+    git_auth_token: Optional[str] = None
+    git_branch: Optional[str] = None
+
 class GitSyncTestResponse(BaseModel):
     success: bool
     message: str
 
 @router.post("/test-git-sync", response_model=GitSyncTestResponse)
-async def test_git_sync():
-    """Test Git repository initialization and remote push/connectivity"""
-    from app.utils.git_sync import ensure_git_repo, push_to_remote_sync
+async def test_git_sync(body: Optional[GitTestRequest] = None):
+    """Test Git repository initialization and remote push/connectivity using read-only git ls-remote"""
+    from app.utils.git_sync import ensure_git_repo, test_git_connection_sync
     
     base_path = settings.BASE_DOWNLOAD_PATH
     if not ensure_git_repo(base_path):
@@ -374,15 +385,18 @@ async def test_git_sync():
             success=False,
             message=f"Failed to initialize local Git repository in {base_path}"
         )
-        
-    remote_url = getattr(settings, "GIT_REMOTE_URL", None)
+
+    remote_url = (body.git_remote_url if (body and body.git_remote_url is not None) else getattr(settings, "GIT_REMOTE_URL", None))
     if not remote_url or not remote_url.strip():
         return GitSyncTestResponse(
             success=True,
-            message="Local Git repository initialized successfully! (No remote URL configured)"
+            message="Local Git repository is initialized and ready. Enter a remote URL to test remote connectivity."
         )
-        
-    success, msg = push_to_remote_sync()
+
+    auth_token = (body.git_auth_token if (body and body.git_auth_token is not None) else getattr(settings, "GIT_AUTH_TOKEN", None))
+    branch = (body.git_branch if (body and body.git_branch is not None) else getattr(settings, "GIT_BRANCH", "main")) or "main"
+
+    success, msg = test_git_connection_sync(remote_url, auth_token, branch)
     return GitSyncTestResponse(success=success, message=msg)
 
 class SchedulerStatusResponse(BaseModel):

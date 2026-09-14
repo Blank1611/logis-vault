@@ -18,6 +18,9 @@ from pathlib import Path
 from datetime import datetime
 
 from app.core.config import settings
+from app.core.logging_engine import get_logger
+
+logger = get_logger("app.utils.git_sync")
 
 def is_git_available() -> bool:
     """Check if git executable exists in system PATH"""
@@ -89,7 +92,7 @@ def ensure_git_repo(base_path: str) -> bool:
         return False
 
     if not is_git_available():
-        print(f"[GIT SYNC] Git executable not available in system; skipping repository setup.")
+        logger.warning(f"[GIT SYNC] Git executable not available in system; skipping repository setup.")
         return False
 
     if not os.path.isdir(base_path):
@@ -103,9 +106,9 @@ def ensure_git_repo(base_path: str) -> bool:
         try:
             with open(gitignore_path, "w", encoding="utf-8") as f:
                 f.write(BASE_DOWNLOAD_GITIGNORE)
-            print(f"[GIT SYNC] Generated metadata .gitignore at {gitignore_path}")
+            logger.info(f"[GIT SYNC] Generated metadata .gitignore at {gitignore_path}")
         except Exception as e:
-            print(f"[GIT SYNC] Warning: Could not write .gitignore: {e}")
+            logger.warning(f"[GIT SYNC] Warning: Could not write .gitignore: {e}")
 
     # Init git repo if missing
     if not os.path.isdir(git_dir):
@@ -114,7 +117,7 @@ def ensure_git_repo(base_path: str) -> bool:
             # Fallback for older git versions without -b flag
             code, stdout, stderr = _run_git_cmd(["init"], base_path)
             if code != 0:
-                print(f"[GIT SYNC] Failed to git init in {base_path}: {stderr}")
+                logger.error(f"[GIT SYNC] Failed to git init in {base_path}: {stderr}")
                 return False
 
         # Set committer identity from settings or defaults
@@ -126,7 +129,7 @@ def ensure_git_repo(base_path: str) -> bool:
         # Initial commit with .gitignore
         _run_git_cmd(["add", ".gitignore"], base_path)
         _run_git_cmd(["commit", "-m", "Initial commit: Setup playlist metadata tracking"], base_path)
-        print(f"[GIT SYNC] Initialized new Git metadata repository in {base_path}")
+        logger.info(f"[GIT SYNC] Initialized new Git metadata repository in {base_path}")
 
     return True
 
@@ -200,9 +203,9 @@ def _cleanup_stale_git_lock(base_path: str):
             mtime = os.path.getmtime(lock_file)
             if (datetime.now().timestamp() - mtime) > 60:
                 os.remove(lock_file)
-                print(f"[GIT SYNC] Removed stale Git index lock: {lock_file}")
+                logger.info(f"[GIT SYNC] Removed stale Git index lock: {lock_file}")
         except Exception as e:
-            print(f"[GIT SYNC] Warning: Could not inspect/remove stale lock: {e}")
+            logger.warning(f"[GIT SYNC] Warning: Could not inspect/remove stale lock: {e}")
 
 # Context variable tracking the active GitBatchSession (scoped per asyncio task/thread)
 _CURRENT_GIT_BATCH: contextvars.ContextVar[Optional["GitBatchSession"]] = contextvars.ContextVar(
@@ -305,11 +308,11 @@ class GitBatchSession:
             commit_env = _get_git_commit_env()
             code, stdout, stderr = _run_git_cmd(["commit", "-m", commit_msg], base_path, env_vars=commit_env)
             if code == 0:
-                print(f"[GIT SYNC] ✓ Committed batch: {commit_msg.splitlines()[0]}")
+                logger.info(f"[GIT SYNC] ✓ Committed batch: {commit_msg.splitlines()[0]}")
                 push_to_remote_async()
                 return True
             else:
-                print(f"[GIT SYNC] Batch commit failed: {stderr}")
+                logger.error(f"[GIT SYNC] Batch commit failed: {stderr}")
                 return False
 
 
@@ -353,11 +356,11 @@ def reconcile_uncommitted_metadata(base_path: str) -> bool:
         commit_env = _get_git_commit_env()
         code, stdout, stderr = _run_git_cmd(["commit", "-m", commit_msg], base_path, env_vars=commit_env)
         if code == 0:
-            print(f"[GIT SYNC] ✓ Startup Recovery: Reconciled {len(dirty_lines)} uncommitted metadata file(s).")
+            logger.info(f"[GIT SYNC] ✓ Startup Recovery: Reconciled {len(dirty_lines)} uncommitted metadata file(s).")
             push_to_remote_async()
             return True
         else:
-            print(f"[GIT SYNC] Startup Recovery commit failed: {stderr}")
+            logger.error(f"[GIT SYNC] Startup Recovery commit failed: {stderr}")
             return False
 
 
@@ -400,7 +403,7 @@ def commit_playlist_atomic(
         # Stage this specific file
         code, _, stderr = _run_git_cmd(["add", rel_path], base_path)
         if code != 0:
-            print(f"[GIT SYNC] Error staging {rel_path}: {stderr}")
+            logger.error(f"[GIT SYNC] Error staging {rel_path}: {stderr}")
             return False
 
         # Check if there are staged changes (0 means NO changes)
@@ -420,7 +423,7 @@ def commit_playlist_atomic(
                 "summary": delta_summary,
                 "rel_path": rel_path
             })
-            print(f"[GIT SYNC] Staged for batch commit: {delta_summary}")
+            logger.info(f"[GIT SYNC] Staged for batch commit: {delta_summary}")
             return True
 
         # Outside a batch session -> create immediate atomic commit
@@ -436,11 +439,11 @@ def commit_playlist_atomic(
         commit_env = _get_git_commit_env()
         code, stdout, stderr = _run_git_cmd(["commit", "-m", commit_title, "--", rel_path], base_path, env_vars=commit_env)
         if code == 0:
-            print(f"[GIT SYNC] ✓ Committed: {commit_title}")
+            logger.info(f"[GIT SYNC] ✓ Committed: {commit_title}")
             push_to_remote_async()
             return True
         else:
-            print(f"[GIT SYNC] Commit failed: {stderr}")
+            logger.error(f"[GIT SYNC] Commit failed: {stderr}")
             return False
 
 
@@ -460,8 +463,106 @@ def _get_authenticated_remote_url() -> Optional[str]:
     return url
 
 
+def test_git_connection_sync(
+    remote_url: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    branch: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Test remote Git repository connectivity and PAT authentication in a strictly read-only manner.
+    Uses 'git ls-remote' - zero writes, zero commits, zero pushes.
+    Provides intelligent diagnosis for PAT, URL, repo existence, or network issues.
+    """
+    if not is_git_available():
+        return False, "Git executable not found in system PATH."
+
+    url = remote_url if remote_url is not None else getattr(settings, "GIT_REMOTE_URL", None)
+    if not url or not url.strip():
+        return False, "Remote Git repository URL is empty."
+
+    url = url.strip()
+    token = auth_token if auth_token is not None else getattr(settings, "GIT_AUTH_TOKEN", None)
+    if token and token.strip():
+        token = token.strip()
+        if url.startswith("https://") and "@" not in url:
+            auth_url = f"https://oauth2:{token}@" + url[len("https://"):]
+        else:
+            auth_url = url
+    else:
+        auth_url = url
+
+    target_branch = branch if branch is not None else getattr(settings, "GIT_BRANCH", "main") or "main"
+    base_path = settings.BASE_DOWNLOAD_PATH
+    if not os.path.isdir(base_path):
+        os.makedirs(base_path, exist_ok=True)
+
+    # Execute read-only ls-remote with 15s timeout
+    code, stdout, stderr = _run_git_cmd(["ls-remote", "--heads", auth_url, target_branch], base_path, timeout=15)
+
+    # Always mask token from any outputs/errors
+    if token:
+        stderr = stderr.replace(token, "******")
+        stdout = stdout.replace(token, "******")
+
+    if code == 0:
+        return True, "Verified Connected: Remote URL and Personal Access Token (PAT) authenticated successfully."
+
+    # Parse and diagnose stderr
+    err_lower = stderr.lower()
+    if any(k in err_lower for k in ["authentication failed", "invalid username or token", "access denied", "401", "403"]):
+        return False, "Authentication Error: Your Personal Access Token (PAT) is invalid, expired, or missing write permissions."
+    elif any(k in err_lower for k in ["not found", "repository not found", "404"]):
+        return False, "Repository Not Found: The repository does not exist, or it is private and your PAT does not have access to it."
+    elif any(k in err_lower for k in ["could not resolve host", "unable to access", "failed to connect", "timed out", "network"]):
+        return False, "Connection Error: Unable to reach the remote host. Please check your network connection or the domain name in the URL."
+    elif "does not appear to be a git repository" in err_lower:
+        return False, "Invalid Git URL: The provided address does not appear to be a valid Git repository."
+    else:
+        clean_msg = stderr.strip() or "Connection test failed."
+        return False, f"Git Verification Failed: {clean_msg}"
+
+
+def sync_git_remote_origin(
+    base_path: str,
+    remote_url: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    enable_push: Optional[bool] = None
+) -> bool:
+    """
+    Synchronizes or cleans up the local Git repository's 'origin' remote.
+    - If remote_url is provided and remote push is enabled: sets/updates 'origin'.
+    - If remote_url is empty or remote push is disabled: removes 'origin' so no stale tokens linger in .git/config.
+    """
+    if not is_git_available() or not os.path.isdir(os.path.join(base_path, ".git")):
+        return False
+
+    should_push = enable_push if enable_push is not None else getattr(settings, "ENABLE_GIT_REMOTE_PUSH", False)
+    url = remote_url if remote_url is not None else getattr(settings, "GIT_REMOTE_URL", None)
+
+    with _GIT_MUTEX:
+        _cleanup_stale_git_lock(base_path)
+        if not should_push or not url or not url.strip():
+            # Remove origin remote to prevent stale credentials lingering on disk
+            _run_git_cmd(["remote", "remove", "origin"], base_path)
+            return True
+
+        token = auth_token if auth_token is not None else getattr(settings, "GIT_AUTH_TOKEN", None)
+        url_clean = url.strip()
+        if token and token.strip() and url_clean.startswith("https://") and "@" not in url_clean:
+            auth_url = f"https://oauth2:{token.strip()}@" + url_clean[len("https://"):]
+        else:
+            auth_url = url_clean
+
+        _run_git_cmd(["remote", "remove", "origin"], base_path)
+        code, _, _ = _run_git_cmd(["remote", "add", "origin", auth_url], base_path)
+        return code == 0
+
+
 def push_to_remote_sync() -> Tuple[bool, str]:
     """Synchronously push commits to configured Git remote repository"""
+    if not getattr(settings, "ENABLE_GIT_REMOTE_PUSH", False):
+        return True, "Remote Git push is disabled (local commits only)"
+
     base_path = settings.BASE_DOWNLOAD_PATH
     remote_url = _get_authenticated_remote_url()
     branch = getattr(settings, "GIT_BRANCH", "main") or "main"
@@ -491,6 +592,9 @@ def push_to_remote_sync() -> Tuple[bool, str]:
 
 def push_to_remote_async():
     """Trigger background push without blocking caller"""
+    if not getattr(settings, "ENABLE_GIT_REMOTE_PUSH", False):
+        return
+
     remote_url = getattr(settings, "GIT_REMOTE_URL", None)
     if not remote_url or not remote_url.strip():
         return
@@ -498,8 +602,8 @@ def push_to_remote_async():
     def _worker():
         success, msg = push_to_remote_sync()
         if success:
-            print(f"[GIT SYNC] ✓ {msg}")
+            logger.info(f"[GIT SYNC] ✓ {msg}")
         else:
-            print(f"[GIT SYNC] ⚠️ {msg}")
+            logger.warning(f"[GIT SYNC] ⚠️ {msg}")
 
     threading.Thread(target=_worker, daemon=True, name="git-sync-push").start()

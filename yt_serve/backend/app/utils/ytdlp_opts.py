@@ -10,6 +10,7 @@ Generates specialized, robust options dictionaries for:
 import os
 from typing import Optional, Dict, Any, List
 from app.core.config import settings
+from app.core.logging_engine import YTDLPLoggerAdapter
 
 
 def build_ytdlp_options(
@@ -34,6 +35,9 @@ def build_ytdlp_options(
     """
     opts: Dict[str, Any] = {}
 
+    # Attach logger adapter so yt-dlp messages conform to standard log format and sinks
+    opts["logger"] = YTDLPLoggerAdapter()
+
     # 1. Base network & client emulation (applies to all modes)
     opts["extractor_args"] = {
         "youtube": {
@@ -42,15 +46,18 @@ def build_ytdlp_options(
         }
     }
 
-    # 2. Authentication: Browser profile extraction vs cookies.txt file
+    # 2. Authentication: Browser profile extraction vs cookies.txt file vs none
+    auth_mode = getattr(settings, "COOKIES_AUTH_MODE", "cookies_txt")
     use_browser_cookies = getattr(settings, "USE_BROWSER_COOKIES", False)
     browser_name = getattr(settings, "BROWSER_NAME", "chrome")
     cookies_file = getattr(settings, "COOKIES_FILE", None)
 
-    if use_browser_cookies and browser_name:
-        opts["cookies_from_browser"] = (browser_name,)
-    elif cookies_file and os.path.isfile(cookies_file):
-        opts["cookiefile"] = cookies_file
+    if auth_mode == "browser" or (use_browser_cookies and auth_mode != "none"):
+        if browser_name:
+            opts["cookies_from_browser"] = (browser_name,)
+    elif auth_mode == "cookies_txt" or (not use_browser_cookies and auth_mode != "none"):
+        if cookies_file and os.path.isfile(cookies_file):
+            opts["cookiefile"] = cookies_file
 
     # 3. User-Agent
     user_agent = getattr(settings, "USER_AGENT", None)

@@ -148,6 +148,10 @@ class Settings(BaseSettings):
         default=False,
         description="Enable automatic Git metadata versioning and sync"
     )
+    ENABLE_GIT_REMOTE_PUSH: bool = Field(
+        default=False,
+        description="Enable pushing local commits to remote Git repository"
+    )
     GIT_REMOTE_URL: Optional[str] = Field(
         default=None,
         description="Remote Git repository URL (e.g. https://github.com/username/yt-metadata.git)"
@@ -181,6 +185,10 @@ class Settings(BaseSettings):
     BROWSER_NAME: str = Field(
         default="chrome",
         description="Browser to extract cookies from (chrome, firefox, etc.)"
+    )
+    COOKIES_AUTH_MODE: str = Field(
+        default="cookies_txt",
+        description="Active cookie auth mode: cookies_txt, browser, or none"
     )
     
     # Experimental Integrity Safeguards

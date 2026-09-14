@@ -1,7 +1,9 @@
 import React from 'react'
-import { Settings, Moon, Sun, Grid3x3, List, Layers, Sparkles } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Settings, Moon, Sun, Grid3x3, List, Layers, Sparkles, Key } from 'lucide-react'
 import { NavigationTabs, type TabType } from './NavigationTabs'
 import { useTheme } from '../../context/ThemeContext'
+import { configApi } from '../../services/api'
 
 export interface HeaderProps {
   activeTab: TabType
@@ -10,6 +12,7 @@ export interface HeaderProps {
   viewMode?: 'grid' | 'list'
   onViewModeChange?: (mode: 'grid' | 'list') => void
   onOpenSettings: () => void
+  onOpenSettingsTab?: (tab: 'storage' | 'audio' | 'auth' | 'scheduler' | 'git' | 'network') => void
   onOpenReorganize?: () => void
   onOpenDeduplicate?: () => void
 }
@@ -21,10 +24,20 @@ export const Header: React.FC<HeaderProps> = ({
   viewMode = 'grid',
   onViewModeChange,
   onOpenSettings,
+  onOpenSettingsTab,
   onOpenReorganize,
   onOpenDeduplicate,
 }) => {
   const { darkMode, toggleDarkMode } = useTheme()
+
+  const { data: cookiesStatus } = useQuery({
+    queryKey: ['cookiesStatus'],
+    queryFn: async () => {
+      const res = await configApi.getCookiesStatus()
+      return res.data
+    },
+    staleTime: 30000,
+  })
 
   return (
     <header className="bg-white dark:bg-gray-800 shadow">
@@ -92,6 +105,40 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="hidden sm:inline">Deduplicate</span>
             </button>
           )}
+
+          {/* Cookie Health Pill */}
+          <button
+            onClick={() => {
+              if (onOpenSettingsTab) {
+                onOpenSettingsTab('auth')
+              } else {
+                onOpenSettings()
+              }
+            }}
+            className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+              cookiesStatus?.status === 'valid'
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-400 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/50'
+                : cookiesStatus?.status === 'expiring_soon'
+                ? 'bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/50'
+                : cookiesStatus?.status === 'expired' || cookiesStatus?.status === 'invalid'
+                ? 'bg-rose-50 text-rose-700 border-rose-300 dark:bg-rose-950/50 dark:text-rose-400 dark:border-rose-800 hover:bg-rose-100 dark:hover:bg-rose-900/50'
+                : 'bg-gray-100 text-gray-600 border-gray-200 dark:bg-gray-700/60 dark:text-gray-400 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700'
+            }`}
+            title={`Cookies Status: ${cookiesStatus?.status_message || 'Click to configure'}`}
+          >
+            <Key className="w-3.5 h-3.5" />
+            <span>
+              {cookiesStatus?.status === 'valid'
+                ? `Cookies: Active${cookiesStatus.days_remaining != null ? ` (${cookiesStatus.days_remaining}d)` : ''}`
+                : cookiesStatus?.status === 'expiring_soon'
+                ? `Cookies: Expiring (${cookiesStatus.days_remaining ?? 0}d)`
+                : cookiesStatus?.status === 'expired'
+                ? 'Cookies: Expired'
+                : cookiesStatus?.status === 'invalid'
+                ? 'Cookies: Invalid'
+                : 'No Cookies'}
+            </span>
+          </button>
 
           {/* Settings Button */}
           <button

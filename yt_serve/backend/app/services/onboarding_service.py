@@ -322,6 +322,8 @@ def batch_link_unmanaged_folders(
     linked_count = 0
     failed_count = 0
 
+    logger.info(f"[Unmanaged Linking] Received request to link {len(items)} folder(s) (global_rename={global_rename}).")
+
     with get_db_context(db) as session:
         for item in items:
             folder_path = item.get("folder_path")
@@ -330,9 +332,13 @@ def batch_link_unmanaged_folders(
                 if folder_name:
                     folder_path = os.path.join(settings.BASE_DOWNLOAD_PATH, folder_name)
 
+            folder_name = os.path.basename(folder_path) if folder_path else (item.get("folder_name") or "unknown")
+
             if not folder_path or not os.path.exists(folder_path):
                 failed_count += 1
+                logger.warning(f"[Unmanaged Linking] Folder '{folder_name}' ({folder_path}) does not exist on disk.")
                 results.append({
+                    "folder_name": folder_name,
                     "folder_path": folder_path,
                     "success": False,
                     "error": "Directory does not exist on disk"
@@ -342,22 +348,45 @@ def batch_link_unmanaged_folders(
             raw_url = (item.get("playlist_url") or "").strip()
             if not raw_url:
                 failed_count += 1
+                logger.warning(f"[Unmanaged Linking] Folder '{folder_name}' ({folder_path}) link skipped: Playlist URL is required.")
                 results.append({
+                    "folder_name": folder_name,
                     "folder_path": folder_path,
                     "success": False,
                     "error": "Playlist URL is required"
                 })
                 continue
 
+            # Strict URL scheme check
+            if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
+                failed_count += 1
+                logger.warning(f"[Unmanaged Linking] Folder '{folder_name}' ({folder_path}) link skipped: Invalid URL '{raw_url}' (must start with http:// or https://).")
+                results.append({
+                    "folder_name": folder_name,
+                    "folder_path": folder_path,
+                    "success": False,
+                    "error": "Invalid URL scheme: must start with http:// or https://"
+                })
+                continue
+
+            logger.info(f"[Unmanaged Linking] Linking folder '{folder_name}' ({folder_path}) with URL '{raw_url}'...")
+
             try:
                 # 1. Fetch playlist metadata
                 try:
                     info = _get_playlist_info(raw_url)
                 except Exception as fetch_err:
-                    logger.warning(f"Could not fetch online metadata for {raw_url}: {fetch_err}. Proceeding with minimal info.")
-                    info = {"title": os.path.basename(folder_path), "webpage_url": raw_url}
+                    logger.error(f"[Unmanaged Linking] Metadata extraction failed for folder '{folder_name}' ({folder_path}) with URL '{raw_url}': {fetch_err}")
+                    failed_count += 1
+                    results.append({
+                        "folder_name": folder_name,
+                        "folder_path": folder_path,
+                        "success": False,
+                        "error": f"Failed to extract playlist metadata from URL: {fetch_err}"
+                    })
+                    continue
 
-                playlist_title = info.get("title") or os.path.basename(folder_path)
+                playlist_title = info.get("title") or folder_name
                 playlist_url = info.get("webpage_url") or raw_url
 
                 # 2. Check rename flag
@@ -373,9 +402,10 @@ def batch_link_unmanaged_folders(
                         if not os.path.exists(new_target_path):
                             os.rename(folder_path, new_target_path)
                             folder_path = new_target_path
-                            logger.info(f"Renamed unmanaged folder to '{safe_folder_name}'")
+                            folder_name = safe_folder_name
+                            logger.info(f"[Unmanaged Linking] Renamed folder to '{safe_folder_name}' ({folder_path})")
                         else:
-                            logger.warning(f"Target folder {new_target_path} already exists; keeping existing path {folder_path}")
+                            logger.warning(f"[Unmanaged Linking] Target folder {new_target_path} already exists; keeping existing path {folder_path}")
 
                 # 3. Write playlist_info.json and snapshot
                 snapshot_dir = os.path.join(folder_path, "playlist_info_snapshot")
@@ -460,8 +490,13 @@ def batch_link_unmanaged_folders(
                     indexed_ids.add(vid)
                     indexed_count += 1
 
+                # Commit transaction so changes persist in SQLite
+                session.commit()
+
                 linked_count += 1
+                logger.info(f"[Unmanaged Linking] Successfully linked folder '{folder_name}' ({folder_path}) to playlist ID {playlist_id} ('{playlist_title}') with {indexed_count} indexed track(s).")
                 results.append({
+                    "folder_name": folder_name,
                     "folder_path": folder_path,
                     "playlist_id": playlist_id,
                     "title": playlist_title,
@@ -471,13 +506,17 @@ def batch_link_unmanaged_folders(
                 })
 
             except Exception as item_err:
-                logger.error(f"Error linking {folder_path}: {item_err}")
+                session.rollback()
+                logger.error(f"[Unmanaged Linking] Unexpected error linking folder '{folder_name}' ({folder_path}): {item_err}", exc_info=True)
                 failed_count += 1
                 results.append({
+                    "folder_name": folder_name,
                     "folder_path": folder_path,
                     "success": False,
                     "error": str(item_err)
                 })
+
+        logger.info(f"[Unmanaged Linking] Batch linking completed: {linked_count} linked, {failed_count} failed out of {len(items)} total.")
 
     return {
         "success": failed_count == 0,

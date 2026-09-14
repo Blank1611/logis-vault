@@ -143,6 +143,7 @@ export interface Config {
   daily_refresh_mode?: 'scheduled' | 'interval'
   daily_refresh_interval_minutes?: number
   enable_git_metadata_sync?: boolean
+  enable_git_remote_push?: boolean
   git_remote_url?: string | null
   git_auth_token?: string | null
   git_branch?: string
@@ -151,6 +152,7 @@ export interface Config {
   cookies_file: string | null
   use_browser_cookies: boolean
   browser_name: string
+  cookies_auth_mode?: 'cookies_txt' | 'browser' | 'none'
   enable_stream_integrity_check?: boolean
   flaresolverr_url?: string | null
   enable_auto_discovery?: boolean
@@ -212,10 +214,11 @@ export const configApi = {
     version?: string
     response_time_ms?: number
   }>('/config/test-flaresolverr', { url }),
-  testGitSync: () => api.post<{
-    success: boolean
-    message: string
-  }>('/config/test-git-sync'),
+  testGitSync: (payload?: { git_remote_url?: string; git_auth_token?: string; git_branch?: string }) =>
+    api.post<{
+      success: boolean
+      message: string
+    }>('/config/test-git-sync', payload),
   getCookiesStatus: () => api.get<CookieStatus>('/config/cookies-status'),
   uploadCookies: (file: File) => {
     const formData = new FormData()
