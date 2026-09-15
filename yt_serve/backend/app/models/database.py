@@ -3,9 +3,10 @@ Database models using SQLAlchemy
 """
 from sqlalchemy import create_engine, Column, Integer, BigInteger, String, DateTime, Float, Text, JSON, Boolean
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, List
 import os
 
 # Import settings to get database path
@@ -181,6 +182,107 @@ def set_system_setting(key: str, value: str, db: Optional[Session] = None) -> Op
     except Exception as e:
         print(f"[DB] Error setting system setting {key}: {e}")
         return None
+    finally:
+        if close_db:
+            db.close()
+
+class FolderStatus(Base):
+    """Lifecycle tracking for disk folders (e.g. excluded, pending_deletion for soft-delete retention)"""
+    __tablename__ = "folder_status"
+
+    folder_name = Column(String, primary_key=True, index=True)
+    status = Column(String, nullable=False, index=True)  # 'excluded', 'pending_deletion', etc.
+    reason = Column(String, nullable=True)               # e.g. 'user_excluded', 'soft_deleted'
+    delete_after = Column(DateTime, nullable=True)       # Timestamp after which folder can be permanently purged
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+def get_folder_status(folder_name: str, db: Optional[Session] = None) -> Optional[FolderStatus]:
+    """Retrieve status record for a folder."""
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+    try:
+        return db.query(FolderStatus).filter(FolderStatus.folder_name == folder_name).first()
+    except Exception:
+        return None
+    finally:
+        if close_db:
+            db.close()
+
+def set_folder_status(
+    folder_name: str,
+    status: str,
+    reason: Optional[str] = None,
+    delete_after: Optional[datetime] = None,
+    db: Optional[Session] = None
+) -> Optional[FolderStatus]:
+    """Upsert a folder status record."""
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+    try:
+        record = db.query(FolderStatus).filter(FolderStatus.folder_name == folder_name).first()
+        if record:
+            record.status = status
+            record.reason = reason
+            record.delete_after = delete_after
+            record.updated_at = datetime.utcnow()
+        else:
+            record = FolderStatus(
+                folder_name=folder_name,
+                status=status,
+                reason=reason,
+                delete_after=delete_after,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            db.add(record)
+        db.commit()
+        db.refresh(record)
+        return record
+    except Exception as e:
+        print(f"[DB] Error setting folder status for {folder_name}: {e}")
+        return None
+    finally:
+        if close_db:
+            db.close()
+
+def remove_folder_status(folder_name: str, db: Optional[Session] = None) -> bool:
+    """Delete a folder status record (restoring it to normal/unmanaged)."""
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+    try:
+        record = db.query(FolderStatus).filter(FolderStatus.folder_name == folder_name).first()
+        if record:
+            db.delete(record)
+            db.commit()
+            return True
+        return False
+    except Exception as e:
+        print(f"[DB] Error removing folder status for {folder_name}: {e}")
+        return False
+    finally:
+        if close_db:
+            db.close()
+
+def list_folder_statuses(status: Optional[str] = None, db: Optional[Session] = None) -> List[FolderStatus]:
+    """List all folder statuses, optionally filtered by status."""
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+    try:
+        query = db.query(FolderStatus)
+        if status:
+            query = query.filter(FolderStatus.status == status)
+        return query.all()
+    except Exception:
+        return []
     finally:
         if close_db:
             db.close()

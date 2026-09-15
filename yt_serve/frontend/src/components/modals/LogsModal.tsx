@@ -7,6 +7,7 @@ import { Button } from '../ui/Button'
 import { Loader2, Copy } from 'lucide-react'
 
 import { useToast } from '../../context'
+import { copyToClipboard } from '../../utils/clipboard'
 
 export interface LogsModalProps {
   job: Job
@@ -32,11 +33,15 @@ export const LogsModal: React.FC<LogsModalProps> = ({ job, onClose }) => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [logs])
 
-  const copyLogs = () => {
+  const copyLogs = async () => {
     if (logs) {
       const logText = logs.map(l => l.message).join('\n')
-      navigator.clipboard.writeText(logText)
-      toast.success('Logs copied to clipboard!')
+      const success = await copyToClipboard(logText)
+      if (success) {
+        toast.success('Logs copied to clipboard!')
+      } else {
+        toast.error('Failed to copy logs to clipboard')
+      }
     }
   }
 

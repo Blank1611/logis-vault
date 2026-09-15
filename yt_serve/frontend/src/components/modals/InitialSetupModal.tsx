@@ -164,6 +164,7 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete
           : 'Scanning your download directory and populating your SQLite database and track index...'
       }
       maxWidth="3xl"
+      resizable={true}
     >
       {currentStep === 'config' ? (
         <form onSubmit={handleConfigSubmit} className="space-y-5">
@@ -183,18 +184,18 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete
           <div className="border-2 border-blue-500/80 dark:border-blue-400/80 rounded-xl p-4 bg-blue-50/50 dark:bg-blue-900/10 space-y-2">
             <FieldHeader
               label="Main Download Directory"
-              required={true}
-              infoText="The permanent storage destination for your music and playlists (e.g. E:\Music\Playlists or /downloads)."
+              required
+              infoText="The primary root directory where all playlist subfolders and media files will be saved."
               id="base_download_path"
             />
             <input
               id="base_download_path"
               type="text"
-              value={formData.base_download_path || ''}
-              onChange={(e) => setFormData({ ...formData, base_download_path: e.target.value })}
-              className="w-full px-3.5 py-2.5 border border-blue-300 dark:border-blue-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-medium text-sm focus:ring-2 focus:ring-blue-500"
-              placeholder="E:\Music\Playlists or /downloads"
               required
+              value={formData.base_download_path}
+              onChange={(e) => setFormData({ ...formData, base_download_path: e.target.value })}
+              className="w-full px-3.5 py-2 border border-blue-300 dark:border-blue-500/50 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-blue-500"
+              placeholder="e.g. C:\Users\Username\Music or /downloads"
             />
             <p className="text-xs text-gray-500 dark:text-gray-400">
               Playlists will be organized into dedicated subfolders inside this path.
@@ -219,8 +220,8 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete
             />
           </div>
 
-          {/* Audio Extract Mode & Concurrency Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Audio Extract Mode & Concurrency Grid (Row-aligned) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1.5">
             <div>
               <FieldHeader
                 label="Audio Extraction Format"
@@ -228,6 +229,18 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete
                 infoText="Choose whether to extract original audio tracks without transcoding (lossless, instant) or transcode to MP3."
                 id="audio_extract_mode"
               />
+            </div>
+
+            <div>
+              <FieldHeader
+                label="Extraction Worker Threads"
+                recommended="Recommended: 4 Threads"
+                infoText="Number of parallel audio extraction threads to run simultaneously."
+                id="max_extraction_workers"
+              />
+            </div>
+
+            <div>
               <select
                 id="audio_extract_mode"
                 value={formData.audio_extract_mode || 'copy'}
@@ -242,12 +255,6 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete
             </div>
 
             <div>
-              <FieldHeader
-                label="Extraction Worker Threads"
-                recommended="Recommended: 4 Threads"
-                infoText="Number of parallel audio extraction threads to run simultaneously."
-                id="max_extraction_workers"
-              />
               <input
                 id="max_extraction_workers"
                 type="number"

@@ -232,6 +232,8 @@ export const configApi = {
     base_path: string
     unmanaged_folders_count: number
     unmanaged_folders: UnmanagedFolder[]
+    excluded_folders_count?: number
+    excluded_folders?: ExcludedFolderItem[]
   }>('/config/unmanaged-folders'),
   batchLinkUnmanagedFolders: (
     items: Array<{ folder_path?: string; folder_name?: string; playlist_url: string; rename_folder?: boolean }>,
@@ -241,10 +243,18 @@ export const configApi = {
       success: boolean
       linked_count: number
       failed_count: number
-      results: Array<{ folder_path: string; success: boolean; playlist_id?: number; title?: string; error?: string }>
+      results: Array<{ folder_path: string; folder_name?: string; success: boolean; playlist_id?: number; title?: string; error?: string }>
     }>('/config/batch-link-unmanaged-folders', { items, global_rename }),
   batchExcludeFolders: (folder_names: string[]) =>
-    api.post<{ success: boolean; excluded_dirs: string }>('/config/batch-exclude-folders', { folder_names }),
+    api.post<{ success: boolean; excluded_folders: string[] }>('/config/batch-exclude-folders', { folder_names }),
+  restoreExcludedFolder: (folder_name: string) =>
+    api.post<{ success: boolean; restored_folder: string }>('/config/restore-excluded-folder', { folder_name }),
+}
+
+export interface ExcludedFolderItem {
+  folder_name: string
+  reason?: string
+  created_at?: string
 }
 
 export interface DiscoveredPlaylistItem {

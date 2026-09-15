@@ -773,17 +773,35 @@ class BatchLinkRequest(BaseModel):
 
 class BatchExcludeRequest(BaseModel):
     folder_names: List[str]
+    reason: Optional[str] = "user_excluded"
+
+
+class RestoreExcludedRequest(BaseModel):
+    folder_name: str
 
 
 @router.get("/unmanaged-folders")
-async def get_unmanaged_folders():
-    """Scan base download directory and return all unmanaged folders"""
+async def get_unmanaged_folders(db: Session = Depends(get_db)):
+    """Scan base download directory and return unmanaged and excluded folders"""
     from app.services.onboarding_service import scan_download_directory
+    from app.models.database import list_folder_statuses
     scan_res = scan_download_directory(settings.BASE_DOWNLOAD_PATH)
+    
+    excluded_list = [
+        {
+            "folder_name": fs.folder_name,
+            "reason": fs.reason or "user_excluded",
+            "created_at": fs.created_at.isoformat() if fs.created_at else None,
+        }
+        for fs in list_folder_statuses(status="excluded", db=db)
+    ]
+    
     return {
         "base_path": settings.BASE_DOWNLOAD_PATH,
         "unmanaged_folders_count": scan_res.get("unmanaged_folders_count", 0),
-        "unmanaged_folders": scan_res.get("unmanaged_folders", [])
+        "unmanaged_folders": scan_res.get("unmanaged_folders", []),
+        "excluded_folders_count": len(excluded_list),
+        "excluded_folders": excluded_list
     }
 
 
@@ -796,9 +814,17 @@ async def batch_link_folders(payload: BatchLinkRequest, db: Session = Depends(ge
 
 
 @router.post("/batch-exclude-folders")
-async def batch_exclude_folders(payload: BatchExcludeRequest):
-    """Add folders to EXCLUDED_DIRS so they are ignored by auto-discovery"""
+async def batch_exclude_folders(payload: BatchExcludeRequest, db: Session = Depends(get_db)):
+    """Add folders to excluded status (persisted in database folder_status table)"""
+    from app.models.database import set_folder_status
     logger.info(f"[Unmanaged Exclude] Received request to exclude folders: {payload.folder_names}")
+    reason = payload.reason or "user_excluded"
+    for f in payload.folder_names:
+        cleaned = f.strip()
+        if cleaned:
+            set_folder_status(folder_name=cleaned, status="excluded", reason=reason, db=db)
+    
+    # Also sync in-memory settings.EXCLUDED_DIRS for backwards compatibility
     current_excluded = set(x.strip().lower() for x in (getattr(settings, "EXCLUDED_DIRS", "") or "").split(",") if x.strip())
     for f in payload.folder_names:
         cleaned = f.strip().lower()
@@ -806,13 +832,45 @@ async def batch_exclude_folders(payload: BatchExcludeRequest):
             current_excluded.add(cleaned)
     new_excluded_str = ",".join(sorted(current_excluded))
     settings.EXCLUDED_DIRS = new_excluded_str
+    try:
+        _save_to_env(ConfigUpdate(excluded_dirs=new_excluded_str))
+    except Exception as env_err:
+        logger.debug(f"[Unmanaged Exclude] Note syncing .env: {env_err}")
     
-    # Persist to .env
-    _save_to_env(ConfigUpdate(excluded_dirs=new_excluded_str))
-    logger.info(f"[Unmanaged Exclude] Successfully updated EXCLUDED_DIRS to: '{new_excluded_str}'")
+    logger.info(f"[Unmanaged Exclude] Successfully excluded {len(payload.folder_names)} folder(s).")
     return {
         "success": True,
-        "excluded_dirs": new_excluded_str
+        "excluded_folders": payload.folder_names
+    }
+
+
+@router.post("/restore-excluded-folder")
+async def restore_excluded_folder(payload: RestoreExcludedRequest, db: Session = Depends(get_db)):
+    """Remove a folder from excluded status, restoring it to unmanaged"""
+    from app.models.database import remove_folder_status, list_folder_statuses
+    folder_name = payload.folder_name.strip()
+    logger.info(f"[Unmanaged Exclude] Restoring excluded folder: {folder_name}")
+    
+    # 1. Remove from database FolderStatus
+    remove_folder_status(folder_name, db=db)
+    for fs in list_folder_statuses(status="excluded", db=db):
+        if fs.folder_name.lower() == folder_name.lower():
+            remove_folder_status(fs.folder_name, db=db)
+            
+    # 2. Sync in-memory settings.EXCLUDED_DIRS
+    current_excluded = [x.strip() for x in (getattr(settings, "EXCLUDED_DIRS", "") or "").split(",") if x.strip()]
+    updated_excluded = [x for x in current_excluded if x.lower() != folder_name.lower()]
+    if len(current_excluded) != len(updated_excluded):
+        new_str = ",".join(updated_excluded)
+        settings.EXCLUDED_DIRS = new_str
+        try:
+            _save_to_env(ConfigUpdate(excluded_dirs=new_str))
+        except Exception as env_err:
+            logger.debug(f"[Unmanaged Exclude] Note syncing .env: {env_err}")
+            
+    return {
+        "success": True,
+        "restored_folder": folder_name
     }
 
 

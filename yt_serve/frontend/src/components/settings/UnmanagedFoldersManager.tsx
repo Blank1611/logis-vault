@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { configApi, type UnmanagedFolder } from '../../services/api'
+import { configApi, type UnmanagedFolder, type ExcludedFolderItem } from '../../services/api'
 import { useToast } from '../../context/ToastContext'
 import { useConfirm } from '../../context/ConfirmContext'
 import { Button } from '../ui/Button'
 import { 
   Folder, Link as LinkIcon, EyeOff, RefreshCw, CheckCircle2, 
-  Loader2, Sparkles 
+  Loader2, Sparkles, Undo2 
 } from 'lucide-react'
 
 interface RowState {
@@ -20,9 +20,11 @@ export function UnmanagedFoldersManager() {
   const { toast } = useToast()
   const confirm = useConfirm()
 
+  const [activeTab, setActiveTab] = useState<'unmanaged' | 'excluded'>('unmanaged')
   const [rowStates, setRowStates] = useState<Record<string, RowState>>({})
   const [globalRename, setGlobalRename] = useState<boolean>(false)
   const [renameInitialized, setRenameInitialized] = useState<boolean>(false)
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
 
   // Fetch app config to read global rename_folder_on_link default
   const { data: appConfig } = useQuery({
@@ -40,7 +42,7 @@ export function UnmanagedFoldersManager() {
     }
   }, [appConfig, renameInitialized])
 
-  // Fetch unmanaged folders
+  // Fetch unmanaged & excluded folders
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['unmanagedFolders'],
     queryFn: async () => {
@@ -48,6 +50,9 @@ export function UnmanagedFoldersManager() {
       return res.data
     },
   })
+
+  const folders: UnmanagedFolder[] = data?.unmanaged_folders || []
+  const excludedFolders: ExcludedFolderItem[] = data?.excluded_folders || []
 
   useEffect(() => {
     if (data?.unmanaged_folders) {
@@ -80,6 +85,16 @@ export function UnmanagedFoldersManager() {
       return res.data
     },
     onSuccess: (res) => {
+      if (res.results && Array.isArray(res.results)) {
+        const newErrors: Record<string, string> = {}
+        for (const r of res.results) {
+          const key = r.folder_name || (r.folder_path ? r.folder_path.split(/[/\\]/).pop() || '' : '')
+          if (r.success === false && key) {
+            newErrors[key] = r.error || 'Invalid or inaccessible playlist URL'
+          }
+        }
+        setRowErrors(prev => ({ ...prev, ...newErrors }))
+      }
       if (res.linked_count > 0) {
         toast.success(`Successfully linked ${res.linked_count} playlist(s)!`)
         queryClient.invalidateQueries({ queryKey: ['playlists'] })
@@ -112,7 +127,22 @@ export function UnmanagedFoldersManager() {
     }
   })
 
-  const folders: UnmanagedFolder[] = data?.unmanaged_folders || []
+  // Restore Excluded Folder Mutation
+  const restoreMutation = useMutation({
+    mutationFn: async (folderName: string) => {
+      const res = await configApi.restoreExcludedFolder(folderName)
+      return res.data
+    },
+    onSuccess: (_, folderName) => {
+      toast.success(`Restored "${folderName}" to unmanaged folders.`)
+      queryClient.invalidateQueries({ queryKey: ['config'] })
+      queryClient.invalidateQueries({ queryKey: ['unmanagedFolders'] })
+      refetch()
+    },
+    onError: (err: any) => {
+      toast.error(`Failed to restore folder: ${err.response?.data?.detail || err.message}`)
+    }
+  })
 
   const updateRow = (folderName: string, updates: Partial<RowState>) => {
     setRowStates(prev => ({
@@ -122,6 +152,14 @@ export function UnmanagedFoldersManager() {
         ...updates,
       }
     }))
+    if (updates.playlist_url !== undefined) {
+      setRowErrors(prev => {
+        if (!prev[folderName]) return prev
+        const next = { ...prev }
+        delete next[folderName]
+        return next
+      })
+    }
   }
 
   const allSelected = folders.length > 0 && folders.every((f: UnmanagedFolder) => rowStates[f.folder_name]?.selected)
@@ -238,14 +276,14 @@ export function UnmanagedFoldersManager() {
           <div className="flex items-center gap-2">
             <Folder className="w-5 h-5 text-amber-400" />
             <h3 className="text-lg font-bold text-white">
-              Unmanaged Folders
+              Folder & Auto-Discovery Management
             </h3>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-950/60 text-amber-300 border border-amber-800/80">
-              {folders.length} Found
+              {folders.length} Unmanaged · {excludedFolders.length} Excluded
             </span>
           </div>
           <p className="text-xs text-gray-400 mt-1">
-            Subdirectories inside your downloads folder that lack YouTube metadata. Map them to playlist URLs or exclude them.
+            Subdirectories inside your downloads folder. Link unmanaged directories to YouTube playlists or restore excluded ones.
           </p>
         </div>
 
@@ -264,10 +302,102 @@ export function UnmanagedFoldersManager() {
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex border-b border-gray-800 gap-6">
+        <button
+          type="button"
+          onClick={() => setActiveTab('unmanaged')}
+          className={`pb-3 text-sm font-semibold flex items-center gap-2 border-b-2 transition-colors ${
+            activeTab === 'unmanaged'
+              ? 'border-blue-500 text-blue-400'
+              : 'border-transparent text-gray-400 hover:text-gray-300'
+          }`}
+        >
+          <Folder className="w-4 h-4" />
+          <span>Unmanaged Folders</span>
+          <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-800 text-gray-300">
+            {folders.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('excluded')}
+          className={`pb-3 text-sm font-semibold flex items-center gap-2 border-b-2 transition-colors ${
+            activeTab === 'excluded'
+              ? 'border-blue-500 text-blue-400'
+              : 'border-transparent text-gray-400 hover:text-gray-300'
+          }`}
+        >
+          <EyeOff className="w-4 h-4" />
+          <span>Excluded Folders</span>
+          <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-800 text-gray-300">
+            {excludedFolders.length}
+          </span>
+        </button>
+      </div>
+
       {isLoading ? (
         <div className="py-12 text-center text-gray-400 flex flex-col items-center justify-center gap-3">
           <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-          <span className="text-sm">Scanning directory for unmanaged folders...</span>
+          <span className="text-sm">Scanning directory for folders...</span>
+        </div>
+      ) : activeTab === 'excluded' ? (
+        <div>
+          {excludedFolders.length === 0 ? (
+            <div className="py-10 text-center bg-gray-950/40 border border-gray-800/60 rounded-xl">
+              <CheckCircle2 className="w-10 h-10 text-emerald-400 mx-auto mb-2 opacity-80" />
+              <p className="text-sm font-medium text-gray-200">No excluded folders</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Any folders you exclude from auto-discovery will be listed here with 1-click restore.
+              </p>
+            </div>
+          ) : (
+            <div className="border border-gray-800 rounded-xl overflow-hidden shadow-inner bg-gray-950/40">
+              <table className="w-full text-left text-xs text-gray-300">
+                <thead className="bg-gray-950/90 text-gray-400 font-semibold border-b border-gray-800 uppercase tracking-wider">
+                  <tr>
+                    <th className="p-3">Folder Name</th>
+                    <th className="p-3">Exclusion Reason</th>
+                    <th className="p-3">Date Excluded</th>
+                    <th className="p-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800/70">
+                  {excludedFolders.map((item) => (
+                    <tr key={item.folder_name} className="hover:bg-gray-800/30 transition-colors">
+                      <td className="p-3 font-medium text-gray-100 flex items-center gap-2">
+                        <Folder className="w-4 h-4 text-gray-500 shrink-0" />
+                        <span className="font-mono text-xs truncate max-w-xs">{item.folder_name}</span>
+                      </td>
+                      <td className="p-3 text-gray-400">
+                        <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-gray-800 text-gray-300 border border-gray-700">
+                          {item.reason || 'user_excluded'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-gray-400">
+                        {item.created_at ? new Date(item.created_at).toLocaleDateString() : '—'}
+                      </td>
+                      <td className="p-3 text-right">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={restoreMutation.isPending}
+                          onClick={() => restoreMutation.mutate(item.folder_name)}
+                          className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 inline-flex items-center gap-1.5"
+                          title="Restore this folder to Unmanaged so it can be linked"
+                        >
+                          <Undo2 className="w-3.5 h-3.5" />
+                          <span>Restore</span>
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       ) : folders.length === 0 ? (
         <div className="py-10 text-center bg-gray-950/40 border border-gray-800/60 rounded-xl">
@@ -302,30 +432,26 @@ export function UnmanagedFoldersManager() {
                   }}
                   className="rounded border-gray-700 bg-gray-900 text-blue-600 focus:ring-blue-500 w-4 h-4"
                 />
-                <span>Rename folder on disk to match playlist title</span>
+                <span>Rename Disk Folder on Link</span>
               </label>
 
-              {selectedCount > 0 && (
-                <span className="text-xs text-gray-400">
-                  {selectedCount} selected
-                </span>
-              )}
+              <span className="text-xs text-gray-500">
+                {mappedCount} of {folders.length} mapped
+              </span>
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap">
-              {selectedCount > 0 && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleBulkExclude}
-                  disabled={bulkExcludeMutation.isPending}
-                  className="text-xs flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700"
-                >
-                  <EyeOff className="w-3.5 h-3.5" />
-                  <span>Exclude Selected ({selectedCount})</span>
-                </Button>
-              )}
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={handleBulkExclude}
+                disabled={selectedCount === 0 || bulkExcludeMutation.isPending}
+                className="flex items-center gap-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 disabled:opacity-50"
+              >
+                <EyeOff className="w-3.5 h-3.5" />
+                <span>Exclude Selected ({selectedCount})</span>
+              </Button>
 
               <Button
                 type="button"
@@ -333,7 +459,7 @@ export function UnmanagedFoldersManager() {
                 size="sm"
                 onClick={handleApplyMapped}
                 disabled={mappedCount === 0 || batchLinkMutation.isPending}
-                className="text-xs flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+                className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20 disabled:opacity-50"
               >
                 {batchLinkMutation.isPending ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -345,10 +471,10 @@ export function UnmanagedFoldersManager() {
             </div>
           </div>
 
-          {/* Interactive Batch Mapping Table */}
-          <div className="overflow-x-auto border border-gray-800 rounded-xl">
+          {/* Table */}
+          <div className="border border-gray-800 rounded-xl overflow-hidden shadow-inner bg-gray-950/40">
             <table className="w-full text-left text-xs text-gray-300">
-              <thead className="bg-gray-950/80 text-gray-400 uppercase tracking-wider font-semibold border-b border-gray-800">
+              <thead className="bg-gray-950/90 text-gray-400 font-semibold border-b border-gray-800 uppercase tracking-wider">
                 <tr>
                   <th className="p-3 w-10 text-center">
                     <input
@@ -356,32 +482,31 @@ export function UnmanagedFoldersManager() {
                       checked={allSelected}
                       onChange={toggleSelectAll}
                       className="rounded border-gray-700 bg-gray-900 text-blue-600 focus:ring-blue-500 w-4 h-4"
+                      title="Select all folders"
                     />
                   </th>
-                  <th className="p-3 min-w-[180px]">Folder Name</th>
-                  <th className="p-3 min-w-[120px]">Detected Files</th>
-                  <th className="p-3 min-w-[280px]">YouTube Playlist URL (Tab to next)</th>
-                  <th className="p-3 w-28 text-center">Rename Disk</th>
-                  <th className="p-3 w-32 text-right">Actions</th>
+                  <th className="p-3">Folder Name</th>
+                  <th className="p-3">Files</th>
+                  <th className="p-3 w-2/5">YouTube Playlist URL</th>
+                  <th className="p-3 text-center w-28">Rename Folder</th>
+                  <th className="p-3 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-800/60 bg-gray-900/40">
+              <tbody className="divide-y divide-gray-800/70">
                 {folders.map((folder: UnmanagedFolder) => {
                   const state = rowStates[folder.folder_name] || {
                     playlist_url: '',
                     rename_folder: globalRename,
                     selected: false,
                   }
-
-                  const urlVal = (state.playlist_url || '').trim()
-                  const hasUrl = Boolean(urlVal)
-                  const isUrlValid = isValidPlaylistUrl(urlVal)
-                  const showUrlError = hasUrl && !isUrlValid
+                  const hasUrl = Boolean(state.playlist_url.trim())
+                  const isUrlValid = isValidPlaylistUrl(state.playlist_url)
+                  const rowError = rowErrors[folder.folder_name]
 
                   return (
                     <tr
                       key={folder.folder_name}
-                      className={`transition-colors hover:bg-gray-800/40 ${
+                      className={`hover:bg-gray-800/40 transition-colors ${
                         state.selected ? 'bg-blue-950/20' : ''
                       }`}
                     >
@@ -394,50 +519,49 @@ export function UnmanagedFoldersManager() {
                         />
                       </td>
 
-                      <td className="p-3">
-                        <div className="flex items-center gap-2">
-                          <Folder className="w-4 h-4 text-amber-400 shrink-0" />
-                          <span className="font-semibold text-white truncate max-w-[220px]" title={folder.folder_name}>
-                            {folder.folder_name}
-                          </span>
-                        </div>
+                      <td className="p-3 font-medium text-gray-100 flex items-center gap-2">
+                        <Folder className="w-4 h-4 text-amber-500 shrink-0" />
+                        <span className="font-mono text-xs truncate max-w-xs" title={folder.folder_name}>
+                          {folder.folder_name}
+                        </span>
                       </td>
 
-                      <td className="p-3">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {folder.video_count > 0 && (
-                            <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-blue-950/60 text-blue-300 border border-blue-800/60">
-                              {folder.video_count} video{folder.video_count > 1 ? 's' : ''}
-                            </span>
-                          )}
-                          {folder.audio_count > 0 && (
-                            <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-purple-950/60 text-purple-300 border border-purple-800/60">
-                              {folder.audio_count} audio
-                            </span>
-                          )}
-                          {folder.video_count === 0 && folder.audio_count === 0 && (
-                            <span className="text-gray-500 text-[11px]">Empty</span>
-                          )}
-                        </div>
-                      </td>
-
-                      <td className="p-3">
-                        <input
-                          type="text"
-                          value={state.playlist_url}
-                          onChange={(e) => updateRow(folder.folder_name, { playlist_url: e.target.value })}
-                          placeholder="https://www.youtube.com/playlist?list=..."
-                          className={`w-full px-3 py-1.5 text-xs bg-gray-950 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-1 font-mono ${
-                            showUrlError
-                              ? 'border-rose-500 focus:ring-rose-500 focus:border-rose-500'
-                              : 'border-gray-700 focus:ring-blue-500 focus:border-blue-500'
-                          }`}
-                        />
-                        {showUrlError && (
-                          <span className="text-[10px] text-rose-400 mt-1 block">
-                            URL must start with http:// or https://
-                          </span>
+                      <td className="p-3 text-gray-400">
+                        {folder.video_count > 0 && <span>{folder.video_count} vids </span>}
+                        {folder.audio_count > 0 && <span>{folder.audio_count} aud </span>}
+                        {folder.video_count === 0 && folder.audio_count === 0 && (
+                          <span className="text-gray-600">empty</span>
                         )}
+                      </td>
+
+                      <td className="p-3">
+                        <div className="space-y-1">
+                          <input
+                            type="text"
+                            placeholder="https://www.youtube.com/playlist?list=..."
+                            value={state.playlist_url}
+                            onChange={(e) => updateRow(folder.folder_name, { playlist_url: e.target.value })}
+                            className={`w-full bg-gray-900 border rounded-lg px-2.5 py-1.5 text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 transition-colors ${
+                              rowError
+                                ? 'border-rose-500 focus:ring-rose-500 bg-rose-950/20'
+                                : hasUrl
+                                ? isUrlValid
+                                  ? 'border-emerald-700 focus:ring-emerald-500'
+                                  : 'border-rose-600 focus:ring-rose-500'
+                                : 'border-gray-700 focus:ring-blue-500'
+                            }`}
+                          />
+                          {rowError ? (
+                            <p className="text-[10px] text-rose-400 font-medium flex items-center gap-1">
+                              <span>⚠️</span>
+                              <span>{rowError}</span>
+                            </p>
+                          ) : hasUrl && !isUrlValid ? (
+                            <p className="text-[10px] text-rose-400 font-medium">
+                              Must start with http:// or https://
+                            </p>
+                          ) : null}
+                        </div>
                       </td>
 
                       <td className="p-3 text-center">
@@ -456,25 +580,26 @@ export function UnmanagedFoldersManager() {
                             type="button"
                             onClick={() => handleLinkSingle(folder)}
                             disabled={!hasUrl || !isUrlValid || batchLinkMutation.isPending}
-                            className={`p-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 ${
+                            className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
                               hasUrl && isUrlValid
-                                ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                                ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-2xs'
                                 : 'bg-gray-800 text-gray-500 cursor-not-allowed'
                             }`}
                             title={hasUrl && isUrlValid ? 'Link this folder' : 'Enter a valid URL (http:// or https://) to link'}
                           >
                             <LinkIcon className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">Link</span>
+                            <span>Link</span>
                           </button>
 
                           <button
                             type="button"
                             onClick={() => handleExcludeSingle(folder)}
                             disabled={bulkExcludeMutation.isPending}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
-                            title="Exclude this folder"
+                            className="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 bg-amber-950/40 text-amber-300 border border-amber-800/80 hover:bg-amber-900/60 hover:text-amber-200 shadow-2xs"
+                            title="Exclude this folder from future scans"
                           >
-                            <EyeOff className="w-3.5 h-3.5" />
+                            <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Exclude</span>
                           </button>
                         </div>
                       </td>

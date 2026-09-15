@@ -22,34 +22,38 @@ export function FieldHeader({
 
   return (
     <div className={`mb-2 ${className}`}>
-      <div className="min-h-[2.5rem] flex items-center justify-between gap-2">
-        <label
-          htmlFor={id}
-          className="text-sm font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-1.5 flex-wrap"
-        >
-          <span>{label}</span>
-          {required && <span className="text-rose-500 font-bold">*</span>}
+      <div className="flex items-center justify-start gap-2 flex-wrap min-h-[2rem]">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <label
+            htmlFor={id}
+            className="text-sm font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-1"
+          >
+            <span>{label}</span>
+            {required && <span className="text-rose-500 font-bold">*</span>}
+          </label>
+
+          {infoText && (
+            <button
+              type="button"
+              onClick={() => setOpen(!open)}
+              className={`px-1.5 py-0.5 rounded-md text-xs transition-colors flex items-center gap-1 shrink-0 ${
+                open
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-200'
+                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
+              }`}
+              title="Toggle explanation"
+            >
+              <Info className="w-3.5 h-3.5 text-blue-500" />
+              <span className="text-[11px] font-medium">{open ? 'Hide' : 'Info'}</span>
+            </button>
+          )}
+
           {recommended && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800/80 shadow-sm">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800/80 shadow-xs">
               {recommended}
             </span>
           )}
-        </label>
-        {infoText && (
-          <button
-            type="button"
-            onClick={() => setOpen(!open)}
-            className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 shrink-0 ${
-              open
-                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-200'
-                : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
-            }`}
-            title="Toggle explanation"
-          >
-            <Info className="w-3.5 h-3.5" />
-            <span className="text-[11px] font-medium">{open ? 'Hide info' : 'Info'}</span>
-          </button>
-        )}
+        </div>
       </div>
       {open && infoText && (
         <div className="mt-1 p-2.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/80 rounded-lg text-xs text-blue-950 dark:text-blue-200 leading-relaxed shadow-sm animate-in fade-in duration-150">

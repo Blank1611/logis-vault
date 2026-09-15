@@ -8,6 +8,8 @@ import { ProgressBar, DualTierProgressBar } from '../components/ui/ProgressBar'
 import { 
   Terminal, RotateCcw, Copy, Check, DownloadCloud, Trash2, Search, Loader2, Activity, Server, PlayCircle
 } from 'lucide-react'
+import { useToast } from '../context'
+import { copyToClipboard } from '../utils/clipboard'
 
 export interface ActivityLog {
   id: string
@@ -32,6 +34,7 @@ export const LogsPage: React.FC<LogsPageProps> = ({
   onClearActivity,
 }) => {
   const queryClient = useQueryClient()
+  const { toast } = useToast()
 
   // Top-level tab: 'system' (Live System & Observability) vs 'jobs' (Job History & Execution)
   const [activeTab, setActiveTab] = useState<'system' | 'jobs'>(() => {
@@ -89,7 +92,8 @@ export const LogsPage: React.FC<LogsPageProps> = ({
     queryKey: ['server-logs'],
     queryFn: async () => {
       const res = await logsApi.getRecent({ limit: 500 })
-      return res.data
+      // Display oldest to newest so newest entries scroll in at bottom like standard console
+      return (res.data || []).slice().reverse()
     },
     enabled: activeTab === 'system' && systemLogType === 'server',
     staleTime: 5000,
@@ -105,7 +109,7 @@ export const LogsPage: React.FC<LogsPageProps> = ({
         const item: ServerLogEntry = JSON.parse(event.data)
         queryClient.setQueryData<ServerLogEntry[]>(['server-logs'], (prev = []) => {
           if (prev.some(p => p.id === item.id)) return prev
-          return [item, ...prev].slice(0, 500)
+          return [...prev, item].slice(-500)
         })
       } catch (err) {
         console.error('[SSE Logs] Error parsing record:', err)
@@ -184,18 +188,23 @@ export const LogsPage: React.FC<LogsPageProps> = ({
     return true
   })
 
-  const copyToClipboard = () => {
+  const handleCopyLogs = async () => {
     let content = ''
     if (activeTab === 'jobs') {
       content = filteredJobLogs.map(l => l.raw).join('\n')
     } else if (systemLogType === 'server') {
       content = filteredServerLogs.map(l => `[${l.timestamp}] [${l.level}] [${l.source || l.logger}] ${l.message}`).join('\n')
     } else {
-      content = activityLogs.map(l => `[${l.timestamp}] [${l.level.toUpperCase()}] [${l.source}] ${l.message}`).join('\n')
+      content = filteredActivityLogs.map(l => `[${l.timestamp}] [${l.level.toUpperCase()}] [${l.source}] ${l.message}`).join('\n')
     }
-    navigator.clipboard.writeText(content)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    const success = await copyToClipboard(content)
+    if (success) {
+      setCopied(true)
+      toast.success('Logs copied to clipboard!')
+      setTimeout(() => setCopied(false), 2000)
+    } else {
+      toast.error('Failed to copy logs to clipboard')
+    }
   }
 
   return (
@@ -326,7 +335,7 @@ export const LogsPage: React.FC<LogsPageProps> = ({
             <Button
               variant="secondary"
               size="sm"
-              onClick={copyToClipboard}
+              onClick={handleCopyLogs}
               icon={copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
             >
               {copied ? 'Copied!' : 'Copy Logs'}
@@ -496,12 +505,12 @@ export const LogsPage: React.FC<LogsPageProps> = ({
               {filteredJobLogs.map((log, idx) => (
                 <div key={idx} className="flex items-start gap-2.5 hover:bg-gray-900/60 px-2 py-0.5 rounded transition-colors break-all">
                   {log.timestamp && (
-                    <span className="text-gray-500 select-none whitespace-nowrap text-[11px]">
+                    <span className="text-gray-500 whitespace-nowrap text-[11px]">
                       {log.timestamp}
                     </span>
                   )}
                   {log.level && (
-                    <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold select-none whitespace-nowrap ${
+                    <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold whitespace-nowrap ${
                       log.level === 'ERROR'
                         ? 'bg-rose-950 text-rose-300 border border-rose-800'
                         : log.level === 'WARN'
@@ -541,10 +550,10 @@ export const LogsPage: React.FC<LogsPageProps> = ({
                 const lvl = log.level.toUpperCase()
                 return (
                   <div key={log.id} className="flex items-start gap-2.5 hover:bg-gray-900/60 px-2 py-0.5 rounded transition-colors break-all">
-                    <span className="text-gray-500 select-none whitespace-nowrap text-[11px]">
+                    <span className="text-gray-500 whitespace-nowrap text-[11px]">
                       {log.timestamp.replace('T', ' ').replace('Z', '')}
                     </span>
-                    <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold select-none whitespace-nowrap ${
+                    <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold whitespace-nowrap ${
                       lvl === 'ERROR' || lvl === 'CRITICAL'
                         ? 'bg-rose-950 text-rose-300 border border-rose-800'
                         : lvl === 'WARN' || lvl === 'WARNING'
@@ -555,7 +564,7 @@ export const LogsPage: React.FC<LogsPageProps> = ({
                     }`}>
                       {lvl}
                     </span>
-                    <span className="px-1.5 py-0.2 rounded text-[10px] text-gray-400 bg-gray-900 border border-gray-800 font-mono select-none">
+                    <span className="px-1.5 py-0.2 rounded text-[10px] text-gray-400 bg-gray-900 border border-gray-800 font-mono">
                       {log.source || log.logger}
                     </span>
                     <span className={`flex-1 whitespace-pre-wrap ${
@@ -583,10 +592,10 @@ export const LogsPage: React.FC<LogsPageProps> = ({
             <div className="space-y-1">
               {filteredActivityLogs.map(log => (
                 <div key={log.id} className="flex items-start gap-2.5 hover:bg-gray-900/60 px-2 py-0.5 rounded transition-colors break-all">
-                  <span className="text-gray-500 select-none whitespace-nowrap text-[11px]">
+                  <span className="text-gray-500 whitespace-nowrap text-[11px]">
                     {log.timestamp}
                   </span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold select-none whitespace-nowrap ${
+                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold whitespace-nowrap ${
                     log.level === 'error'
                       ? 'bg-rose-950 text-rose-300 border border-rose-800'
                       : log.level === 'warn'

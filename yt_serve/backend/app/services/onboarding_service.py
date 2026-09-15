@@ -52,7 +52,15 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
     discovered = []
     unmanaged_folders = []
     total_tracks_count = 0
-    excluded_dirs = settings.get_excluded_directories()
+    excluded_dirs = set(settings.get_excluded_directories())
+    try:
+        from app.models.database import list_folder_statuses
+        for fs in list_folder_statuses():
+            if fs.status in ("excluded", "pending_deletion"):
+                excluded_dirs.add(fs.folder_name.lower())
+                excluded_dirs.add(fs.folder_name)
+    except Exception as fs_err:
+        logger.debug(f"Could not load folder_status records: {fs_err}")
 
     try:
         entries = sorted(os.listdir(target_path))
@@ -77,7 +85,7 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
 
         # Skip internal system, temp, or explicitly excluded folders
         entry_lower = entry.lower()
-        if entry.startswith('.') or entry_lower in excluded_dirs:
+        if entry.startswith('.') or entry_lower in excluded_dirs or entry in excluded_dirs:
             continue
 
         playlist_title = entry
@@ -86,6 +94,7 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
         archived_ids = set()
         video_files = []
         audio_files = []
+        is_verified_cache = False
 
         # 1. Check for playlist_info.json or snapshots
         info_json_candidates = [
@@ -99,6 +108,7 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
                 if f.endswith('.json'):
                     info_json_candidates.append(os.path.join(snapshot_dir, f))
 
+        raw_url = ""
         for candidate in info_json_candidates:
             if os.path.isfile(candidate):
                 try:
@@ -106,19 +116,43 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
                         data = json.load(jf)
                         if isinstance(data, dict):
                             playlist_title = data.get("title") or playlist_title
-                            playlist_url = (
+                            candidate_url = (
                                 data.get("webpage_url") or 
                                 data.get("url") or 
                                 data.get("original_url") or 
                                 ""
                             )
-                            if not playlist_url and data.get("id"):
-                                playlist_url = f"https://www.youtube.com/playlist?list={data.get('id')}"
+                            if not candidate_url and data.get("id"):
+                                candidate_url = f"https://www.youtube.com/playlist?list={data.get('id')}"
                             total_online_count = data.get("playlist_count") or len(data.get("entries", []))
-                            if playlist_url:
+                            if candidate_url:
+                                raw_url = candidate_url
+                                # Authentic cache check: valid playlist type and entries or verified ID with count
+                                if data.get("_type") == "playlist" and (data.get("entries") or (data.get("id") and total_online_count > 0)):
+                                    is_verified_cache = True
                                 break
                 except Exception as json_err:
                     logger.debug(f"Could not parse info json {candidate}: {json_err}")
+
+        # Stage 1: Syntax Filter & Corrupt Stub Quarantine
+        if raw_url:
+            if raw_url.startswith("http://") or raw_url.startswith("https://"):
+                playlist_url = raw_url
+            else:
+                logger.warning(
+                    f"[Auto-Discovery] Folder '{entry}' has invalid URL syntax '{raw_url}'. "
+                    f"Removing corrupt metadata stub and classifying as unmanaged."
+                )
+                for stub_file in (
+                    os.path.join(folder_path, "playlist_info.json"),
+                    os.path.join(folder_path, "playlist_info_snapshot", "playlist_info.json")
+                ):
+                    if os.path.isfile(stub_file):
+                        try:
+                            os.remove(stub_file)
+                        except Exception as rem_err:
+                            logger.debug(f"Could not remove corrupt stub {stub_file}: {rem_err}")
+                playlist_url = ""
 
         # 2. Check archive.txt / downloaded_videos.txt
         for archive_name in ("archive.txt", "downloaded_videos.txt"):
@@ -150,7 +184,7 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
                 if afile not in audio_files:
                     audio_files.append(afile)
 
-        # Strict Qualification Criterion: Only classify as discovered playlist if valid playlist_info.json gave a URL
+        # Strict Qualification Criterion: Only classify as discovered playlist if valid URL passed Stage 1
         if playlist_url:
             track_count = max(len(video_files), len(audio_files), len(archived_ids))
             total_tracks_count += track_count
@@ -167,6 +201,7 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
                 "video_files": video_files,
                 "audio_files": audio_files,
                 "archived_ids": list(archived_ids),
+                "is_verified_cache": is_verified_cache,
             })
         else:
             # Unmanaged folder classification (never generate fake URL)
@@ -198,6 +233,7 @@ def ingest_discovered_library(
     """
     Ingest discovered playlists and tracks into SQLite database using repositories.
     Safe and idempotent - will not duplicate existing playlists or tracks.
+    Enforces Stage 2 pre-ingestion verification probe before inserting unverified items.
     """
     from app.repositories import PlaylistRepository, TrackRepository
     from app.models.database import get_db_context, Playlist, Track
@@ -214,8 +250,10 @@ def ingest_discovered_library(
         for item in discovered_items:
             title = item.get("title") or item.get("folder_name")
             url = item.get("url")
+            folder_name = item.get("folder_name", "")
+            folder_path = item.get("folder_path", "")
             if not url:
-                logger.warning(f"Skipping ingestion for item without URL: {item.get('folder_name')}")
+                logger.warning(f"Skipping ingestion for item without URL: {folder_name}")
                 continue
             
             # Check if playlist already exists
@@ -225,6 +263,39 @@ def ingest_discovered_library(
                 playlist_id = existing.id
                 skipped_count += 1
             else:
+                # Stage 2: Pre-Ingestion Online Verification Probe
+                # If item is not marked as authentic cached dump, probe with yt-dlp first
+                is_verified = item.get("is_verified_cache", False)
+                if not is_verified:
+                    try:
+                        from app.core.yt_playlist_audio_tools import _get_playlist_info
+                        info = _get_playlist_info(url)
+                        title = info.get("title") or title
+                        url = info.get("webpage_url") or url
+                        item["total_online_count"] = info.get("playlist_count") or len(info.get("entries", []))
+                        # Persist verified metadata dump to disk
+                        snapshot_dir = os.path.join(folder_path, "playlist_info_snapshot")
+                        os.makedirs(snapshot_dir, exist_ok=True)
+                        with open(os.path.join(folder_path, "playlist_info.json"), "w", encoding="utf-8") as jf:
+                            json.dump(info, jf, indent=2)
+                        with open(os.path.join(snapshot_dir, "playlist_info.json"), "w", encoding="utf-8") as jf:
+                            json.dump(info, jf, indent=2)
+                    except Exception as probe_err:
+                        logger.error(
+                            f"[Auto-Discovery] Metadata verification probe failed for folder '{folder_name}' ({url}): {probe_err}. "
+                            f"Rejecting from database and cleaning up corrupt stub."
+                        )
+                        for stub_file in (
+                            os.path.join(folder_path, "playlist_info.json"),
+                            os.path.join(folder_path, "playlist_info_snapshot", "playlist_info.json")
+                        ):
+                            if os.path.isfile(stub_file):
+                                try:
+                                    os.remove(stub_file)
+                                except Exception:
+                                    pass
+                        continue
+
                 new_playlist = PlaylistRepository.create(
                     title=title,
                     url=url,

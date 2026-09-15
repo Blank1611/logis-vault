@@ -15,10 +15,13 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional, Set, Any
 from pathlib import Path
 
+import itertools
+
 # In-Memory Ring Buffer Storage
 DEFAULT_RING_BUFFER_SIZE = 1000
 _ring_buffer: deque = deque(maxlen=DEFAULT_RING_BUFFER_SIZE)
 _buffer_lock = threading.Lock()
+_log_seq_counter = itertools.count(1)
 
 def resize_ring_buffer(capacity: int):
     """Dynamically resize the circular buffer while preserving existing records."""
@@ -64,8 +67,9 @@ class RingBufferHandler(logging.Handler):
     def emit(self, record: logging.LogRecord):
         try:
             msg = self.format(record)
+            seq = next(_log_seq_counter)
             entry: Dict[str, Any] = {
-                "id": f"{int(record.created * 1000)}-{record.msecs:.0f}",
+                "id": f"{int(record.created * 1000)}_{seq}",
                 "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
                 "level": record.levelname,
                 "logger": record.name,

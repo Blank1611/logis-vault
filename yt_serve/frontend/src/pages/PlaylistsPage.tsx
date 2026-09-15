@@ -3,13 +3,16 @@ import type { Playlist, Job } from '../services/types'
 import { AddPlaylistBar } from '../components/playlists/AddPlaylistBar'
 import { PlaylistGrid } from '../components/playlists/PlaylistGrid'
 import { PlaylistList } from '../components/playlists/PlaylistList'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Grid3x3, List, Layers, Sparkles } from 'lucide-react'
 
 export interface PlaylistsPageProps {
   playlists: Playlist[]
   jobs: Job[]
   isLoading: boolean
   viewMode: 'grid' | 'list'
+  onViewModeChange?: (mode: 'grid' | 'list') => void
+  onOpenReorganize?: () => void
+  onOpenDeduplicate?: () => void
   expandedRows: Set<number>
   onToggleRow: (playlistId: number) => void
   isScanning?: boolean
@@ -31,6 +34,9 @@ export const PlaylistsPage: React.FC<PlaylistsPageProps> = ({
   jobs,
   isLoading,
   viewMode,
+  onViewModeChange,
+  onOpenReorganize,
+  onOpenDeduplicate,
   expandedRows,
   onToggleRow,
   isScanning,
@@ -50,6 +56,69 @@ export const PlaylistsPage: React.FC<PlaylistsPageProps> = ({
     <>
       {/* Add Playlist Input Bar */}
       <AddPlaylistBar />
+
+      {/* Playlist View & Management Toolbar */}
+      {!isLoading && playlists.length > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-6 bg-white dark:bg-gray-800/60 p-3 rounded-xl border border-gray-200/80 dark:border-gray-700/80 shadow-xs">
+          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">
+            <span>{playlists.length} {playlists.length === 1 ? 'Playlist' : 'Playlists'} Total</span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Track Index Button */}
+            {onOpenReorganize && (
+              <button
+                onClick={onOpenReorganize}
+                className="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 transition-colors flex items-center gap-1.5 text-xs font-semibold text-gray-700 dark:text-gray-200 shadow-2xs"
+                title="Track Index & Inter-Playlist Reorganization Manager"
+              >
+                <Layers className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                <span>Track Index</span>
+              </button>
+            )}
+
+            {/* Deduplicate Button */}
+            {onOpenDeduplicate && (
+              <button
+                onClick={onOpenDeduplicate}
+                className="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 transition-colors flex items-center gap-1.5 text-xs font-semibold text-gray-700 dark:text-gray-200 shadow-2xs"
+                title="Retroactive Library Deduplication & Hardlink Space Reclaimer"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                <span>Deduplicate</span>
+              </button>
+            )}
+
+            {/* View Mode Toggle (Grid / List) */}
+            {onViewModeChange && (
+              <div className="flex gap-1 p-1 rounded-lg bg-gray-100 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600">
+                <button
+                  onClick={() => onViewModeChange('grid')}
+                  className={`p-1.5 rounded transition-colors ${
+                    viewMode === 'grid'
+                      ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-400 shadow-2xs'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                  }`}
+                  title="Grid View"
+                >
+                  <Grid3x3 className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => onViewModeChange('list')}
+                  className={`p-1.5 rounded transition-colors ${
+                    viewMode === 'list'
+                      ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-400 shadow-2xs'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                  }`}
+                  title="List View"
+                >
+                  <List className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Main Playlists Content */}
       {isLoading ? (

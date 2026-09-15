@@ -323,6 +323,96 @@ class TestBatchRecoveryGuards(unittest.TestCase):
             self.assertIsNotNone(pl, "Playlist should be committed to database")
             self.assertEqual(pl.title, "My Super Playlist")
 
+    def test_pre_ingestion_verification_rejects_unresolvable_url(self):
+        """Verify fake/unresolvable URLs fail probe, are purged from disk, and rejected from SQLite."""
+        from unittest.mock import patch
+        import json
+        from app.services.onboarding_service import scan_download_directory, ingest_discovered_library
+        from app.repositories import PlaylistRepository
+        from app.models.database import SessionLocal
+
+        fake_dir = os.path.join(self.temp_dir, "fake_online_playlist")
+        os.makedirs(fake_dir, exist_ok=True)
+        stub_path = os.path.join(fake_dir, "playlist_info.json")
+        with open(stub_path, "w") as f:
+            json.dump({"title": "Fake Online", "webpage_url": "http://woieuhfiouews.com"}, f)
+
+        # Stage 1: Discovered as candidate (passes syntax check, but is_verified_cache is False)
+        scan = scan_download_directory(self.temp_dir)
+        discovered_urls = [d["url"] for d in scan.get("discovered_playlists", [])]
+        self.assertIn("http://woieuhfiouews.com", discovered_urls)
+
+        # Stage 2: Ingest with yt-dlp probe failing
+        with patch("app.core.yt_playlist_audio_tools._get_playlist_info", side_effect=RuntimeError("Domain name resolution error")):
+            ingest_res = ingest_discovered_library(scan["discovered_playlists"], base_path=self.temp_dir)
+
+        # Assert no playlist was imported
+        self.assertEqual(ingest_res["playlists_imported"], 0)
+
+        # Assert stub was purged from disk
+        self.assertFalse(os.path.exists(stub_path))
+
+        # Assert database was NOT contaminated
+        with SessionLocal() as db:
+            pl = PlaylistRepository.get_by_url("http://woieuhfiouews.com", db=db)
+            self.assertIsNone(pl)
+
+        # Re-scan: Folder should now be classified as unmanaged
+        rescan = scan_download_directory(self.temp_dir)
+        unmanaged_names = [u["folder_name"] for u in rescan.get("unmanaged_folders", [])]
+        self.assertIn("fake_online_playlist", unmanaged_names)
+
+    def test_pre_ingestion_syntax_filter_purges_garbage_url(self):
+        """Verify corrupt stubs with invalid schemes (e.g. jygyjhg) are purged at Stage 1."""
+        import json
+        from app.services.onboarding_service import scan_download_directory
+
+        corrupt_dir = os.path.join(self.temp_dir, "test_custom_corrupt")
+        os.makedirs(corrupt_dir, exist_ok=True)
+        stub_path = os.path.join(corrupt_dir, "playlist_info.json")
+        with open(stub_path, "w") as f:
+            json.dump({"title": "test_custom", "webpage_url": "jygyjhg"}, f)
+
+        scan = scan_download_directory(self.temp_dir)
+        # Should be classified as unmanaged, NOT discovered
+        discovered_folders = [d["folder_name"] for d in scan.get("discovered_playlists", [])]
+        self.assertNotIn("test_custom_corrupt", discovered_folders)
+
+        unmanaged_folders = [u["folder_name"] for u in scan.get("unmanaged_folders", [])]
+        self.assertIn("test_custom_corrupt", unmanaged_folders)
+
+        # Corrupt file should have been cleaned up
+        self.assertFalse(os.path.exists(stub_path))
+
+    def test_folder_status_exclude_and_restore(self):
+        """Verify FolderStatus table persists exclusions and shields directory from discovery until restored."""
+        from app.models.database import set_folder_status, remove_folder_status, list_folder_statuses
+        from app.services.onboarding_service import scan_download_directory
+
+        folder_path = os.path.join(self.temp_dir, "my_ignored_folder")
+        os.makedirs(folder_path, exist_ok=True)
+
+        # Exclude folder via FolderStatus
+        status_rec = set_folder_status(folder_name="my_ignored_folder", status="excluded", reason="user_excluded")
+        self.assertIsNotNone(status_rec)
+        self.assertEqual(status_rec.status, "excluded")
+
+        # Scan should completely skip excluded folder
+        scan = scan_download_directory(self.temp_dir)
+        unmanaged_folders = [u["folder_name"] for u in scan.get("unmanaged_folders", [])]
+        discovered_folders = [d["folder_name"] for d in scan.get("discovered_playlists", [])]
+        self.assertNotIn("my_ignored_folder", unmanaged_folders)
+        self.assertNotIn("my_ignored_folder", discovered_folders)
+
+        # Restore folder
+        removed = remove_folder_status("my_ignored_folder")
+        self.assertTrue(removed)
+
+        # Scan should now surface it as unmanaged
+        scan_restored = scan_download_directory(self.temp_dir)
+        unmanaged_restored = [u["folder_name"] for u in scan_restored.get("unmanaged_folders", [])]
+        self.assertIn("my_ignored_folder", unmanaged_restored)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

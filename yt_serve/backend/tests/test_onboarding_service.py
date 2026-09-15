@@ -35,9 +35,12 @@ class TestOnboardingService(unittest.TestCase):
         os.makedirs(pl_a, exist_ok=True)
         with open(os.path.join(pl_a, "playlist_info.json"), "w") as f:
             json.dump({
+                "_type": "playlist",
+                "id": "PL_ROCK_123",
                 "title": "Classic Rock Hits",
                 "webpage_url": "https://www.youtube.com/playlist?list=PL_ROCK_123",
-                "playlist_count": 2
+                "playlist_count": 2,
+                "entries": [{"id": "fJ9rUzIMcZQ", "title": "Queen - Bohemian Rhapsody"}]
             }, f)
         # Create media file in Playlist A
         with open(os.path.join(pl_a, "Queen - Bohemian Rhapsody [fJ9rUzIMcZQ].mp4"), "w") as f:

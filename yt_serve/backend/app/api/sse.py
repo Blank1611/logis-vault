@@ -137,7 +137,7 @@ async def stream_job_events(job_id: int, request: Request, db: Session = Depends
     )
 
 
-async def server_logs_generator(request: Request, min_level: Optional[str] = None) -> AsyncGenerator[str, None]:
+async def server_logs_generator(request: Request, min_level: Optional[str] = None, include_history: bool = False) -> AsyncGenerator[str, None]:
     """
     Yields live Server-Sent Events for all server activity logs.
     """
@@ -152,10 +152,12 @@ async def server_logs_generator(request: Request, min_level: Optional[str] = Non
     target_val = level_order.get((min_level or "").upper(), 0)
 
     try:
-        # Initial push: recent 50 logs
-        recent = get_recent_logs(limit=50, min_level=min_level)
-        for item in reversed(recent):
-            yield f"event: log\ndata: {json.dumps(item)}\n\n"
+        # Stream historical logs only if explicitly requested; otherwise stream live newly created records
+        # to prevent repeating historical logs on EventSource reconnects.
+        if include_history:
+            recent = get_recent_logs(limit=50, min_level=min_level)
+            for item in reversed(recent):
+                yield f"event: log\ndata: {json.dumps(item)}\n\n"
 
         while True:
             if await request.is_disconnected():
@@ -177,12 +179,12 @@ async def server_logs_generator(request: Request, min_level: Optional[str] = Non
 
 
 @router.get("/logs/stream")
-async def stream_server_logs(request: Request, level: Optional[str] = None):
+async def stream_server_logs(request: Request, level: Optional[str] = None, include_history: bool = False):
     """
     Stream live server-wide stdout/logs via Server-Sent Events (SSE).
     """
     return StreamingResponse(
-        server_logs_generator(request, min_level=level),
+        server_logs_generator(request, min_level=level, include_history=include_history),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-transform",

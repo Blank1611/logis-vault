@@ -293,19 +293,15 @@ function AppContent() {
             activeTab={activeTab}
             onTabChange={setActiveTab}
             runningJobsCount={runningJobsCount}
-            viewMode={viewMode}
-            onViewModeChange={setViewMode}
             onOpenSettings={() => setShowSettings(true)}
             onOpenSettingsTab={(tab) => {
               setSettingsTab(tab || 'storage')
               setShowSettings(true)
             }}
-            onOpenReorganize={() => setShowReorganize(true)}
-            onOpenDeduplicate={() => setShowDeduplicate(true)}
           />
 
           {/* Main Container */}
-          <main className="max-w-7xl mx-auto px-4 py-8">
+          <main className="w-full max-w-[min(94vw,1920px)] mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <SchedulerBanner schedulerStatus={schedulerStatus} />
 
             {activeTab === 'playlists' && (
@@ -314,6 +310,9 @@ function AppContent() {
                 jobs={jobs}
                 isLoading={playlistsLoading}
                 viewMode={viewMode}
+                onViewModeChange={setViewMode}
+                onOpenReorganize={() => setShowReorganize(true)}
+                onOpenDeduplicate={() => setShowDeduplicate(true)}
                 expandedRows={expandedRows}
                 onToggleRow={toggleRow}
                 isScanning={schedulerStatus?.is_scanning}
