@@ -18,8 +18,10 @@ from typing import Optional, List, Dict, Tuple, Any
 from collections import defaultdict
 
 
-# Root directory of yt_serve (auto-anchored)
+# Root directory & Container Configuration
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+APP_NAME = "logis-vault"
+GHCR_OWNER = "Blank1611"
 
 # ANSI Color Codes for terminal logging
 COLOR_RESET = "\033[0m"
@@ -127,9 +129,9 @@ def inspect_image_id(tag: str) -> Optional[str]:
 
 
 def get_local_images() -> List[Dict[str, str]]:
-    """List all local yt_serve images with tags, IDs, sizes, and creation times."""
+    """List all local images with tags, IDs, sizes, and creation times."""
     code, stdout, _ = run_command(
-        ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.CreatedAt}}\t{{.Size}}", "yt_serve"],
+        ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.CreatedAt}}\t{{.Size}}", APP_NAME],
         capture_output=True
     )
     if code != 0 or not stdout:
@@ -190,10 +192,10 @@ def pad_colored(text: str, width: int) -> str:
 # ==============================================================================
 
 def action_list(env_filter: Optional[str] = None):
-    """Display a formatted inspection table of all local yt_serve images with hierarchical sorting and alias grouping."""
+    """Display a formatted inspection table of all local images with hierarchical sorting and alias grouping."""
     images = get_local_images()
     if not images:
-        logger.info("No local 'yt_serve' Docker images found.")
+        logger.info(f"No local '{APP_NAME}' Docker images found.")
         return
 
     # Normalize image IDs for reliable matching
@@ -205,8 +207,8 @@ def action_list(env_filter: Optional[str] = None):
     for img in images:
         id_to_tags[img["norm_id"]].append(img["tag"])
 
-    # Determine what yt_serve:latest points to
-    raw_latest_id = inspect_image_id("yt_serve:latest")
+    # Determine what latest points to
+    raw_latest_id = inspect_image_id(f"{APP_NAME}:latest")
     latest_id = normalize_image_id(raw_latest_id)
 
     # Classify each image and assign roles (canonical vs alias)
@@ -315,7 +317,7 @@ def action_list(env_filter: Optional[str] = None):
     classified.sort(key=sort_key)
 
     print("\n" + "=" * 102)
-    print(f"{COLOR_BOLD}LOCAL DOCKER IMAGES (yt_serve){COLOR_RESET}")
+    print(f"{COLOR_BOLD}LOCAL DOCKER IMAGES ({APP_NAME}){COLOR_RESET}")
     print("=" * 102)
     print(f"{'ENV':<11} {'TAG':<35} {'IMAGE ID':<15} {'SIZE':<11} {'STATUS':<30}")
     print("-" * 102)
@@ -332,9 +334,9 @@ def action_list(env_filter: Optional[str] = None):
 
     print("-" * 102)
     if latest_id and pointed_version:
-        print(f"Production 'latest' Pointer: {COLOR_BOLD}yt_serve:latest ➔ {pointed_version}{COLOR_RESET} ({latest_id})")
+        print(f"Production 'latest' Pointer: {COLOR_BOLD}{APP_NAME}:latest ➔ {pointed_version}{COLOR_RESET} ({latest_id})")
     elif latest_id:
-        print(f"Production 'latest' Pointer: {COLOR_BOLD}yt_serve:latest ➔ ({latest_id}){COLOR_RESET}")
+        print(f"Production 'latest' Pointer: {COLOR_BOLD}{APP_NAME}:latest ➔ ({latest_id}){COLOR_RESET}")
     else:
         print("Production 'latest' Pointer: [Unassigned]")
     print("=" * 102 + "\n")
@@ -346,7 +348,7 @@ def action_build_test(fresh_build: bool, dry_run: bool):
     logger.info("Building test container target ('--target backend-test')...")
     logger.info("Note: Node.js and frontend compilation are skipped for speed.")
 
-    cmd = ["docker", "build", "--target", "backend-test", "-t", "yt_serve:test"]
+    cmd = ["docker", "build", "--target", "backend-test", "-t", f"{APP_NAME}:test"]
     if fresh_build:
         cmd.extend(["--no-cache", "--pull"])
     cmd.append(".")
@@ -356,8 +358,8 @@ def action_build_test(fresh_build: bool, dry_run: bool):
         logger.error(f"Failed to build test container: {err}")
         sys.exit(1)
 
-    log_success("Built 'yt_serve:test' successfully.")
-    logger.info("Run tests inside container via: docker run --rm yt_serve:test")
+    log_success(f"Built '{APP_NAME}:test' successfully.")
+    logger.info(f"Run tests inside container via: docker run --rm {APP_NAME}:test")
 
 
 def action_build_dev(fresh_build: bool, dry_run: bool):
@@ -365,7 +367,7 @@ def action_build_dev(fresh_build: bool, dry_run: bool):
     sha = get_git_short_sha()
     is_dirty, modified_files = is_git_code_dirty()
 
-    dev_tag = f"yt_serve:dev-{sha}" + ("-dirty" if is_dirty else "")
+    dev_tag = f"{APP_NAME}:dev-{sha}" + ("-dirty" if is_dirty else "")
 
     if is_dirty:
         logger.warning(f"Uncommitted code modifications detected ({len(modified_files)} files). Tagging as '{dev_tag}'.")
@@ -377,12 +379,12 @@ def action_build_dev(fresh_build: bool, dry_run: bool):
         existing_id = inspect_image_id(dev_tag)
         if existing_id:
             logger.info(f"Image '{dev_tag}' already exists ({existing_id[:12]}) and working tree is clean.")
-            logger.info("Updating floating 'yt_serve:dev' tag to point to it...")
-            run_command(["docker", "tag", dev_tag, "yt_serve:dev"], dry_run=dry_run)
-            log_success(f"Updated 'yt_serve:dev' ➔ '{dev_tag}'. (Rebuild skipped, already up to date).")
+            logger.info(f"Updating floating '{APP_NAME}:dev' tag to point to it...")
+            run_command(["docker", "tag", dev_tag, f"{APP_NAME}:dev"], dry_run=dry_run)
+            log_success(f"Updated '{APP_NAME}:dev' ➔ '{dev_tag}'. (Rebuild skipped, already up to date).")
             return
 
-    cmd = ["docker", "build", "--target", "runner", "-t", "yt_serve:dev", "-t", dev_tag]
+    cmd = ["docker", "build", "--target", "runner", "-t", f"{APP_NAME}:dev", "-t", dev_tag]
     if fresh_build:
         cmd.extend(["--no-cache", "--pull"])
     cmd.append(".")
@@ -393,7 +395,7 @@ def action_build_dev(fresh_build: bool, dry_run: bool):
         logger.error(f"Failed to build development image: {err}")
         sys.exit(1)
 
-    log_success(f"Built '{dev_tag}' and updated 'yt_serve:dev'.")
+    log_success(f"Built '{dev_tag}' and updated '{APP_NAME}:dev'.")
 
 
 def action_build_prod(
@@ -413,7 +415,7 @@ def action_build_prod(
         logger.error(f"Invalid production version format '{version}'. Must follow 'vX.Y.Z' (e.g. v2.0.0).")
         sys.exit(1)
 
-    prod_tag = f"yt_serve:{version}"
+    prod_tag = f"{APP_NAME}:{version}"
 
     # RULE: Strict permanent immutability. If release exists, it can never be rebuilt.
     existing_id = inspect_image_id(prod_tag)
@@ -424,7 +426,7 @@ def action_build_prod(
         sys.exit(1)
 
     # Check remote registry collision
-    ghcr_target = f"ghcr.io/Blank1611/{prod_tag}"
+    ghcr_target = f"ghcr.io/{GHCR_OWNER}/{prod_tag}"
     if (push_ghcr or push_all) and not dry_run:
         if check_remote_manifest_exists(ghcr_target):
             logger.error(f"Release tag '{ghcr_target}' already exists in GitHub Container Registry.")
@@ -446,11 +448,11 @@ def action_build_prod(
     if use_from_dev:
         if from_dev:
             # Explicit tag/SHA provided
-            dev_source_tag = from_dev if ":" in from_dev else f"yt_serve:dev-{from_dev}"
+            dev_source_tag = from_dev if ":" in from_dev else f"{APP_NAME}:dev-{from_dev}"
         else:
             # Default to current HEAD clean dev build
             sha = get_git_short_sha()
-            dev_source_tag = f"yt_serve:dev-{sha}"
+            dev_source_tag = f"{APP_NAME}:dev-{sha}"
 
         dev_id = inspect_image_id(dev_source_tag)
         if not dev_id and not dry_run:
@@ -511,19 +513,19 @@ def action_promote_latest(
     push_all: bool = False,
     dry_run: bool = False
 ):
-    """Promote an existing local release version to yt_serve:latest."""
-    prod_tag = f"yt_serve:{version}" if not version.startswith("yt_serve:") else version
+    """Promote an existing local release version to latest."""
+    prod_tag = f"{APP_NAME}:{version}" if not version.startswith(f"{APP_NAME}:") else version
     img_id = inspect_image_id(prod_tag)
     if not img_id and not dry_run:
         logger.error(f"Cannot promote '{prod_tag}': image does not exist locally.")
         sys.exit(1)
 
-    logger.info(f"Promoting '{prod_tag}' ➔ 'yt_serve:latest'...")
-    run_command(["docker", "tag", prod_tag, "yt_serve:latest"], dry_run=dry_run)
-    log_success(f"Pointed 'yt_serve:latest' ➔ '{prod_tag}'.")
+    logger.info(f"Promoting '{prod_tag}' ➔ '{APP_NAME}:latest'...")
+    run_command(["docker", "tag", prod_tag, f"{APP_NAME}:latest"], dry_run=dry_run)
+    log_success(f"Pointed '{APP_NAME}:latest' ➔ '{prod_tag}'.")
 
     if push_ghcr or push_all:
-        ghcr_latest = "ghcr.io/Blank1611/yt_serve:latest"
+        ghcr_latest = f"ghcr.io/{GHCR_OWNER}/{APP_NAME}:latest"
         logger.info(f"Updating remote registry pointer ('{ghcr_latest}')...")
         run_command(["docker", "tag", prod_tag, ghcr_latest], dry_run=dry_run)
         code, _, err = run_command(["docker", "push", ghcr_latest], dry_run=dry_run)
@@ -534,7 +536,7 @@ def action_promote_latest(
 
     if push_local or push_all:
         local_host = push_local if (push_local and push_local != "all") else "localhost:5000"
-        local_latest = f"{local_host}/yt_serve:latest"
+        local_latest = f"{local_host}/{APP_NAME}:latest"
         logger.info(f"Updating local registry pointer ('{local_latest}')...")
         run_command(["docker", "tag", prod_tag, local_latest], dry_run=dry_run)
         code, _, err = run_command(["docker", "push", local_latest], dry_run=dry_run)
@@ -551,10 +553,10 @@ def action_rollback(
     push_all: bool = False,
     dry_run: bool = False
 ):
-    """Roll back yt_serve:latest to a previous stable release (N-1 or specified version)."""
+    """Roll back latest to a previous stable release (N-1 or specified version)."""
     images = get_local_images()
     prod_releases = []
-    latest_id = inspect_image_id("yt_serve:latest")
+    latest_id = inspect_image_id(f"{APP_NAME}:latest")
 
     for img in images:
         tag = img["tag"]
@@ -562,14 +564,14 @@ def action_rollback(
             prod_releases.append(tag)
 
     if not prod_releases:
-        logger.error("No production release versions (e.g. yt_serve:vX.Y.Z) found locally to roll back to.")
+        logger.error(f"No production release versions (e.g. {APP_NAME}:vX.Y.Z) found locally to roll back to.")
         sys.exit(1)
 
     # Sort descending by semver
     prod_releases.sort(key=parse_semver_key, reverse=True)
 
     if target_version:
-        target_tag = f"yt_serve:{target_version}" if not target_version.startswith("yt_serve:") else target_version
+        target_tag = f"{APP_NAME}:{target_version}" if not target_version.startswith(f"{APP_NAME}:") else target_version
         if target_tag not in prod_releases and not dry_run:
             logger.error(f"Target release '{target_tag}' not found in local images. Available releases: {', '.join(prod_releases)}")
             sys.exit(1)
@@ -594,18 +596,18 @@ def action_rollback(
             # Fallback to highest available release
             selected_version = prod_releases[0]
 
-    logger.info(f"Executing rollback: pointing 'yt_serve:latest' ➔ '{selected_version}'...")
+    logger.info(f"Executing rollback: pointing '{APP_NAME}:latest' ➔ '{selected_version}'...")
     action_promote_latest(selected_version, push_ghcr=push_ghcr, push_local=push_local, push_all=push_all, dry_run=dry_run)
-    log_success(f"Rollback complete: 'yt_serve:latest' now points to '{selected_version}'.")
+    log_success(f"Rollback complete: '{APP_NAME}:latest' now points to '{selected_version}'.")
 
 
 def action_prune(keep_n: int = 3, dry_run: bool = False):
     """
-    Clean up stale dev images, test images, and untagged build layers strictly scoped to yt_serve.
+    Clean up stale dev images, test images, and untagged build layers strictly scoped to APP_NAME.
     Lists all candidate tags prior to deletion and preserves production releases.
-    Scoped to project='yt_serve' via Docker label filtering.
+    Scoped to project=APP_NAME via Docker label filtering.
     """
-    logger.info(f"Scanning local 'yt_serve' images for pruning (retention limit: {keep_n} newest dev builds)...")
+    logger.info(f"Scanning local '{APP_NAME}' images for pruning (retention limit: {keep_n} newest dev builds)...")
     images = get_local_images()
 
     prod_images = []
@@ -618,34 +620,32 @@ def action_prune(keep_n: int = 3, dry_run: bool = False):
             test_images.append(img)
         elif re.search(r":v\d+\.\d+\.\d+", tag) or tag.endswith(":latest"):
             prod_images.append(img)
-        elif ":dev-" in tag:
+        elif "-dirty" in tag:
+            dev_images.append(img)
+        else:
             dev_images.append(img)
 
-    # Sort dev images newest first by creation timestamp string
-    dev_images.sort(key=lambda x: x["created"], reverse=True)
+    # Separate floating aliases from canonical dev images
+    canonical_devs = [img for img in dev_images if not img["tag"].endswith(":dev")]
+    canonical_devs.sort(key=lambda x: x.get("created", ""), reverse=True)
 
-    kept_dev = dev_images[:keep_n]
-    prune_dev = dev_images[keep_n:]
-    prune_candidates = test_images + prune_dev
+    preserved_devs = canonical_devs[:keep_n]
+    prune_dev_candidates = canonical_devs[keep_n:]
+
+    # Test images: prune if older/stale (always prune test target when running prune)
+    prune_candidates = prune_dev_candidates + test_images
 
     print("\n" + "=" * 88)
-    print(f"{COLOR_BOLD}PRUNE SCOPING: LOCAL yt_serve ARTIFACTS{COLOR_RESET}")
+    print(f"{COLOR_BOLD}PRUNE SCOPING: LOCAL {APP_NAME} ARTIFACTS{COLOR_RESET}")
     print("=" * 88)
-
-    # Display Protected / Retained Images
-    print(f"{COLOR_GREEN}[RETAINED RELEASES & ACTIVE BUILDS]{COLOR_RESET}")
-    if prod_images:
-        for p in prod_images:
-            print(f"  ★ PROD  {p['tag']:<34} {p['id']:<14} {p['size']:<10} {p['created']}")
-    for k in kept_dev:
-        print(f"  ✔ DEV   {k['tag']:<34} {k['id']:<14} {k['size']:<10} {k['created']} (Active)")
+    print(f"Active Production Releases Preserved: {len(prod_images)}")
+    print(f"Recent Dev Builds Preserved ({keep_n} newest): {len(preserved_devs)}")
+    for p in preserved_devs:
+        print(f"  {COLOR_GREEN}✓{COLOR_RESET} {p['tag']} ({normalize_image_id(p.get('id'))})")
 
     print("-" * 88)
-
-    # Display Prune Candidates
     if not prune_candidates:
-        print(f"{COLOR_CYAN}[PRUNE CANDIDATES - NAMED TAGS]{COLOR_RESET}")
-        print("  None. All named yt_serve tags meet local retention limits.")
+        print(f"  None. All named {APP_NAME} tags meet local retention limits.")
     else:
         print(f"{COLOR_YELLOW}[PRUNE CANDIDATES SCHEDULED FOR REMOVAL]{COLOR_RESET}")
         print(f"  {'TYPE':<6} {'TAG':<34} {'IMAGE ID':<14} {'SIZE':<10} {'CREATED':<20}")
@@ -655,7 +655,7 @@ def action_prune(keep_n: int = 3, dry_run: bool = False):
     print("=" * 88 + "\n")
 
     if prune_candidates:
-        logger.info(f"Identified {len(prune_candidates)} stale yt_serve image(s) for removal.")
+        logger.info(f"Identified {len(prune_candidates)} stale {APP_NAME} image(s) for removal.")
         if dry_run:
             logger.info(f"[DRY-RUN] Would remove {len(prune_candidates)} candidate image(s).")
         else:
@@ -663,11 +663,11 @@ def action_prune(keep_n: int = 3, dry_run: bool = False):
                 tag = c["tag"]
                 logger.info(f"Removing image '{tag}'...")
                 run_command(["docker", "rmi", tag], dry_run=dry_run)
-            log_success(f"Removed {len(prune_candidates)} stale yt_serve image(s).")
+            log_success(f"Removed {len(prune_candidates)} stale {APP_NAME} image(s).")
 
     # Clean up project-specific untagged dangling build layers (<none>:<none>) using label filter
-    logger.info("Cleaning up untagged dangling build layers (docker image prune -f --filter label=project=yt_serve)...")
-    run_command(["docker", "image", "prune", "-f", "--filter", "label=project=yt_serve"], dry_run=dry_run)
+    logger.info(f"Cleaning up untagged dangling build layers (docker image prune -f --filter label=project={APP_NAME})...")
+    run_command(["docker", "image", "prune", "-f", "--filter", f"label=project={APP_NAME}"], dry_run=dry_run)
     log_success("Prune operation finished.")
 
 
@@ -677,9 +677,9 @@ def action_prune(keep_n: int = 3, dry_run: bool = False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Distribution & Container Lifecycle CLI for yt_serve",
+        description=f"Distribution & Container Lifecycle CLI for {APP_NAME}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 Examples:
   ./dist_utils/build_image.py --list
   ./dist_utils/build_image.py -e test
@@ -695,9 +695,9 @@ Examples:
     parser.add_argument("-e", "--env", choices=["test", "dev", "prod"], help="Target build environment")
     parser.add_argument("-v", "--version", help="Semantic version tag for production release (e.g. v2.0.0)")
     parser.add_argument("--from-dev", nargs="?", const="", default=None, help="Promote existing clean dev image to prod without rebuilding (optional: specify commit SHA)")
-    parser.add_argument("--promote-latest", nargs="?", const="", default=None, help="Point yt_serve:latest to release version (standalone or combined with build)")
-    parser.add_argument("--rollback", nargs="?", const="", default=None, help="Roll back yt_serve:latest to previous release (N-1 or specified version)")
-    parser.add_argument("-l", "--list", action="store_true", help="List local yt_serve images and current latest pointer")
+    parser.add_argument("--promote-latest", nargs="?", const="", default=None, help=f"Point {APP_NAME}:latest to release version (standalone or combined with build)")
+    parser.add_argument("--rollback", nargs="?", const="", default=None, help=f"Roll back {APP_NAME}:latest to previous release (N-1 or specified version)")
+    parser.add_argument("-l", "--list", action="store_true", help=f"List local {APP_NAME} images and current latest pointer")
     parser.add_argument("--prune", action="store_true", help="Clean up old dev/test images and dangling build layers")
     parser.add_argument("--keep", type=int, default=3, help="Number of recent dev images to keep when pruning (default: 3)")
 

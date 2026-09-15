@@ -22,9 +22,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Informative project and OCI container metadata
 LABEL org.opencontainers.image.source="https://github.com/Blank1611/yt_playlist_dnlder" \
-      org.opencontainers.image.title="yt_serve" \
-      org.opencontainers.image.description="Containerized YouTube Playlist Downloader" \
-      project="yt_serve"
+      org.opencontainers.image.title="logis-vault" \
+      org.opencontainers.image.description="Universal Media Sanctuary & Logistics Engine" \
+      project="logis-vault"
 
 # ==============================================================================
 # Stage 2: Test Target (Fast Backend Unit, Integration & Recovery Tests)
@@ -41,7 +41,7 @@ CMD ["discover", "tests"]
 # Stage 3: Build Frontend Assets (React + Vite)
 # ==============================================================================
 FROM node:18-alpine AS frontend-builder
-LABEL project="yt_serve"
+LABEL project="logis-vault"
 WORKDIR /app/frontend
 
 COPY frontend/package*.json ./
