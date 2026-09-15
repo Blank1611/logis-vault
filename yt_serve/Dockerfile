@@ -21,9 +21,9 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/backend
 
 # Informative project and OCI container metadata
-LABEL org.opencontainers.image.source="https://github.com/Blank1611/yt_playlist_dnlder" \
+LABEL org.opencontainers.image.source="https://github.com/Blank1611/logis-vault" \
       org.opencontainers.image.title="logis-vault" \
-      org.opencontainers.image.description="Universal Media Sanctuary & Logistics Engine" \
+      org.opencontainers.image.description="Universal Media Sanctuary" \
       project="logis-vault"
 
 # ==============================================================================

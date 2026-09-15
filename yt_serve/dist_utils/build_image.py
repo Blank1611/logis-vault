@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-Distribution and Container Lifecycle Management CLI for yt_serve.
+Distribution and Container Lifecycle Management CLI for logis-vault.
 
 Provides automated multi-stage builds, clean-commit production releases,
 immutable dev-to-prod promotion, decoupled latest tagging, rollback automation,
-remote registry uploads, and disk pruning.
+multi-registry uploads (GHCR, local daemon, private), and disk pruning.
 """
 
 import sys
 import os
 import re
+import json
 import argparse
 import subprocess
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Optional, List, Dict, Tuple, Any, Set
 from collections import defaultdict
 
 
@@ -29,12 +30,14 @@ COLOR_CYAN = "\033[36m"
 COLOR_GREEN = "\033[32m"
 COLOR_YELLOW = "\033[33m"
 COLOR_RED = "\033[31m"
+COLOR_PURPLE = "\033[35m"
 COLOR_BOLD = "\033[1m"
+COLOR_BOLD_RED = "\033[1;31m"
 
 
 class StandardLogFormatter(logging.Formatter):
     """
-    Standard Structured Formatter matching yt_serve backend logging engine:
+    Standard Structured Formatter matching logis-vault backend logging engine:
     [%(asctime)s] [%(levelname)s] [%(name)s] %(message)s
     """
     def __init__(self, use_colors: bool = True):
@@ -104,12 +107,28 @@ def get_git_short_sha() -> str:
     return stdout.strip()
 
 
+_GIT_COMMIT_TS_CACHE: Dict[str, int] = {}
+
+def get_git_commit_timestamp(sha: str) -> int:
+    """Retrieve Unix commit timestamp for a Git commit hash, cached for speed."""
+    if not sha or sha == "unknown":
+        return 0
+    if sha in _GIT_COMMIT_TS_CACHE:
+        return _GIT_COMMIT_TS_CACHE[sha]
+    code, stdout, _ = run_command(["git", "log", "-1", "--format=%ct", sha], capture_output=True)
+    if code == 0 and stdout.strip().isdigit():
+        ts = int(stdout.strip())
+        _GIT_COMMIT_TS_CACHE[sha] = ts
+        return ts
+    _GIT_COMMIT_TS_CACHE[sha] = 0
+    return 0
+
+
 def is_git_code_dirty() -> Tuple[bool, List[str]]:
     """
-    Check if code files (excluding docs/markdown) in yt_serve have uncommitted changes.
+    Check if code files (excluding docs/markdown) in logis-vault have uncommitted changes.
     Returns (is_dirty, list_of_modified_files).
     """
-    # Exclude all markdown files and documentation directories from dirty checks
     code, stdout, _ = run_command(
         ["git", "status", "--porcelain", "--", ".", ":(exclude)**/*.md", ":(exclude)*.md", ":(exclude)DOCS/**"],
         capture_output=True
@@ -129,9 +148,9 @@ def inspect_image_id(tag: str) -> Optional[str]:
 
 
 def get_local_images() -> List[Dict[str, str]]:
-    """List all local images with tags, IDs, sizes, and creation times."""
+    """List all local images associated with APP_NAME with tags, IDs, sizes, and creation times."""
     code, stdout, _ = run_command(
-        ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.CreatedAt}}\t{{.Size}}", APP_NAME],
+        ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.CreatedAt}}\t{{.Size}}"],
         capture_output=True
     )
     if code != 0 or not stdout:
@@ -141,12 +160,14 @@ def get_local_images() -> List[Dict[str, str]]:
     for line in stdout.splitlines():
         parts = line.split("\t")
         if len(parts) == 4:
-            images.append({
-                "tag": parts[0],
-                "id": parts[1],
-                "created": parts[2],
-                "size": parts[3]
-            })
+            repo_tag = parts[0]
+            if APP_NAME in repo_tag:
+                images.append({
+                    "tag": repo_tag,
+                    "id": parts[1],
+                    "created": parts[2],
+                    "size": parts[3]
+                })
     return images
 
 
@@ -156,9 +177,24 @@ def check_remote_manifest_exists(image_tag: str) -> bool:
     return code == 0
 
 
+def get_remote_manifest_digest(image_tag: str) -> Optional[str]:
+    """Retrieve primary manifest digest from remote registry."""
+    code, out, _ = run_command(["docker", "manifest", "inspect", image_tag], capture_output=True)
+    if code != 0 or not out:
+        return None
+    try:
+        data = json.loads(out)
+        if "manifests" in data and len(data["manifests"]) > 0:
+            return data["manifests"][0].get("digest")
+        if "config" in data:
+            return data["config"].get("digest")
+    except Exception:
+        pass
+    return None
+
+
 def parse_semver_key(tag_name: str) -> Tuple[int, int, int]:
     """Extract (major, minor, patch) integer tuple from version tag string for sorting."""
-    # Match strings like yt_serve:v2.0.1 or v2.0.1
     m = re.search(r"v?(\d+)\.(\d+)\.(\d+)", tag_name)
     if m:
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -187,12 +223,20 @@ def pad_colored(text: str, width: int) -> str:
     return text + (" " * padding)
 
 
+def parse_target_registries(reg_arg: Optional[str]) -> List[str]:
+    """Parse comma-separated target registries into normalized list, e.g. ['local', 'ghcr']."""
+    if not reg_arg:
+        return ["local"]
+    tokens = [t.strip().lower() for t in reg_arg.split(",") if t.strip()]
+    return tokens if tokens else ["local"]
+
+
 # ==============================================================================
 # CLI Action Handlers
 # ==============================================================================
 
 def action_list(env_filter: Optional[str] = None):
-    """Display a formatted inspection table of all local images with hierarchical sorting and alias grouping."""
+    """Display a formatted inspection table of all local images with Git-timestamp sorting and registry badges."""
     images = get_local_images()
     if not images:
         logger.info(f"No local '{APP_NAME}' Docker images found.")
@@ -202,144 +246,253 @@ def action_list(env_filter: Optional[str] = None):
     for img in images:
         img["norm_id"] = normalize_image_id(img.get("id"))
 
-    # Map norm_id to list of tags to detect aliases/co-tags
+    # Map norm_id to list of tags
     id_to_tags = defaultdict(list)
     for img in images:
         id_to_tags[img["norm_id"]].append(img["tag"])
 
-    # Determine what latest points to
-    raw_latest_id = inspect_image_id(f"{APP_NAME}:latest")
-    latest_id = normalize_image_id(raw_latest_id)
+    # Determine remote registry badges for each norm_id
+    id_to_registries: Dict[str, Set[str]] = defaultdict(set)
+    for norm_id, tags in id_to_tags.items():
+        for t in tags:
+            if "ghcr.io/" in t:
+                id_to_registries[norm_id].add("ghcr")
+            elif "localhost:" in t or "127.0.0.1:" in t:
+                id_to_registries[norm_id].add("local-reg")
+            elif "/" in t and not t.startswith(f"{APP_NAME}:"):
+                prefix = t.split("/")[0]
+                id_to_registries[norm_id].add(prefix)
 
-    # Classify each image and assign roles (canonical vs alias)
-    classified = []
-    pointed_version = None
-
+    # First pass: map image IDs to production versions (vX.Y.Z)
+    prod_id_to_version = {}
     for img in images:
         tag = img["tag"]
         norm_id = img["norm_id"]
-        siblings = id_to_tags[norm_id]
+        m = re.search(r":(v\d+\.\d+\.\d+)$", tag)
+        if m and not any(tag.startswith(p) for p in ("ghcr.io/", "localhost:", "127.0.0.1:")):
+            prod_id_to_version[norm_id] = m.group(1)
 
-        # Determine Environment and Status
-        if ":test" in tag:
-            env_type = "TEST"
-            is_alias = False
-            alias_of = None
-            status = "Test target (backend-only)"
-        elif re.search(r":v\d+\.\d+\.\d+", tag):
-            env_type = "PROD"
-            is_alias = False
-            alias_of = None
-            if latest_id and norm_id == latest_id:
-                status = f"{COLOR_GREEN}★ Active Latest{COLOR_RESET}"
-                pointed_version = tag
-            else:
-                status = "Release"
-        elif tag.endswith(":latest"):
-            env_type = "PROD"
-            # If another PROD tag shares this ID, latest is its alias
-            prod_siblings = [t for t in siblings if re.search(r":v\d+\.\d+\.\d+", t)]
-            if prod_siblings:
-                is_alias = True
-                alias_of = prod_siblings[0]
-                status = f"{COLOR_CYAN}[floating alias]{COLOR_RESET}"
-                pointed_version = prod_siblings[0]
-            else:
-                is_alias = False
-                alias_of = None
-                status = f"{COLOR_CYAN}[latest pointer]{COLOR_RESET}"
-        elif "-dirty" in tag:
-            env_type = "DEV-DIRTY"
-            is_alias = False
-            alias_of = None
-            status = f"{COLOR_YELLOW}Dirty build (uncommitted){COLOR_RESET}"
-        elif tag.endswith(":dev"):
-            # Check siblings for commit tag
-            commit_siblings = [t for t in siblings if t != tag and ":dev-" in t]
-            if commit_siblings:
-                canonical = commit_siblings[0]
-                is_alias = True
-                alias_of = canonical
-                env_type = "DEV-DIRTY" if "-dirty" in canonical else "DEV"
-                status = f"{COLOR_CYAN}[floating alias]{COLOR_RESET}"
-            else:
-                is_alias = False
-                alias_of = None
-                env_type = "DEV"
-                status = "Dev build"
+    # Determine what local latest points to
+    raw_latest_id = inspect_image_id(f"{APP_NAME}:latest")
+    latest_id = normalize_image_id(raw_latest_id)
+    pointed_version = prod_id_to_version.get(latest_id) if latest_id else None
+
+    # Determine what local dev points to
+    raw_dev_id = inspect_image_id(f"{APP_NAME}:dev")
+    dev_id = normalize_image_id(raw_dev_id)
+    pointed_dev_tag = None
+    if dev_id:
+        dev_tags = [t for t in id_to_tags[dev_id] if ":dev-" in t and not any(t.startswith(p) for p in ("ghcr.io/", "localhost:", "127.0.0.1:"))]
+        if dev_tags:
+            pointed_dev_tag = dev_tags[0]
+
+    # Build PROD Rows
+    prod_rows = []
+    latest_img = next((img for img in images if img["tag"] == f"{APP_NAME}:latest"), None)
+    if latest_img:
+        prod_rows.append({
+            "env": "PROD",
+            "tag": f"{APP_NAME}:latest",
+            "norm_id": latest_img["norm_id"],
+            "size": latest_img["size"],
+            "status": "[floating alias]",
+            "is_indented": False,
+            "color": COLOR_CYAN
+        })
+        if pointed_version:
+            target_img = next((img for img in images if img["tag"] == f"{APP_NAME}:{pointed_version}"), None)
+            if target_img:
+                prod_rows.append({
+                    "env": "PROD",
+                    "tag": target_img["tag"],
+                    "norm_id": target_img["norm_id"],
+                    "size": target_img["size"],
+                    "status": "★ Active Latest",
+                    "is_indented": True,
+                    "color": COLOR_BOLD_RED
+                })
+
+    other_prod_imgs = [
+        img for img in images
+        if re.search(r":v\d+\.\d+\.\d+$", img["tag"])
+        and not any(img["tag"].startswith(p) for p in ("ghcr.io/", "localhost:", "127.0.0.1:"))
+        and (not pointed_version or img["tag"] != f"{APP_NAME}:{pointed_version}")
+    ]
+    other_prod_imgs.sort(key=lambda x: parse_semver_key(x["tag"]), reverse=True)
+    for op in other_prod_imgs:
+        has_ghcr = "ghcr" in id_to_registries.get(op["norm_id"], set())
+        if not latest_img and latest_id and op["norm_id"] == latest_id:
+            status = "★ Active Latest"
+            color = COLOR_BOLD_RED
         else:
-            # dev-<sha> (clean)
-            env_type = "DEV"
-            is_alias = False
-            alias_of = None
-            status = f"{COLOR_GREEN}Clean (promotable){COLOR_RESET}"
-
-        classified.append({
-            **img,
-            "env": env_type,
-            "is_alias": is_alias,
-            "alias_of": alias_of,
-            "status": status
+            status = "Release"
+            color = COLOR_PURPLE if has_ghcr else ""
+        prod_rows.append({
+            "env": "PROD",
+            "tag": op["tag"],
+            "norm_id": op["norm_id"],
+            "size": op["size"],
+            "status": status,
+            "is_indented": False,
+            "color": color
         })
 
-    # Filter if requested
-    if env_filter:
-        ef = env_filter.upper()
-        if ef == "DEV":
-            classified = [img for img in classified if img["env"] in ("DEV", "DEV-DIRTY")]
+    # Build DEV Rows
+    dev_rows = []
+    dev_alias_img = next((img for img in images if img["tag"] == f"{APP_NAME}:dev"), None)
+    if dev_alias_img:
+        dev_rows.append({
+            "env": "DEV",
+            "tag": f"{APP_NAME}:dev",
+            "norm_id": dev_alias_img["norm_id"],
+            "size": dev_alias_img["size"],
+            "status": "[floating alias]",
+            "is_indented": False,
+            "color": COLOR_CYAN
+        })
+        if pointed_dev_tag:
+            pdev_img = next((img for img in images if img["tag"] == pointed_dev_tag), None)
+            if pdev_img:
+                is_rel = pdev_img["norm_id"] in prod_id_to_version
+                is_d = "-dirty" in pointed_dev_tag
+                if is_rel:
+                    st = f"Released (➔ {prod_id_to_version[pdev_img['norm_id']]})"
+                    co = COLOR_PURPLE
+                elif is_d:
+                    st = "Dirty build (uncommitted)"
+                    co = COLOR_YELLOW
+                else:
+                    st = "Clean (promotable)"
+                    co = COLOR_GREEN
+
+                dev_rows.append({
+                    "env": "DEV-DIRTY" if is_d else "DEV",
+                    "tag": pointed_dev_tag,
+                    "norm_id": pdev_img["norm_id"],
+                    "size": pdev_img["size"],
+                    "status": st,
+                    "is_indented": True,
+                    "color": co
+                })
+
+    other_dev_imgs = [
+        img for img in images
+        if ":dev-" in img["tag"]
+        and not any(img["tag"].startswith(p) for p in ("ghcr.io/", "localhost:", "127.0.0.1:"))
+        and (not pointed_dev_tag or img["tag"] != pointed_dev_tag)
+    ]
+
+    def dev_sort_key(item):
+        is_dirty = 1 if "-dirty" in item["tag"] else 0
+        m = re.search(r":dev-([0-9a-fA-F]{7,40})", item["tag"])
+        ts = get_git_commit_timestamp(m.group(1)) if m else 0
+        return (is_dirty, -ts, item.get("created", ""))
+
+    other_dev_imgs.sort(key=dev_sort_key)
+
+    for od in other_dev_imgs:
+        is_rel = od["norm_id"] in prod_id_to_version
+        is_d = "-dirty" in od["tag"]
+        if is_rel:
+            st = f"Released (➔ {prod_id_to_version[od['norm_id']]})"
+            co = COLOR_PURPLE
+        elif is_d:
+            st = "Dirty build (uncommitted)"
+            co = COLOR_YELLOW
         else:
-            classified = [img for img in classified if img["env"] == ef]
+            st = "Clean (promotable)"
+            co = COLOR_GREEN
 
-    # Sorting Hierarchy:
-    # 1. PROD
-    # 2. DEV (Clean)
-    # 3. DEV-DIRTY
-    # 4. TEST
-    env_priority = {
-        "PROD": 1,
-        "DEV": 2,
-        "DEV-DIRTY": 3,
-        "TEST": 4
-    }
+        dev_rows.append({
+            "env": "DEV-DIRTY" if is_d else "DEV",
+            "tag": od["tag"],
+            "norm_id": od["norm_id"],
+            "size": od["size"],
+            "status": st,
+            "is_indented": False,
+            "color": co
+        })
 
-    def sort_key(item):
-        env_rank = env_priority.get(item["env"], 99)
-        # Group siblings with same norm_id together
-        # For PROD: sort semver descending
-        semver = (0, 0, 0)
-        if item["env"] == "PROD":
-            target_tag = item["alias_of"] or item["tag"]
-            semver = parse_semver_key(target_tag)
-        # Canonical first (0), alias second (1)
-        alias_rank = 1 if item["is_alias"] else 0
-        return (env_rank, [-x for x in semver], item["norm_id"], alias_rank, item["tag"])
+    # Build TEST Rows
+    test_rows = []
+    test_imgs = [
+        img for img in images
+        if ":test" in img["tag"]
+        and not any(img["tag"].startswith(p) for p in ("ghcr.io/", "localhost:", "127.0.0.1:"))
+    ]
+    for ti in test_imgs:
+        test_rows.append({
+            "env": "TEST",
+            "tag": ti["tag"],
+            "norm_id": ti["norm_id"],
+            "size": ti["size"],
+            "status": "Test target (backend-only)",
+            "is_indented": False,
+            "color": ""
+        })
 
-    classified.sort(key=sort_key)
+    # Filter by environment if requested
+    if not env_filter:
+        rows_to_display = prod_rows + dev_rows + test_rows
+    else:
+        ef = env_filter.upper()
+        if ef == "PROD":
+            rows_to_display = prod_rows
+        elif ef == "DEV":
+            rows_to_display = [r for r in dev_rows if r["env"] in ("DEV", "DEV-DIRTY")]
+        elif ef == "DEV-DIRTY":
+            rows_to_display = [r for r in dev_rows if r["env"] == "DEV-DIRTY"]
+        elif ef == "TEST":
+            rows_to_display = test_rows
+        else:
+            rows_to_display = []
 
-    print("\n" + "=" * 102)
+    print("\n" + "=" * 118)
     print(f"{COLOR_BOLD}LOCAL DOCKER IMAGES ({APP_NAME}){COLOR_RESET}")
-    print("=" * 102)
-    print(f"{'ENV':<11} {'TAG':<35} {'IMAGE ID':<15} {'SIZE':<11} {'STATUS':<30}")
-    print("-" * 102)
+    print("=" * 118)
+    print(f"{'ENV':<11} {'TAG':<35} {'IMAGE ID':<15} {'SIZE':<11} {'STATUS':<28} {'REGISTRIES':<14}")
+    print("-" * 118)
 
-    for img in classified:
-        tag_display = f"↳ {img['tag']}" if img["is_alias"] else img["tag"]
-        env_col = pad_colored(img["env"], 11)
-        tag_col = pad_colored(tag_display, 35)
-        id_col = pad_colored(img["norm_id"], 15)
-        size_col = pad_colored(img["size"], 11)
-        status_col = pad_colored(img["status"], 30)
+    for row in rows_to_display:
+        tag_display = f"↳ {row['tag']}" if row["is_indented"] else row["tag"]
+        status_text = row["status"]
 
-        print(f"{env_col} {tag_col} {id_col} {size_col} {status_col}")
+        regs = sorted(list(id_to_registries.get(row["norm_id"], set())))
+        reg_display = ", ".join(regs) if regs else "—"
 
-    print("-" * 102)
+        row_color = row.get("color", "")
+        if row_color:
+            env_val = f"{row_color}{row['env']}{COLOR_RESET}"
+            tag_val = f"{row_color}{tag_display}{COLOR_RESET}"
+            id_val = f"{row_color}{row['norm_id']}{COLOR_RESET}"
+            size_val = f"{row_color}{row['size']}{COLOR_RESET}"
+            status_val = f"{row_color}{status_text}{COLOR_RESET}"
+            reg_val = f"{row_color}{reg_display}{COLOR_RESET}"
+        else:
+            env_val = row["env"]
+            tag_val = tag_display
+            id_val = row["norm_id"]
+            size_val = row["size"]
+            status_val = status_text
+            reg_val = reg_display
+
+        env_col = pad_colored(env_val, 11)
+        tag_col = pad_colored(tag_val, 35)
+        id_col = pad_colored(id_val, 15)
+        size_col = pad_colored(size_val, 11)
+        status_col = pad_colored(status_val, 28)
+        reg_col = pad_colored(reg_val, 14)
+
+        print(f"{env_col} {tag_col} {id_col} {size_col} {status_col} {reg_col}")
+
+    print("-" * 118)
     if latest_id and pointed_version:
-        print(f"Production 'latest' Pointer: {COLOR_BOLD}{APP_NAME}:latest ➔ {pointed_version}{COLOR_RESET} ({latest_id})")
+        print(f"Production 'latest' Pointer: {COLOR_BOLD}{APP_NAME}:latest ➔ {APP_NAME}:{pointed_version}{COLOR_RESET} ({latest_id})")
     elif latest_id:
         print(f"Production 'latest' Pointer: {COLOR_BOLD}{APP_NAME}:latest ➔ ({latest_id}){COLOR_RESET}")
     else:
         print("Production 'latest' Pointer: [Unassigned]")
-    print("=" * 102 + "\n")
+    print("=" * 118 + "\n")
 
 
 
@@ -374,7 +527,6 @@ def action_build_dev(fresh_build: bool, dry_run: bool):
     else:
         logger.info(f"Clean working tree at commit '{sha}'. Tagging as '{dev_tag}'.")
 
-    # Check if this exact clean dev image is already built
     if not is_dirty and not fresh_build:
         existing_id = inspect_image_id(dev_tag)
         if existing_id:
@@ -398,76 +550,135 @@ def action_build_dev(fresh_build: bool, dry_run: bool):
     log_success(f"Built '{dev_tag}' and updated '{APP_NAME}:dev'.")
 
 
+def resolve_source_dev_image(from_dev_arg: Optional[str]) -> Optional[Tuple[str, str]]:
+    """
+    Resolve dev image source tag and ID based on -d argument.
+    Returns (dev_source_tag, dev_image_id) or None.
+    """
+    if from_dev_arg is None:
+        return None
+
+    if from_dev_arg and from_dev_arg != "__LATEST__":
+        # Explicit SHA or tag provided
+        dev_source_tag = from_dev_arg if ":" in from_dev_arg else f"{APP_NAME}:dev-{from_dev_arg}"
+        dev_id = inspect_image_id(dev_source_tag)
+        if not dev_id:
+            logger.error(f"Specified dev image '{dev_source_tag}' does not exist locally.")
+            sys.exit(1)
+        return dev_source_tag, dev_id
+
+    # Default to current HEAD commit
+    sha = get_git_short_sha()
+    head_tag = f"{APP_NAME}:dev-{sha}"
+    head_id = inspect_image_id(head_tag)
+    if head_id:
+        return head_tag, head_id
+
+    # Fallback: scan local images for newest clean dev image
+    local_images = get_local_images()
+    clean_devs = []
+    for img in local_images:
+        t = img["tag"]
+        if ":dev-" in t and "-dirty" not in t and not any(t.startswith(p) for p in ("ghcr.io/", "localhost:")):
+            clean_devs.append(img)
+
+    if clean_devs:
+        # Sort by git commit timestamp descending
+        def dev_sort(item):
+            m = re.search(r":dev-([0-9a-fA-F]{7,40})", item["tag"])
+            ts = get_git_commit_timestamp(m.group(1)) if m else 0
+            return (-ts, item.get("created", ""))
+
+        clean_devs.sort(key=dev_sort)
+        best = clean_devs[0]
+        logger.info(f"Dev image for current HEAD '{sha}' not found; using newest clean dev build '{best['tag']}'.")
+        return best["tag"], inspect_image_id(best["tag"]) or ""
+
+    logger.error("No clean dev images found locally to promote.")
+    logger.error(f"Please build one first via './dist_utils/build_image.py -e dev'.")
+    sys.exit(1)
+
+
 def action_build_prod(
     version: str,
     from_dev: Optional[str] = None,
-    use_from_dev: bool = False,
     promote_latest: bool = False,
-    push_ghcr: bool = False,
-    push_local: Optional[str] = None,
-    push_all: bool = False,
+    do_push: bool = False,
+    target_registries: List[str] = ["local"],
     fresh_build: bool = False,
     dry_run: bool = False
 ):
-    """Build or promote an immutable production release."""
-    # Validate semantic version format (e.g., v2.0.0)
+    """Build or promote an immutable production release, with idempotent safety checks."""
     if not re.match(r"^v\d+\.\d+\.\d+$", version):
-        logger.error(f"Invalid production version format '{version}'. Must follow 'vX.Y.Z' (e.g. v2.0.0).")
+        logger.error(f"Invalid production version format '{version}'. Must follow 'vX.Y.Z' (e.g. v1.0.0).")
         sys.exit(1)
 
     prod_tag = f"{APP_NAME}:{version}"
-
-    # RULE: Strict permanent immutability. If release exists, it can never be rebuilt.
     existing_id = inspect_image_id(prod_tag)
-    if existing_id and not dry_run:
-        logger.error(f"Production release '{prod_tag}' is already finalized ({existing_id[:12]}) and permanently immutable.")
-        logger.error("Overwriting release tags is prohibited to ensure deployment reproducibility.")
-        logger.error("Please increment the patch/micro version (e.g. v2.0.1) for new changes.")
-        sys.exit(1)
+    use_dev = from_dev is not None
 
-    # Check remote registry collision
-    ghcr_target = f"ghcr.io/{GHCR_OWNER}/{prod_tag}"
-    if (push_ghcr or push_all) and not dry_run:
-        if check_remote_manifest_exists(ghcr_target):
-            logger.error(f"Release tag '{ghcr_target}' already exists in GitHub Container Registry.")
-            logger.error("Remote release overwriting is blocked. Please bump version number.")
+    if use_dev:
+        dev_res = resolve_source_dev_image(from_dev)
+        if not dev_res:
             sys.exit(1)
+        dev_source_tag, dev_id = dev_res
 
-    # RULE: Production releases strictly require a clean Git working tree
-    is_dirty, modified_files = is_git_code_dirty()
-    if is_dirty and not dry_run:
-        logger.error(f"Cannot release production version '{version}' with uncommitted code modifications:")
-        for f in modified_files[:5]:
-            logger.error(f"  {f}")
-        if len(modified_files) > 5:
-            logger.error(f"  ... and {len(modified_files) - 5} more files")
-        logger.error("Please commit your changes to Git before creating a release, or test using '-e dev'.")
-        sys.exit(1)
+        # Safety Check: Did this dev image already get tagged with a DIFFERENT prod version?
+        local_imgs = get_local_images()
+        for img in local_imgs:
+            if normalize_image_id(img.get("id")) == normalize_image_id(dev_id):
+                t = img["tag"]
+                m = re.search(r":v\d+\.\d+\.\d+", t)
+                if m and not any(t.startswith(p) for p in ("ghcr.io/", "localhost:")):
+                    existing_ver = t.split(":")[-1]
+                    if existing_ver != version:
+                        logger.error(f"Target dev image '{dev_source_tag}' ({dev_id[:12]}) was already finalized as '{APP_NAME}:{existing_ver}'.")
+                        logger.error(f"Re-releasing the same artifact under divergent version '{version}' is prohibited.")
+                        sys.exit(1)
 
-    # Mode 1: Promote clean dev image (Immutable Artifact Promotion)
-    if use_from_dev:
-        if from_dev:
-            # Explicit tag/SHA provided
-            dev_source_tag = from_dev if ":" in from_dev else f"{APP_NAME}:dev-{from_dev}"
+        # Idempotency / Conflict Check on target prod_tag
+        if existing_id:
+            if normalize_image_id(existing_id) == normalize_image_id(dev_id):
+                logger.info(f"Production release '{prod_tag}' is already finalized on this image ({dev_id[:12]}). Skipping re-tag and proceeding...")
+            else:
+                logger.error(f"Production release '{prod_tag}' already exists pointing to a DIFFERENT image ({existing_id[:12]}).")
+                logger.error("Overwriting finalized releases is prohibited to ensure deployment reproducibility.")
+                logger.error("Please increment the patch/minor version (e.g. v1.0.1) for new changes.")
+                sys.exit(1)
         else:
-            # Default to current HEAD clean dev build
-            sha = get_git_short_sha()
-            dev_source_tag = f"{APP_NAME}:dev-{sha}"
+            # Check clean git tree
+            is_dirty, modified_files = is_git_code_dirty()
+            if is_dirty and not dry_run:
+                logger.error(f"Cannot release production version '{version}' with uncommitted code modifications:")
+                for f in modified_files[:5]:
+                    logger.error(f"  {f}")
+                if len(modified_files) > 5:
+                    logger.error(f"  ... and {len(modified_files) - 5} more files")
+                logger.error("Please commit your changes to Git before creating a release, or test using '-e dev'.")
+                sys.exit(1)
 
-        dev_id = inspect_image_id(dev_source_tag)
-        if not dev_id and not dry_run:
-            logger.error(f"Source dev image '{dev_source_tag}' does not exist locally.")
-            logger.error("Please build it first via './dist_utils/build_image.py -e dev' or build prod from source.")
-            sys.exit(1)
-
-        logger.info(f"Promoting clean dev image '{dev_source_tag}' ➔ '{prod_tag}'...")
-        code, _, err = run_command(["docker", "tag", dev_source_tag, prod_tag], dry_run=dry_run)
-        if code != 0:
-            logger.error(f"Failed to tag image: {err}")
-            sys.exit(1)
-        log_success(f"Promoted '{dev_source_tag}' ➔ '{prod_tag}' in 0.01s (Identical bits verified).")
+            logger.info(f"Promoting clean dev image '{dev_source_tag}' ➔ '{prod_tag}'...")
+            code, _, err = run_command(["docker", "tag", dev_source_tag, prod_tag], dry_run=dry_run)
+            if code != 0:
+                logger.error(f"Failed to tag image: {err}")
+                sys.exit(1)
+            log_success(f"Promoted '{dev_source_tag}' ➔ '{prod_tag}' in 0.01s (Identical bits verified).")
     else:
-        # Mode 2: Build fresh from source
+        # Build fresh from source
+        if existing_id and not dry_run:
+            logger.error(f"Production release '{prod_tag}' is already finalized ({existing_id[:12]}) and permanently immutable.")
+            logger.error("Overwriting release tags is prohibited to ensure deployment reproducibility.")
+            logger.error("Please increment the patch/micro version (e.g. v1.0.1) for new changes.")
+            sys.exit(1)
+
+        is_dirty, modified_files = is_git_code_dirty()
+        if is_dirty and not dry_run:
+            logger.error(f"Cannot release production version '{version}' with uncommitted code modifications:")
+            for f in modified_files[:5]:
+                logger.error(f"  {f}")
+            logger.error("Please commit your changes to Git before creating a release, or test using '-e dev'.")
+            sys.exit(1)
+
         logger.info(f"Compiling production release image '{prod_tag}' from current commit...")
         cmd = ["docker", "build", "--target", "runner", "-t", prod_tag]
         if fresh_build:
@@ -480,77 +691,148 @@ def action_build_prod(
             sys.exit(1)
         log_success(f"Built production release '{prod_tag}'.")
 
-    # Handle optional latest promotion
+    # Stage 2: Promote Latest (if requested)
     if promote_latest:
-        action_promote_latest(version, push_ghcr=push_ghcr, push_local=push_local, push_all=push_all, dry_run=dry_run)
+        action_promote_latest(version=version, target_registries=target_registries, dry_run=dry_run)
 
-    # Handle registry pushes
-    if push_ghcr or push_all:
-        logger.info(f"Publishing release to GHCR ('{ghcr_target}')...")
-        run_command(["docker", "tag", prod_tag, ghcr_target], dry_run=dry_run)
-        code, _, err = run_command(["docker", "push", ghcr_target], dry_run=dry_run)
-        if code == 0:
-            log_success(f"Published '{ghcr_target}'.")
-        else:
-            logger.error(f"Failed to push to GHCR: {err}")
-
-    if push_local or push_all:
-        local_host = push_local if (push_local and push_local != "all") else "localhost:5000"
-        local_target = f"{local_host}/{prod_tag}"
-        logger.info(f"Publishing release to local registry ('{local_target}')...")
-        run_command(["docker", "tag", prod_tag, local_target], dry_run=dry_run)
-        code, _, err = run_command(["docker", "push", local_target], dry_run=dry_run)
-        if code == 0:
-            log_success(f"Published '{local_target}'.")
-        else:
-            logger.error(f"Failed to push to local registry: {err}")
+    # Stage 3: Push to Registries (if requested)
+    if do_push:
+        action_push_release(
+            version=version,
+            target_registries=target_registries,
+            include_latest=promote_latest,
+            dry_run=dry_run
+        )
 
 
 def action_promote_latest(
     version: str,
-    push_ghcr: bool = False,
-    push_local: Optional[str] = None,
-    push_all: bool = False,
+    target_registries: List[str],
     dry_run: bool = False
 ):
-    """Promote an existing local release version to latest."""
+    """Promote an existing local release version to latest within the specified target registries."""
     prod_tag = f"{APP_NAME}:{version}" if not version.startswith(f"{APP_NAME}:") else version
     img_id = inspect_image_id(prod_tag)
     if not img_id and not dry_run:
         logger.error(f"Cannot promote '{prod_tag}': image does not exist locally.")
+        logger.error(f"Please create it first via '-e prod -v {version} -d'.")
         sys.exit(1)
 
-    logger.info(f"Promoting '{prod_tag}' ➔ '{APP_NAME}:latest'...")
-    run_command(["docker", "tag", prod_tag, f"{APP_NAME}:latest"], dry_run=dry_run)
-    log_success(f"Pointed '{APP_NAME}:latest' ➔ '{prod_tag}'.")
+    norm_target_id = normalize_image_id(img_id)
 
-    if push_ghcr or push_all:
-        ghcr_latest = f"ghcr.io/{GHCR_OWNER}/{APP_NAME}:latest"
-        logger.info(f"Updating remote registry pointer ('{ghcr_latest}')...")
-        run_command(["docker", "tag", prod_tag, ghcr_latest], dry_run=dry_run)
-        code, _, err = run_command(["docker", "push", ghcr_latest], dry_run=dry_run)
-        if code == 0:
-            log_success(f"Updated '{ghcr_latest}'.")
+    # 1. Local Daemon Promotion
+    if "local" in target_registries:
+        curr_latest_id = normalize_image_id(inspect_image_id(f"{APP_NAME}:latest"))
+        if curr_latest_id and curr_latest_id == norm_target_id:
+            logger.info(f"Alias '{APP_NAME}:latest' already points to '{prod_tag}' ({norm_target_id}). No actions required.")
         else:
-            logger.error(f"Failed to push latest tag to GHCR: {err}")
+            logger.info(f"Promoting '{prod_tag}' ➔ '{APP_NAME}:latest' (local daemon)...")
+            run_command(["docker", "tag", prod_tag, f"{APP_NAME}:latest"], dry_run=dry_run)
+            log_success(f"Pointed '{APP_NAME}:latest' ➔ '{prod_tag}'.")
 
-    if push_local or push_all:
-        local_host = push_local if (push_local and push_local != "all") else "localhost:5000"
-        local_latest = f"{local_host}/{APP_NAME}:latest"
-        logger.info(f"Updating local registry pointer ('{local_latest}')...")
-        run_command(["docker", "tag", prod_tag, local_latest], dry_run=dry_run)
-        code, _, err = run_command(["docker", "push", local_latest], dry_run=dry_run)
-        if code == 0:
-            log_success(f"Updated '{local_latest}'.")
+    # 2. GHCR Remote Promotion
+    if "ghcr" in target_registries:
+        ghcr_latest = f"ghcr.io/{GHCR_OWNER.lower()}/{APP_NAME}:latest"
+        ghcr_version = f"ghcr.io/{GHCR_OWNER.lower()}/{APP_NAME}:{version}"
+        v_digest = get_remote_manifest_digest(ghcr_version)
+        l_digest = get_remote_manifest_digest(ghcr_latest)
+        if v_digest and l_digest and v_digest == l_digest:
+            logger.info(f"Remote registry pointer '{ghcr_latest}' already points to '{ghcr_version}' ({v_digest[:19]}...). No actions required.")
         else:
-            logger.error(f"Failed to push latest tag to local registry: {err}")
+            logger.info(f"Promoting '{prod_tag}' ➔ '{ghcr_latest}' (GHCR)...")
+            run_command(["docker", "tag", prod_tag, ghcr_latest], dry_run=dry_run)
+            code, _, err = run_command(["docker", "push", ghcr_latest], dry_run=dry_run)
+            if code == 0:
+                log_success(f"Updated remote registry pointer '{ghcr_latest}'.")
+            else:
+                logger.error(f"Failed to push latest tag to GHCR: {err}")
+
+    # 3. Custom / Private Registries
+    for reg in target_registries:
+        if reg not in ("local", "ghcr"):
+            reg_latest = f"{reg}/{APP_NAME}:latest"
+            logger.info(f"Promoting '{prod_tag}' ➔ '{reg_latest}'...")
+            run_command(["docker", "tag", prod_tag, reg_latest], dry_run=dry_run)
+            code, _, err = run_command(["docker", "push", reg_latest], dry_run=dry_run)
+            if code == 0:
+                log_success(f"Updated '{reg_latest}'.")
+            else:
+                logger.error(f"Failed to push latest tag to {reg}: {err}")
+
+
+def action_push_release(
+    version: str,
+    target_registries: List[str],
+    include_latest: bool = False,
+    dry_run: bool = False
+):
+    """Push release version tag (and optionally latest) to target registries."""
+    prod_tag = f"{APP_NAME}:{version}" if not version.startswith(f"{APP_NAME}:") else version
+    img_id = inspect_image_id(prod_tag)
+    if not img_id and not dry_run:
+        logger.error(f"Cannot push '{prod_tag}': image does not exist locally.")
+        logger.error(f"Please build or promote it first via '-e prod -v {version}'.")
+        sys.exit(1)
+
+    remote_registries = [r for r in target_registries if r != "local"]
+    if not remote_registries:
+        logger.info("Target registry is 'local' (local Docker daemon). No remote push actions required.")
+        return
+
+    for reg in remote_registries:
+        if reg == "ghcr":
+            ghcr_version = f"ghcr.io/{GHCR_OWNER.lower()}/{APP_NAME}:{version}"
+            if check_remote_manifest_exists(ghcr_version):
+                logger.info(f"Remote release '{ghcr_version}' already exists on GHCR. Safe skip.")
+            else:
+                logger.info(f"Publishing release to GHCR ('{ghcr_version}')...")
+                run_command(["docker", "tag", prod_tag, ghcr_version], dry_run=dry_run)
+                code, _, err = run_command(["docker", "push", ghcr_version], dry_run=dry_run)
+                if code == 0:
+                    log_success(f"Published '{ghcr_version}'.")
+                else:
+                    logger.error(f"Failed to push release to GHCR: {err}")
+
+            if include_latest:
+                ghcr_latest = f"ghcr.io/{GHCR_OWNER.lower()}/{APP_NAME}:latest"
+                v_digest = get_remote_manifest_digest(ghcr_version)
+                l_digest = get_remote_manifest_digest(ghcr_latest)
+                if v_digest and l_digest and v_digest == l_digest:
+                    logger.info(f"Remote registry pointer '{ghcr_latest}' already points to '{ghcr_version}' ({v_digest[:19]}...). No actions required.")
+                else:
+                    logger.info(f"Updating remote registry pointer ('{ghcr_latest}')...")
+                    run_command(["docker", "tag", prod_tag, ghcr_latest], dry_run=dry_run)
+                    code_l, _, err_l = run_command(["docker", "push", ghcr_latest], dry_run=dry_run)
+                    if code_l == 0:
+                        log_success(f"Updated '{ghcr_latest}'.")
+                    else:
+                        logger.error(f"Failed to push latest tag to GHCR: {err_l}")
+        else:
+            custom_target = f"{reg}/{APP_NAME}:{version}"
+            if check_remote_manifest_exists(custom_target):
+                logger.info(f"Remote release '{custom_target}' already exists on {reg}. Safe skip.")
+            else:
+                logger.info(f"Publishing release to {reg} ('{custom_target}')...")
+                run_command(["docker", "tag", prod_tag, custom_target], dry_run=dry_run)
+                code, _, err = run_command(["docker", "push", custom_target], dry_run=dry_run)
+                if code == 0:
+                    log_success(f"Published '{custom_target}'.")
+                else:
+                    logger.error(f"Failed to push to {reg}: {err}")
+
+            if include_latest:
+                custom_latest = f"{reg}/{APP_NAME}:latest"
+                run_command(["docker", "tag", prod_tag, custom_latest], dry_run=dry_run)
+                code_l, _, err_l = run_command(["docker", "push", custom_latest], dry_run=dry_run)
+                if code_l == 0:
+                    log_success(f"Updated '{custom_latest}'.")
+                else:
+                    logger.error(f"Failed to push latest tag to {reg}: {err_l}")
 
 
 def action_rollback(
     target_version: Optional[str] = None,
-    push_ghcr: bool = False,
-    push_local: Optional[str] = None,
-    push_all: bool = False,
+    target_registries: List[str] = ["local"],
     dry_run: bool = False
 ):
     """Roll back latest to a previous stable release (N-1 or specified version)."""
@@ -560,7 +842,7 @@ def action_rollback(
 
     for img in images:
         tag = img["tag"]
-        if re.search(r":v\d+\.\d+\.\d+$", tag):
+        if re.search(r":v\d+\.\d+\.\d+$", tag) and not any(tag.startswith(p) for p in ("ghcr.io/", "localhost:")):
             prod_releases.append(tag)
 
     if not prod_releases:
@@ -593,11 +875,10 @@ def action_rollback(
                 logger.error(f"No earlier release found before '{current_latest_tag}'. Available: {', '.join(prod_releases)}")
                 sys.exit(1)
         else:
-            # Fallback to highest available release
             selected_version = prod_releases[0]
 
     logger.info(f"Executing rollback: pointing '{APP_NAME}:latest' ➔ '{selected_version}'...")
-    action_promote_latest(selected_version, push_ghcr=push_ghcr, push_local=push_local, push_all=push_all, dry_run=dry_run)
+    action_promote_latest(selected_version, target_registries=target_registries, dry_run=dry_run)
     log_success(f"Rollback complete: '{APP_NAME}:latest' now points to '{selected_version}'.")
 
 
@@ -632,7 +913,6 @@ def action_prune(keep_n: int = 3, dry_run: bool = False):
     preserved_devs = canonical_devs[:keep_n]
     prune_dev_candidates = canonical_devs[keep_n:]
 
-    # Test images: prune if older/stale (always prune test target when running prune)
     prune_candidates = prune_dev_candidates + test_images
 
     print("\n" + "=" * 88)
@@ -665,7 +945,6 @@ def action_prune(keep_n: int = 3, dry_run: bool = False):
                 run_command(["docker", "rmi", tag], dry_run=dry_run)
             log_success(f"Removed {len(prune_candidates)} stale {APP_NAME} image(s).")
 
-    # Clean up project-specific untagged dangling build layers (<none>:<none>) using label filter
     logger.info(f"Cleaning up untagged dangling build layers (docker image prune -f --filter label=project={APP_NAME})...")
     run_command(["docker", "image", "prune", "-f", "--filter", f"label=project={APP_NAME}"], dry_run=dry_run)
     log_success("Prune operation finished.")
@@ -681,40 +960,73 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
 Examples:
-  ./dist_utils/build_image.py --list
+  ./dist_utils/build_image.py -l
   ./dist_utils/build_image.py -e test
   ./dist_utils/build_image.py -e dev
-  ./dist_utils/build_image.py -e prod -v v2.0.0 --from-dev
-  ./dist_utils/build_image.py --promote-latest v2.0.0
-  ./dist_utils/build_image.py --rollback
-  ./dist_utils/build_image.py --prune --keep 3
+  ./dist_utils/build_image.py -e prod -v v1.0.0 -d
+  ./dist_utils/build_image.py -e prod -v v1.0.0 -d 1e8ce8c
+  ./dist_utils/build_image.py -v v1.0.0 -p
+  ./dist_utils/build_image.py -v v1.0.0 -p -R ghcr
+  ./dist_utils/build_image.py -v v1.0.0 -P -R ghcr
+  ./dist_utils/build_image.py -v v1.0.0 -p -P -R ghcr
+  ./dist_utils/build_image.py -e prod -v v1.0.0 -d -p -P -R ghcr
+  ./dist_utils/build_image.py -r
+  ./dist_utils/build_image.py --prune -k 3
         """
     )
 
-    # Action flags
+    # Core Action Flags
     parser.add_argument("-e", "--env", choices=["test", "dev", "prod"], help="Target build environment")
-    parser.add_argument("-v", "--version", help="Semantic version tag for production release (e.g. v2.0.0)")
-    parser.add_argument("--from-dev", nargs="?", const="", default=None, help="Promote existing clean dev image to prod without rebuilding (optional: specify commit SHA)")
-    parser.add_argument("--promote-latest", nargs="?", const="", default=None, help=f"Point {APP_NAME}:latest to release version (standalone or combined with build)")
-    parser.add_argument("--rollback", nargs="?", const="", default=None, help=f"Roll back {APP_NAME}:latest to previous release (N-1 or specified version)")
-    parser.add_argument("-l", "--list", action="store_true", help=f"List local {APP_NAME} images and current latest pointer")
+    parser.add_argument("-v", "--version", help="Semantic version tag for production release (e.g. v1.0.0)")
+    parser.add_argument("-d", "--from-dev", nargs="?", const="__LATEST__", default=None,
+                        help="Promote clean dev build to prod (optional: specify source commit SHA/tag; defaults to current HEAD)")
+    parser.add_argument("-p", "--promote-latest", action="store_true", default=False,
+                        help="Point latest pointer to target release version")
+    parser.add_argument("-P", "--push", action="store_true", default=False,
+                        help="Push target release version (and latest if -p) to target registries")
+    parser.add_argument("-R", "--target-registry", default="local",
+                        help="Target registry scope (comma-separated: local, ghcr; default: local)")
+    parser.add_argument("-l", "--list", action="store_true", help=f"List local {APP_NAME} images and registry badges")
+    parser.add_argument("-r", "--rollback", nargs="?", const="", default=None,
+                        help=f"Roll back {APP_NAME}:latest to previous release (N-1 or specified version)")
     parser.add_argument("--prune", action="store_true", help="Clean up old dev/test images and dangling build layers")
-    parser.add_argument("--keep", type=int, default=3, help="Number of recent dev images to keep when pruning (default: 3)")
+    parser.add_argument("-k", "--keep", type=int, default=3, help="Number of recent dev images to keep when pruning (default: 3)")
 
-    # Registry push flags
-    parser.add_argument("--push-ghcr", action="store_true", help="Publish release / latest to GitHub Container Registry")
-    parser.add_argument("--push-local", nargs="?", const="localhost:5000", default=None, help="Publish release / latest to local private registry")
-    parser.add_argument("--push-all", action="store_true", help="Publish to both GHCR and local registry")
+    # Legacy compatibility flags
+    parser.add_argument("--push-ghcr", action="store_true", help="Alias for -P -R ghcr")
+    parser.add_argument("--push-local", nargs="?", const="localhost:5000", default=None, help="Publish release to local private registry")
+    parser.add_argument("--push-all", action="store_true", help="Alias for -P -R local,ghcr")
 
     # Options
     parser.add_argument("--fresh-build", action="store_true", help="Bypass local Docker layer cache and pull latest base images (--no-cache --pull)")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose debug logging and raw command output")
-    parser.add_argument("--dry-run", action="store_true", help="Display Docker commands without executing them")
+    parser.add_argument("-n", "--dry-run", action="store_true", help="Display Docker commands without executing them")
 
     args = parser.parse_args()
 
     if args.verbose:
         logger.setLevel(logging.DEBUG)
+
+    # Resolve target registries and push flag across new and legacy options
+    target_registries = parse_target_registries(args.target_registry)
+    do_push = args.push
+
+    if args.push_ghcr:
+        if "ghcr" not in target_registries:
+            target_registries.append("ghcr")
+        do_push = True
+
+    if args.push_all:
+        for r in ("local", "ghcr"):
+            if r not in target_registries:
+                target_registries.append(r)
+        do_push = True
+
+    if args.push_local:
+        host = args.push_local or "localhost:5000"
+        if host not in target_registries:
+            target_registries.append(host)
+        do_push = True
 
     # 1. Image List
     if args.list:
@@ -726,60 +1038,74 @@ Examples:
         action_prune(keep_n=args.keep, dry_run=args.dry_run)
         return
 
-    # 3. Standalone Rollback
+    # 3. Rollback
     if args.rollback is not None:
-        target_v = args.rollback if args.rollback != "" else None
+        target_v = args.rollback if args.rollback != "" else args.version
         action_rollback(
             target_version=target_v,
-            push_ghcr=args.push_ghcr,
-            push_local=args.push_local,
-            push_all=args.push_all,
+            target_registries=target_registries,
             dry_run=args.dry_run
         )
         return
 
-    # 4. Standalone Promote Latest
-    if args.promote_latest is not None and not args.env:
-        if args.promote_latest == "":
-            logger.error("Must specify version to promote when using standalone --promote-latest (e.g. --promote-latest v2.0.0).")
-            sys.exit(1)
-        action_promote_latest(
-            version=args.promote_latest,
-            push_ghcr=args.push_ghcr,
-            push_local=args.push_local,
-            push_all=args.push_all,
-            dry_run=args.dry_run
-        )
-        return
-
-    # 5. Environment-based Builds
-    if not args.env:
-        parser.print_help()
-        sys.exit(0)
-
+    # 4. Environment-based Builds
     if args.env == "test":
         action_build_test(fresh_build=args.fresh_build, dry_run=args.dry_run)
-    elif args.env == "dev":
+        return
+
+    if args.env == "dev":
         action_build_dev(fresh_build=args.fresh_build, dry_run=args.dry_run)
-    elif args.env == "prod":
+        return
+
+    if args.env == "prod":
         if not args.version:
-            logger.error("Production release requires version argument '-v/--version' (e.g. -v v2.0.0).")
+            logger.error("Production release requires version argument '-v/--version' (e.g. -v v1.0.0).")
             sys.exit(1)
-        use_dev = args.from_dev is not None
-        dev_target = args.from_dev if (args.from_dev and args.from_dev != "") else None
-        do_promote = args.promote_latest is not None
 
         action_build_prod(
             version=args.version,
-            from_dev=dev_target,
-            use_from_dev=use_dev,
-            promote_latest=do_promote,
-            push_ghcr=args.push_ghcr,
-            push_local=args.push_local,
-            push_all=args.push_all,
+            from_dev=args.from_dev,
+            promote_latest=args.promote_latest,
+            do_push=do_push,
+            target_registries=target_registries,
             fresh_build=args.fresh_build,
             dry_run=args.dry_run
         )
+        return
+
+    # 5. Standalone Promotion or Push (without -e)
+    if args.promote_latest or do_push:
+        if not args.version:
+            logger.error("Release version '-v/--version' is required for promotion or push (e.g. -v v1.0.0).")
+            sys.exit(1)
+
+        if args.promote_latest and do_push:
+            action_push_release(
+                version=args.version,
+                target_registries=target_registries,
+                include_latest=True,
+                dry_run=args.dry_run
+            )
+            if "local" in target_registries:
+                action_promote_latest(version=args.version, target_registries=["local"], dry_run=args.dry_run)
+        elif args.promote_latest:
+            action_promote_latest(
+                version=args.version,
+                target_registries=target_registries,
+                dry_run=args.dry_run
+            )
+        elif do_push:
+            action_push_release(
+                version=args.version,
+                target_registries=target_registries,
+                include_latest=False,
+                dry_run=args.dry_run
+            )
+        return
+
+    # No recognized actions
+    parser.print_help()
+    sys.exit(0)
 
 
 if __name__ == "__main__":
