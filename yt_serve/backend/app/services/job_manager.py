@@ -233,6 +233,115 @@ class JobManager:
         finally:
             db.close()
 
+    async def start_adhoc_job(
+        self,
+        job_id: int,
+        url: str,
+        video_quality: str = "best",
+        audio_format: str = "copy",
+        extract_mode: str = "both",
+        custom_download_path: Optional[str] = None
+    ) -> int:
+        """
+        Start an ad-hoc single video download managed by JobManager.
+        Acquires the central download semaphore, creates a log file,
+        records cancellation tokens, updates DB telemetry, and broadcasts WebSocket events.
+        """
+        from app.models.database import SessionLocal
+        from app.repositories import JobRepository
+        from app.services.adhoc_service import execute_adhoc_download
+
+        self._cleanup_old_logs()
+
+        cancel_token = CancellationToken()
+        self.cancel_tokens[job_id] = cancel_token
+        self.cancel_flags[job_id] = False
+
+        async def _run_adhoc():
+            db = SessionLocal()
+            try:
+                self._write_log(job_id, f"==================================================", "INFO")
+                self._write_log(job_id, f"⚡ Starting Ad-hoc Quick Download (Job #{job_id})", "INFO")
+                self._write_log(job_id, f"Target URL: {url}", "INFO")
+                self._write_log(job_id, f"Quality: {video_quality} | Format: {audio_format} | Mode: {extract_mode}", "INFO")
+                if custom_download_path:
+                    self._write_log(job_id, f"Custom Destination: {custom_download_path}", "INFO")
+                self._write_log(job_id, f"==================================================", "INFO")
+
+                if cancel_token.is_cancelled or self.cancel_flags.get(job_id):
+                    raise asyncio.CancelledError("Job cancelled before start")
+
+                self._write_log(job_id, "Waiting for download slot in central queue...", "INFO")
+
+                async with self._get_download_semaphore():
+                    if cancel_token.is_cancelled or self.cancel_flags.get(job_id):
+                        raise asyncio.CancelledError("Job cancelled while queued")
+
+                    self._write_log(job_id, "Download slot acquired. Starting video extraction and download...", "INFO")
+
+                    loop = asyncio.get_running_loop()
+                    res = await loop.run_in_executor(
+                        None,
+                        execute_adhoc_download,
+                        job_id,
+                        url,
+                        video_quality,
+                        audio_format,
+                        extract_mode,
+                        custom_download_path,
+                        db,
+                        self._write_log,
+                        cancel_token
+                    )
+
+                    if res.get("status") == "success":
+                        self._write_log(job_id, f"✓ Ad-hoc download finished successfully: {res.get('title')}", "SUCCESS")
+                        from app.api.websocket import broadcast_event
+                        await broadcast_event("job_status", {
+                            "job_id": job_id,
+                            "status": "completed",
+                            "title": res.get("title")
+                        })
+                    else:
+                        err = res.get("error", "Unknown error")
+                        self._write_log(job_id, f"✗ Ad-hoc download failed: {err}", "ERROR")
+                        from app.api.websocket import broadcast_event
+                        await broadcast_event("job_status", {
+                            "job_id": job_id,
+                            "status": "failed",
+                            "error": err
+                        })
+
+            except asyncio.CancelledError:
+                self._write_log(job_id, "⚠️ Job cancelled by user.", "WARN")
+                JobRepository.update_status(job_id, status="cancelled", db=db)
+                from app.api.websocket import broadcast_event
+                await broadcast_event("job_status", {
+                    "job_id": job_id,
+                    "status": "cancelled"
+                })
+            except Exception as e:
+                self._write_log(job_id, f"✗ Unhandled exception during ad-hoc download: {e}", "ERROR")
+                JobRepository.update_status(job_id, status="failed", error=str(e), db=db)
+                from app.api.websocket import broadcast_event
+                await broadcast_event("job_status", {
+                    "job_id": job_id,
+                    "status": "failed",
+                    "error": str(e)
+                })
+            finally:
+                if job_id in self.active_jobs:
+                    del self.active_jobs[job_id]
+                if job_id in self.cancel_flags:
+                    del self.cancel_flags[job_id]
+                if job_id in self.cancel_tokens:
+                    del self.cancel_tokens[job_id]
+                db.close()
+
+        task = asyncio.create_task(_run_adhoc())
+        self.active_jobs[job_id] = task
+        return job_id
+
     
     async def _run_job(
         self,

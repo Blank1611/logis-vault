@@ -55,15 +55,19 @@ class TrackRepository:
         artist: Optional[str] = None,
         duration: Optional[int] = None,
         is_hardlinked: bool = False,
+        downloaded_resolutions: Optional[List[str]] = None,
+        downloaded_fps: Optional[int] = None,
+        downloaded_audio_codec: Optional[str] = None,
+        downloaded_audio_bitrate: Optional[str] = None,
         db: Optional[Session] = None
     ) -> Track:
-        """Create or update a track record in the index"""
+        """Create or update a track record in the index with optional media metadata"""
         with get_db_context(db) as session:
             track = session.query(Track).filter(Track.video_id == video_id).first()
             if track:
-                if filepath and not track.primary_filepath:
+                if filepath:
                     track.primary_filepath = filepath
-                if audio_filepath and not track.primary_audio_filepath:
+                if audio_filepath:
                     track.primary_audio_filepath = audio_filepath
                 if title and (not track.title or track.title == video_id):
                     track.title = title
@@ -73,6 +77,14 @@ class TrackRepository:
                     track.artist = artist
                 if is_hardlinked:
                     track.is_hardlinked = True
+                if downloaded_resolutions is not None:
+                    track.downloaded_resolutions_json = downloaded_resolutions
+                if downloaded_fps is not None:
+                    track.downloaded_fps = downloaded_fps
+                if downloaded_audio_codec is not None:
+                    track.downloaded_audio_codec = downloaded_audio_codec
+                if downloaded_audio_bitrate is not None:
+                    track.downloaded_audio_bitrate = downloaded_audio_bitrate
 
                 # Update associated playlists
                 current_playlists = list(track.playlists_json or [])
@@ -93,6 +105,10 @@ class TrackRepository:
                     primary_audio_filepath=audio_filepath,
                     playlists_json=playlists,
                     is_hardlinked=is_hardlinked,
+                    downloaded_resolutions_json=downloaded_resolutions or [],
+                    downloaded_fps=downloaded_fps,
+                    downloaded_audio_codec=downloaded_audio_codec,
+                    downloaded_audio_bitrate=downloaded_audio_bitrate,
                     created_at=datetime.utcnow(),
                     updated_at=datetime.utcnow(),
                 )

@@ -1117,17 +1117,19 @@ def download_playlist_with_video_and_audio(
     url: str,
     as_mp3: bool = True,
     excluded_ids: Set[str] | None = None,
-    cancel_token: Optional[Any] = None
+    cancel_token: Optional[Any] = None,
+    profile: Optional[Any] = None
 ) -> Set[str]:
     """
     MODE 2:
-      - Downloads bestvideo+bestaudio/best for a playlist/single video.
+      - Downloads bestvideo+bestaudio/best for a playlist/single video conforming to QualityProfile.
       - Uses CUSTOM archive logic (not yt-dlp's download_archive).
       - Downloads only if: (a) ID not in archive.txt OR (b) ID in archive but file missing on disk
       - After successful download, verifies file exists then updates archive.txt
       - If as_mp3 is True, extracts MP3 into audio subfolder.
       - excluded_ids: set of video IDs to skip (from GUI config)
       - cancel_token: Optional CancellationToken for cooperative thread-safe cancellation
+      - profile: Optional QualityProfile model or dict
     Returns:
       FAILED_VIDEO_IDS: set of failed/unavailable IDs for this run.
     """
@@ -1135,6 +1137,17 @@ def download_playlist_with_video_and_audio(
     SKIPPED_VIDEOS_ARCHIVE = []
     FAILED_VIDEO_IDS = set()
     GLOBAL_CURRENT_PLAYLIST_URL = url  # set for hooks
+
+    # Auto-resolve quality profile from database if not explicitly provided
+    if profile is None:
+        try:
+            from app.models.database import SessionLocal, Playlist
+            with SessionLocal() as db:
+                pl = db.query(Playlist).filter(Playlist.url == url).first()
+                if pl and pl.quality_profile:
+                    profile = pl.quality_profile
+        except Exception:
+            pass
 
     def is_cancelled_check() -> bool:
         if cancel_token is not None and getattr(cancel_token, "is_cancelled", False):
@@ -1313,7 +1326,8 @@ def download_playlist_with_video_and_audio(
         ydl_opts = build_ytdlp_options(
             mode="download",
             playlist_folder=playlist_folder,
-            progress_hooks=[_progress_hook_custom, _slow_down_hook, _cancellation_progress_hook]
+            progress_hooks=[_progress_hook_custom, _slow_down_hook, _cancellation_progress_hook],
+            profile=profile
         )
 
         print(f"\nStarting download of {len(current_batch)} videos in this batch...")

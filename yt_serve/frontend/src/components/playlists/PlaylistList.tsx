@@ -97,6 +97,9 @@ export const PlaylistList: React.FC<PlaylistListProps> = ({
                     >
                       <ExternalLink className="w-4 h-4" />
                     </button>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                      {playlist.quality_profile_id ? playlist.quality_profile_id.replace(/_/g, ' ').toUpperCase() : 'STANDARD 1080P'}
+                    </span>
                     {isCaughtUp && (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
                         ✓ Complete

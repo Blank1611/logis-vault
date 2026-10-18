@@ -42,6 +42,7 @@ class PlaylistRepository:
     def create(
         url: str,
         title: str,
+        quality_profile_id: str = "standard_1080p",
         local_count: int = 0,
         playlist_count: int = 0,
         unavailable_count: int = 0,
@@ -53,6 +54,7 @@ class PlaylistRepository:
             playlist = Playlist(
                 url=url,
                 title=title,
+                quality_profile_id=quality_profile_id or "standard_1080p",
                 local_count=local_count,
                 playlist_count=playlist_count,
                 unavailable_count=unavailable_count,
@@ -61,6 +63,19 @@ class PlaylistRepository:
                 updated_at=datetime.utcnow()
             )
             session.add(playlist)
+            session.flush()
+            session.refresh(playlist)
+            return playlist
+
+    @staticmethod
+    def update_quality_profile(playlist_id: int, quality_profile_id: str, db: Optional[Session] = None) -> Optional[Playlist]:
+        """Update playlist assigned quality profile"""
+        with get_db_context(db) as session:
+            playlist = session.query(Playlist).filter(Playlist.id == playlist_id).first()
+            if not playlist:
+                return None
+            playlist.quality_profile_id = quality_profile_id or "standard_1080p"
+            playlist.updated_at = datetime.utcnow()
             session.flush()
             session.refresh(playlist)
             return playlist

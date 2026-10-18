@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { Playlist, Job, LogEntry } from './types'
+import type { Playlist, Job, LogEntry, QualityProfile, PlaylistTrack } from './types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -8,12 +8,31 @@ const api = axios.create({
 export const playlistsApi = {
   list: () => api.get<Playlist[]>('/playlists'),
   get: (id: number) => api.get<Playlist>(`/playlists/${id}`),
-  create: (url: string) => api.post<Playlist>('/playlists', { url }),
+  create: (data: { url: string; title?: string; quality_profile_id?: string } | string) =>
+    api.post<Playlist>('/playlists', typeof data === 'string' ? { url: data } : data),
   update: (id: number, data: Partial<Playlist>) => api.put<Playlist>(`/playlists/${id}`, data),
   delete: (id: number) => api.delete(`/playlists/${id}`),
   refresh: (id: number) => api.post<Playlist>(`/playlists/${id}/refresh`),
   getVideoInfo: (id: number) => api.get<Record<string, { title: string; duration?: number; uploader?: string }>>(`/playlists/${id}/video-info`),
   openFolder: (id: number) => api.post<{ message: string; path: string }>(`/playlists/${id}/open-folder`),
+  getTracks: (id: number) => api.get<PlaylistTrack[]>(`/playlists/${id}/tracks`),
+  refreshResolutions: (id: number) => api.post<{ message: string; playlist_id: number }>(`/playlists/${id}/tracks/refresh-resolutions`),
+  upgradeTrack: (playlistId: number, videoId: string, data: { target_resolution: number; delete_older?: boolean }) =>
+    api.post<{ status: string; video_id: string; resolution: string; primary_filepath: string; downloaded_resolutions: string[] }>(`/playlists/${playlistId}/tracks/${videoId}/upgrade`, data),
+  upgradeAudio: (playlistId: number, videoId: string, data: { audio_format: string }) =>
+    api.post<{ status: string; audio_filepath: string; codec?: string; bitrate?: string }>(`/playlists/${playlistId}/tracks/${videoId}/upgrade-audio`, data),
+  setPrimaryVersion: (playlistId: number, videoId: string, resolution: string) =>
+    api.post<{ status: string; primary_filepath: string; primary_resolution: string }>(`/playlists/${playlistId}/tracks/${videoId}/set-primary`, { resolution }),
+  deleteTrackVersion: (playlistId: number, videoId: string, resolution: string) =>
+    api.delete<{ status: string; deleted: boolean; remaining_resolutions: string[]; primary_filepath: string }>(`/playlists/${playlistId}/tracks/${videoId}/versions/${resolution}`),
+}
+
+export const profilesApi = {
+  getAll: () => api.get<QualityProfile[]>('/profiles'),
+  getById: (id: string) => api.get<QualityProfile>(`/profiles/${id}`),
+  create: (data: Partial<QualityProfile>) => api.post<QualityProfile>('/profiles', data),
+  update: (id: string, data: Partial<QualityProfile>) => api.put<QualityProfile>(`/profiles/${id}`, data),
+  delete: (id: string) => api.delete(`/profiles/${id}`),
 }
 
 export const jobsApi = {
@@ -347,6 +366,12 @@ export const housekeepingApi = {
 export interface VideoResolutionOption {
   height: number
   label: string
+  fps?: number
+  vcodec?: string
+  is_direct?: boolean
+  badge?: string
+  badge_tooltip?: string
+  filesize?: number
 }
 
 export interface AdhocProbeResult {

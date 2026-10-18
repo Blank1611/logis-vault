@@ -8,6 +8,7 @@ Generates specialized, robust options dictionaries for:
 """
 
 import os
+import shutil
 from typing import Optional, Dict, Any, List
 from app.core.config import settings
 from app.core.logging_engine import YTDLPLoggerAdapter
@@ -18,10 +19,11 @@ def build_ytdlp_options(
     playlist_folder: Optional[str] = None,
     archive_file: Optional[str] = None,
     progress_hooks: Optional[List[Any]] = None,
-    extra_opts: Optional[Dict[str, Any]] = None
+    extra_opts: Optional[Dict[str, Any]] = None,
+    profile: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
-    Build a customized yt-dlp options dictionary based on the requested mode.
+    Build a customized yt-dlp options dictionary based on the requested mode and quality profile.
 
     Args:
         mode: "info", "download", or "extract"
@@ -29,6 +31,7 @@ def build_ytdlp_options(
         archive_file: Path to download archive file (if managed by yt-dlp)
         progress_hooks: List of hook callbacks for progress tracking
         extra_opts: Custom overrides or additions
+        profile: Optional QualityProfile model or dict specifying resolution, audio, cipher strategy
 
     Returns:
         dict: Complete yt-dlp options ready to pass to YoutubeDL()
@@ -38,13 +41,20 @@ def build_ytdlp_options(
     # Attach logger adapter so yt-dlp messages conform to standard log format and sinks
     opts["logger"] = YTDLPLoggerAdapter()
 
-    # 1. Base network & client emulation (applies to all modes)
-    opts["extractor_args"] = {
-        "youtube": {
-            "player_client": ["android", "ios", "web_creator", "mweb", "web"],
-            "player_skip": ["configs", "webpage_signature"]
+    # 1. Base network & client emulation
+    # Check cipher strategy: direct_format18 (challenge-free progressive) vs default full catalog
+    cipher_strategy = getattr(profile, "cipher_strategy", None) if profile else None
+    if cipher_strategy == "direct_format18":
+        opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["android", "ios"],
+                "player_skip": ["configs", "webpage_signature"]
+            }
         }
-    }
+
+    # 2. JavaScript runtime execution (for YouTube n-sig challenge & signature deciphering)
+    if shutil.which("node"):
+        opts["js_runtimes"] = {'node': {}}
 
     # 2. Authentication: Browser profile extraction vs cookies.txt file vs none
     auth_mode = getattr(settings, "COOKIES_AUTH_MODE", "cookies_txt")
@@ -74,22 +84,36 @@ def build_ytdlp_options(
         })
 
     elif mode in ["download", "extract"]:
-        # Standard format selection
-        if mode == "download":
-            opts.update({
-                "format": "bestvideo+bestaudio/best",
-                "merge_output_format": "mp4",
-            })
-        else:  # mode == "extract"
-            audio_mode = getattr(settings, "AUDIO_EXTRACT_MODE", "copy")
-            codec = "mp3" if "mp3" in audio_mode else ("opus" if audio_mode == "opus" else "best")
+        # Quality profile formatting
+        is_audio_only = getattr(profile, "is_audio_only", False) if profile else (mode == "extract")
+        max_res = getattr(profile, "max_resolution", None) if profile else None
+        audio_fmt = getattr(profile, "audio_format", "mp3_320") if profile else getattr(settings, "AUDIO_EXTRACT_MODE", "copy")
+
+        if is_audio_only or mode == "extract":
+            codec = "mp3" if "mp3" in audio_fmt else ("opus" if "opus" in audio_fmt else ("flac" if "flac" in audio_fmt else "best"))
+            bitrate = "320" if "320" in audio_fmt else ("160" if "160" in audio_fmt else "0")
             opts.update({
                 "format": "bestaudio/best",
                 "postprocessors": [{
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": codec,
-                    "preferredquality": "0" if audio_mode == "mp3_best" else "2",
+                    "preferredquality": bitrate,
                 }]
+            })
+        elif max_res and cipher_strategy == "direct_format18":
+            opts.update({
+                "format": "18/best[height<=360]/best",
+                "merge_output_format": "mp4",
+            })
+        elif max_res:
+            opts.update({
+                "format": f"bestvideo[height<={max_res}]+bestaudio/best[height<={max_res}]/best",
+                "merge_output_format": "mp4",
+            })
+        else:
+            opts.update({
+                "format": "bestvideo+bestaudio/best",
+                "merge_output_format": "mp4",
             })
 
         # Storage directory mapping (HDD destination vs fast SSD temp buffer)

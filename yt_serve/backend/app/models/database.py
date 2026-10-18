@@ -1,7 +1,7 @@
 """
 Database models using SQLAlchemy
 """
-from sqlalchemy import create_engine, Column, Integer, BigInteger, String, DateTime, Float, Text, JSON, Boolean
+from sqlalchemy import create_engine, Column, Integer, BigInteger, String, DateTime, Float, Text, JSON, Boolean, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime
@@ -53,6 +53,21 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+class QualityProfile(Base):
+    """Quality Profile model for Radarr/Sonarr style extraction & resolution control"""
+    __tablename__ = "quality_profiles"
+
+    id = Column(String, primary_key=True)               # e.g., 'ultra_4k', 'qhd_1440p', 'standard_1080p', 'standard_720p', 'fast_mixtape_360p', 'audio_only'
+    name = Column(String, nullable=False)               # Display name: "Standard HD 720p"
+    description = Column(String, nullable=True)
+    max_resolution = Column(Integer, default=1080)      # 2160, 1440, 1080, 720, 360, or 0 (audio-only)
+    audio_format = Column(String, default="mp3_320")    # "mp3_320", "opus_native", "m4a", "flac"
+    cipher_strategy = Column(String, default="web_decipher")  # "web_decipher" vs "bypass_challenge"
+    is_audio_only = Column(Boolean, default=False)
+    is_builtin = Column(Boolean, default=False)         # Built-in profiles cannot be deleted
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 class Playlist(Base):
     """Playlist model"""
     __tablename__ = "playlists"
@@ -60,6 +75,7 @@ class Playlist(Base):
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String, unique=True, index=True, nullable=False)
     title = Column(String, nullable=False)
+    quality_profile_id = Column(String, ForeignKey("quality_profiles.id"), default="standard_1080p", nullable=False)
     local_count = Column(Integer, default=0)
     playlist_count = Column(Integer, default=0)
     unavailable_count = Column(Integer, default=0)
@@ -122,8 +138,39 @@ class Track(Base):
     primary_audio_filepath = Column(String, nullable=True)
     playlists_json = Column(JSON, default=list)  # List of playlist IDs [1, 2, ...]
     is_hardlinked = Column(Boolean, default=False)
+    downloaded_resolutions_json = Column(JSON, default=list)  # e.g. ["1080p", "720p"]
+    downloaded_fps = Column(Integer, nullable=True)
+    downloaded_audio_codec = Column(String, nullable=True)
+    downloaded_audio_bitrate = Column(Integer, nullable=True)
+    available_resolutions_json = Column(JSON, default=list)  # e.g. [2160, 1440, 1080, 720, 360]
+    resolutions_last_checked = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def primary_resolution(self) -> Optional[str]:
+        if self.primary_filepath:
+            import re
+            m = re.search(r"\[(\d+p)\]", self.primary_filepath)
+            if m:
+                return m.group(1)
+        return self.downloaded_resolutions_json[0] if self.downloaded_resolutions_json else None
+
+    @property
+    def highest_available_resolution(self) -> Optional[str]:
+        if not self.available_resolutions_json:
+            return None
+        max_h = 0
+        for item in self.available_resolutions_json:
+            if isinstance(item, int):
+                max_h = max(max_h, item)
+            elif isinstance(item, str):
+                digits = "".join(filter(str.isdigit, item))
+                val = int(digits) if digits else 0
+                max_h = max(max_h, val)
+            elif isinstance(item, dict):
+                max_h = max(max_h, int(item.get("height", 0)))
+        return f"{max_h}p" if max_h > 0 else None
 
 class MovedTrackHistory(Base):
     """Audit log for tracks moved between playlists on YouTube"""
@@ -291,15 +338,15 @@ def list_folder_statuses(status: Optional[str] = None, db: Optional[Session] = N
 Base.metadata.create_all(bind=engine)
 
 def _auto_migrate_sqlite_columns():
-    """Ensure newly added columns exist in existing SQLite database tables."""
+    """Ensure newly added columns exist in existing SQLite database tables and seed default profiles."""
     try:
         from sqlalchemy import text
         with engine.connect() as conn:
-            # Check existing columns in jobs table
+            # 1. Check existing columns in jobs table
             result = conn.execute(text("PRAGMA table_info(jobs)"))
-            existing_cols = {row[1] for row in result.fetchall()}
+            existing_cols_jobs = {row[1] for row in result.fetchall()}
             
-            new_columns = [
+            new_job_columns = [
                 ("current_video_title", "VARCHAR"),
                 ("current_video_id", "VARCHAR"),
                 ("current_video_bytes_downloaded", "BIGINT DEFAULT 0"),
@@ -307,10 +354,60 @@ def _auto_migrate_sqlite_columns():
                 ("current_video_speed", "FLOAT DEFAULT 0.0"),
                 ("current_video_eta", "INTEGER DEFAULT 0"),
             ]
-            for col_name, col_type in new_columns:
-                if col_name not in existing_cols:
+            for col_name, col_type in new_job_columns:
+                if col_name not in existing_cols_jobs:
                     conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_type}"))
                     conn.commit()
+
+            # 2. Check existing columns in playlists table
+            result = conn.execute(text("PRAGMA table_info(playlists)"))
+            existing_cols_playlists = {row[1] for row in result.fetchall()}
+            if "quality_profile_id" not in existing_cols_playlists:
+                conn.execute(text("ALTER TABLE playlists ADD COLUMN quality_profile_id VARCHAR DEFAULT 'standard_1080p'"))
+                conn.commit()
+
+            # 3. Check existing columns in tracks table
+            result = conn.execute(text("PRAGMA table_info(tracks)"))
+            existing_cols_tracks = {row[1] for row in result.fetchall()}
+            new_track_columns = [
+                ("downloaded_resolutions_json", "JSON DEFAULT '[]'"),
+                ("downloaded_fps", "INTEGER"),
+                ("downloaded_audio_codec", "VARCHAR"),
+                ("downloaded_audio_bitrate", "INTEGER"),
+                ("available_resolutions_json", "JSON DEFAULT '[]'"),
+                ("resolutions_last_checked", "DATETIME"),
+            ]
+            for col_name, col_type in new_track_columns:
+                if col_name not in existing_cols_tracks:
+                    conn.execute(text(f"ALTER TABLE tracks ADD COLUMN {col_name} {col_type}"))
+                    conn.commit()
+
+            # 4. Seed default built-in quality profiles if quality_profiles table is empty
+            profile_count = conn.execute(text("SELECT COUNT(*) FROM quality_profiles")).scalar()
+            if profile_count == 0:
+                default_profiles = [
+                    ("ultra_4k", "Ultra 4K", "4K Ultra HD resolution with highest available audio quality", 2160, "mp3_320", "web_decipher", 0, 1),
+                    ("qhd_1440p", "Quad HD 1440p", "2K Quad HD resolution with highest available audio quality", 1440, "mp3_320", "web_decipher", 0, 1),
+                    ("standard_1080p", "Standard HD 1080p", "1080p Full HD resolution with highest available audio quality", 1080, "mp3_320", "web_decipher", 0, 1),
+                    ("standard_720p", "Standard HD 720p", "720p HD resolution with high quality audio and balanced file sizes", 720, "mp3_320", "web_decipher", 0, 1),
+                    ("fast_mixtape_360p", "Fast / Mixtape 360p (Challenge-Free)", "360p progressive stream, zero JS challenge deciphering, ideal for long background mixtapes", 360, "mp3_320", "direct_format18", 0, 1),
+                    ("audio_only", "Audio Only Vault", "Direct audio stream extraction, no video file stored on disk", 0, "mp3_320", "web_decipher", 1, 1),
+                ]
+                now_str = datetime.utcnow().isoformat()
+                for p in default_profiles:
+                    conn.execute(text(
+                        "INSERT INTO quality_profiles (id, name, description, max_resolution, audio_format, cipher_strategy, is_audio_only, is_builtin, created_at, updated_at) "
+                        "VALUES (:id, :name, :description, :max_res, :audio_fmt, :cipher, :is_audio, :is_builtin, :created_at, :updated_at)"
+                    ), {
+                        "id": p[0], "name": p[1], "description": p[2], "max_res": p[3],
+                        "audio_fmt": p[4], "cipher": p[5], "is_audio": p[6], "is_builtin": p[7],
+                        "created_at": now_str, "updated_at": now_str
+                    })
+                conn.commit()
+            else:
+                # Ensure fast_mixtape_360p has cipher_strategy set to direct_format18
+                conn.execute(text("UPDATE quality_profiles SET cipher_strategy = 'direct_format18' WHERE id = 'fast_mixtape_360p' AND cipher_strategy = 'bypass_challenge'"))
+                conn.commit()
     except Exception as e:
         print(f"[DB] Auto-migration check note: {e}")
 

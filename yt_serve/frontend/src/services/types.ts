@@ -1,3 +1,16 @@
+export interface QualityProfile {
+  id: string
+  name: string
+  description?: string
+  max_resolution: number
+  audio_format: string
+  cipher_strategy: string
+  is_audio_only: boolean
+  is_builtin: boolean
+  created_at?: string
+  updated_at?: string
+}
+
 export interface Playlist {
   id: number
   url: string
@@ -8,12 +21,52 @@ export interface Playlist {
   last_download: string | null
   last_extract: string | null
   excluded_ids: string[]
+  quality_profile_id?: string
+}
+
+export interface AdhocResolutionOption {
+  height: number
+  label: string
+  fps?: number
+  vcodec?: string
+  is_direct?: boolean
+  badge?: string
+  badge_tooltip?: string
+  filesize?: number
+}
+
+export interface DiskVersion {
+  resolution: string
+  filename: string
+  filepath: string
+  size_bytes: number
+}
+
+export interface PlaylistTrack {
+  video_id: string
+  title: string
+  artist?: string
+  duration?: number
+  primary_filepath?: string
+  primary_audio_filepath?: string
+  primary_resolution?: string
+  downloaded_resolutions: string[]
+  downloaded_fps?: number
+  downloaded_audio_codec?: string
+  downloaded_audio_bitrate?: string
+  available_resolutions: AdhocResolutionOption[]
+  highest_available_resolution?: string
+  resolutions_last_checked?: string | null
+  video_size_bytes: number
+  audio_size_bytes: number
+  is_hardlinked: boolean
+  disk_versions: DiskVersion[]
 }
 
 export interface Job {
   id: number
   playlist_id: number
-  job_type: 'download' | 'extract' | 'both'
+  job_type: 'download' | 'extract' | 'both' | 'adhoc_both' | 'adhoc_video_only' | 'adhoc_audio_only' | string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
   progress: number
   total_items: number

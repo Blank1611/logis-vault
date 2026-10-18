@@ -75,6 +75,69 @@ def find_local_track(video_id: str, db: Optional[Session] = None) -> Optional[Di
         }
 
 
+def probe_local_media_metadata(filepath: Optional[str], audio_filepath: Optional[str] = None) -> Dict[str, Any]:
+    """Run fast local ffprobe to extract video resolution, fps, audio codec, and bitrate."""
+    res: Dict[str, Any] = {
+        "resolution": None,
+        "fps": None,
+        "audio_codec": None,
+        "audio_bitrate": None
+    }
+    if not filepath or not os.path.isfile(filepath):
+        return res
+    try:
+        import subprocess
+        import json
+        cmd = [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_streams", filepath
+        ]
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+        if p.returncode == 0 and p.stdout:
+            data = json.loads(p.stdout)
+            for stream in data.get("streams", []):
+                if stream.get("codec_type") == "video" and not res["resolution"]:
+                    h = stream.get("height")
+                    if h:
+                        res["resolution"] = f"{h}p"
+                    r_frame_rate = stream.get("r_frame_rate", "")
+                    if "/" in r_frame_rate:
+                        num, den = r_frame_rate.split("/")
+                        if den.isdigit() and int(den) > 0 and num.isdigit():
+                            res["fps"] = round(int(num) / int(den))
+                elif stream.get("codec_type") == "audio" and not res["audio_codec"]:
+                    res["audio_codec"] = stream.get("codec_name")
+                    bitrate = stream.get("bit_rate")
+                    if bitrate and str(bitrate).isdigit():
+                        res["audio_bitrate"] = round(int(bitrate) / 1000)
+    except Exception as e:
+        logger.debug(f"ffprobe probe failed for {filepath}: {e}")
+
+    # Check dedicated audio file if present
+    if audio_filepath and os.path.isfile(audio_filepath):
+        try:
+            import subprocess
+            import json
+            cmd = [
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-show_streams", audio_filepath
+            ]
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+            if p.returncode == 0 and p.stdout:
+                data = json.loads(p.stdout)
+                for stream in data.get("streams", []):
+                    if stream.get("codec_type") == "audio":
+                        res["audio_codec"] = stream.get("codec_name")
+                        bitrate = stream.get("bit_rate")
+                        if bitrate and str(bitrate).isdigit():
+                            res["audio_bitrate"] = round(int(bitrate) / 1000)
+                        break
+        except Exception as e:
+            logger.debug(f"ffprobe audio probe failed for {audio_filepath}: {e}")
+
+    return res
+
+
 def index_track(
     video_id: str,
     title: str,
@@ -91,6 +154,7 @@ def index_track(
     """
     with get_db_context(db) as session:
         track = session.query(Track).filter(Track.video_id == video_id).first()
+        meta = probe_local_media_metadata(filepath, audio_filepath)
         if track:
             current_playlists = list(track.playlists_json or [])
             if playlist_id not in current_playlists:
@@ -102,11 +166,24 @@ def index_track(
             if audio_filepath and os.path.exists(audio_filepath):
                 track.primary_audio_filepath = audio_filepath
 
+            # Update media specs if missing
+            cur_resolutions = list(track.downloaded_resolutions_json or [])
+            if meta["resolution"] and meta["resolution"] not in cur_resolutions:
+                cur_resolutions.insert(0, meta["resolution"])
+                track.downloaded_resolutions_json = cur_resolutions
+            if not track.downloaded_fps and meta["fps"]:
+                track.downloaded_fps = meta["fps"]
+            if not track.downloaded_audio_codec and meta["audio_codec"]:
+                track.downloaded_audio_codec = meta["audio_codec"]
+            if not track.downloaded_audio_bitrate and meta["audio_bitrate"]:
+                track.downloaded_audio_bitrate = meta["audio_bitrate"]
+
             track.updated_at = datetime.utcnow()
             session.flush()
             session.refresh(track)
             return track
         else:
+            initial_resolutions = [meta["resolution"]] if meta["resolution"] else []
             new_track = Track(
                 video_id=video_id,
                 title=title,
@@ -116,6 +193,10 @@ def index_track(
                 primary_audio_filepath=audio_filepath,
                 playlists_json=[playlist_id],
                 is_hardlinked=is_hardlinked,
+                downloaded_resolutions_json=initial_resolutions,
+                downloaded_fps=meta["fps"],
+                downloaded_audio_codec=meta["audio_codec"],
+                downloaded_audio_bitrate=meta["audio_bitrate"],
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )
@@ -123,6 +204,27 @@ def index_track(
             session.flush()
             session.refresh(new_track)
             return new_track
+
+
+def backfill_all_local_tracks_metadata(db: Optional[Session] = None) -> int:
+    """Scan existing database tracks with missing resolution info and backfill using local ffprobe."""
+    backfilled = 0
+    with get_db_context(db) as session:
+        tracks = session.query(Track).all()
+        for t in tracks:
+            if not t.downloaded_resolutions_json or len(t.downloaded_resolutions_json) == 0:
+                meta = probe_local_media_metadata(t.primary_filepath, t.primary_audio_filepath)
+                if meta["resolution"]:
+                    t.downloaded_resolutions_json = [meta["resolution"]]
+                    t.downloaded_fps = meta["fps"]
+                    t.downloaded_audio_codec = meta["audio_codec"]
+                    t.downloaded_audio_bitrate = meta["audio_bitrate"]
+                    t.updated_at = datetime.utcnow()
+                    backfilled += 1
+        if backfilled > 0:
+            session.flush()
+            logger.info(f"Backfilled media resolution specs for {backfilled} existing tracks via local ffprobe.")
+    return backfilled
 
 
 def hardlink_track_to_playlist(

@@ -6,7 +6,7 @@ import { Button } from '../components/ui/Button'
 import { StatusBadge } from '../components/ui/StatusBadge'
 import { ProgressBar, DualTierProgressBar } from '../components/ui/ProgressBar'
 import { 
-  Terminal, RotateCcw, Copy, Check, DownloadCloud, Trash2, Search, Loader2, Activity, Server, PlayCircle
+  Terminal, RotateCcw, Copy, Check, DownloadCloud, Trash2, Search, Loader2, Activity, Server, ListOrdered, XCircle
 } from 'lucide-react'
 import { useToast } from '../context'
 import { copyToClipboard } from '../utils/clipboard'
@@ -25,6 +25,8 @@ export interface LogsPageProps {
   playlists: Playlist[]
   activityLogs: ActivityLog[]
   onClearActivity: () => void
+  onCancelJob?: (jobId: number) => void
+  onSelectJobForLogs?: (jobId: number) => void
 }
 
 export const LogsPage: React.FC<LogsPageProps> = ({
@@ -32,15 +34,14 @@ export const LogsPage: React.FC<LogsPageProps> = ({
   playlists,
   activityLogs,
   onClearActivity,
+  onCancelJob,
+  onSelectJobForLogs,
 }) => {
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
-  // Top-level tab: 'system' (Live System & Observability) vs 'jobs' (Job History & Execution)
-  const [activeTab, setActiveTab] = useState<'system' | 'jobs'>(() => {
-    const running = jobs.find(j => j.status === 'running' || j.status === 'pending')
-    return running ? 'jobs' : 'system'
-  })
+  // Top-level tab: 'queue' (Download Queue & History) vs 'jobs' (Job Log Terminal) vs 'system' (Live System Observability)
+  const [activeTab, setActiveTab] = useState<'queue' | 'jobs' | 'system'>('queue')
 
   // Sub-source for system tab: 'server' (Central Server Logs via SSE/Ring Buffer) vs 'browser' (Client session events)
   const [systemLogType, setSystemLogType] = useState<'server' | 'browser'>('server')
@@ -74,6 +75,16 @@ export const LogsPage: React.FC<LogsPageProps> = ({
 
   const selectedJob = jobs.find(j => j.id === selectedJobId)
   const selectedPlaylist = selectedJob ? playlists.find(p => p.id === selectedJob.playlist_id) : null
+
+  const getJobDisplayName = (j: Job): string => {
+    if (j.job_type && j.job_type.startsWith('adhoc_')) {
+      const vidTitle = j.current_video_title || 'Quick Video Download'
+      return `Quick: "${vidTitle}"`
+    }
+    const pl = playlists.find(p => p.id === j.playlist_id)
+    if (pl) return `Playlist: "${pl.title}"`
+    return j.playlist_id === 0 ? 'Single Video' : `Playlist #${j.playlist_id}`
+  }
 
   // Fetch job logs if on jobs tab and job is selected
   const { data: jobLogs, isLoading: jobLogsLoading } = useQuery({
@@ -212,6 +223,35 @@ export const LogsPage: React.FC<LogsPageProps> = ({
       {/* Primary Navigation Tabs */}
       <div className="flex border-b border-gray-200 dark:border-gray-700 gap-3">
         <button
+          onClick={() => setActiveTab('queue')}
+          className={`pb-3 px-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-all ${
+            activeTab === 'queue'
+              ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400'
+              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+          }`}
+        >
+          <ListOrdered className="w-4 h-4" />
+          Download Queue & History
+          {runningJobs.length > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-bold animate-pulse">
+              {runningJobs.length} Active
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('jobs')}
+          className={`pb-3 px-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-all ${
+            activeTab === 'jobs'
+              ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400'
+              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+          }`}
+        >
+          <Terminal className="w-4 h-4" />
+          Job Execution Logs
+        </button>
+
+        <button
           onClick={() => setActiveTab('system')}
           className={`pb-3 px-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-all ${
             activeTab === 'system'
@@ -225,99 +265,235 @@ export const LogsPage: React.FC<LogsPageProps> = ({
             Server & App
           </span>
         </button>
-
-        <button
-          onClick={() => setActiveTab('jobs')}
-          className={`pb-3 px-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-all ${
-            activeTab === 'jobs'
-              ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400'
-              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
-          }`}
-        >
-          <PlayCircle className="w-4 h-4" />
-          Job History & Execution
-          {runningJobs.length > 0 && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-bold animate-pulse">
-              {runningJobs.length} Running
-            </span>
-          )}
-        </button>
       </div>
 
-      {/* Controls and Selectors Bar */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-5 border border-gray-200 dark:border-gray-700 space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          
-          {/* Sub-selector depending on active tab */}
-          {activeTab === 'system' ? (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mr-2">
-                Observability Feed:
+      {/* When Queue Tab is Active: Render Queue Table */}
+      {activeTab === 'queue' ? (
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <div className="p-5 border-b border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gray-50/50 dark:bg-gray-800/50">
+            <div>
+              <h3 className="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <ListOrdered className="w-5 h-5 text-indigo-500" />
+                Active Download Queue & Historical Jobs
+              </h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Centralized queue for all playlist syncs and quick single-video downloads. Concurrency limit: 1 video stream at a time.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                Total Jobs: {jobs.length}
               </span>
-              <button
-                onClick={() => setSystemLogType('server')}
-                className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                  systemLogType === 'server'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
-                }`}
-              >
-                <Server className="w-3.5 h-3.5" />
-                Central Server Logs (Ring Buffer & SSE)
-              </button>
+            </div>
+          </div>
 
-              <button
-                onClick={() => setSystemLogType('browser')}
-                className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                  systemLogType === 'browser'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
-                }`}
-                title="Ephemeral client-side UI and WebSocket notifications recorded during the current browser tab session"
-              >
-                <Activity className="w-3.5 h-3.5" />
-                Browser Session Events ({activityLogs.length})
-              </button>
+          {jobs.length === 0 ? (
+            <div className="text-center py-16 text-gray-500">
+              <ListOrdered className="w-8 h-8 mx-auto mb-2 opacity-40" />
+              No background jobs recorded yet.
             </div>
           ) : (
-            <div className="flex-1 max-w-xl">
-              <label className="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5 flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5 text-blue-500" />
-                Select Job Execution Log:
-              </label>
-              <select
-                value={selectedJobId || ''}
-                onChange={(e) => setSelectedJobId(e.target.value ? parseInt(e.target.value, 10) : null)}
-                className="w-full px-3.5 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              >
-                {runningJobs.length > 0 && (
-                  <optgroup label="🟢 Active Running Jobs">
-                    {runningJobs.map(j => {
-                      const pl = playlists.find(p => p.id === j.playlist_id)
-                      const title = pl ? pl.title : `Playlist #${j.playlist_id}`
-                      return (
-                        <option key={j.id} value={j.id}>
-                          ⚡ Job #{j.id} — {title} ({j.job_type}) [{j.status.toUpperCase()}]
-                        </option>
-                      )
-                    })}
-                  </optgroup>
-                )}
-                
-                <optgroup label="⚪ Recent Completed Jobs">
-                  {completedJobs.slice(0, 30).map(j => {
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-gray-100 dark:bg-gray-700/60 uppercase text-[10px] font-bold tracking-wider text-gray-600 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                  <tr>
+                    <th className="px-4 py-3">Job ID & Type</th>
+                    <th className="px-4 py-3">Target / Title</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3 min-w-[220px]">Live Progress</th>
+                    <th className="px-4 py-3">Created</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700/60 font-medium">
+                  {jobs.map((j) => {
+                    const isAdhoc = j.job_type && j.job_type.startsWith('adhoc_')
                     const pl = playlists.find(p => p.id === j.playlist_id)
-                    const title = pl ? pl.title : `Playlist #${j.playlist_id}`
+                    const title = isAdhoc 
+                      ? (j.current_video_title || 'Single Video') 
+                      : (pl ? pl.title : `Playlist #${j.playlist_id}`)
+
                     return (
-                      <option key={j.id} value={j.id}>
-                        Job #{j.id} — {title} ({j.job_type}) [{j.status}]
-                      </option>
+                      <tr 
+                        key={j.id} 
+                        className={`hover:bg-gray-50/70 dark:hover:bg-gray-700/30 transition-colors ${
+                          j.status === 'running' ? 'bg-blue-50/30 dark:bg-blue-950/20' : ''
+                        }`}
+                      >
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono font-bold text-gray-900 dark:text-white">
+                              #{j.id}
+                            </span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                              {j.job_type.replace('adhoc_', 'quick_')}
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-3 max-w-[280px]">
+                          <div className="truncate font-semibold text-gray-900 dark:text-white" title={title}>
+                            {title}
+                          </div>
+                          {isAdhoc && (
+                            <span className="text-[10px] text-indigo-600 dark:text-indigo-400">
+                              Quick Download
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <StatusBadge status={j.status} />
+                        </td>
+
+                        <td className="px-4 py-3">
+                          {j.job_type !== 'extract' ? (
+                            <DualTierProgressBar
+                              itemCompleted={j.download_completed || j.completed_items || 0}
+                              itemTotal={j.download_total || j.total_items || 1}
+                              itemLabel="Download"
+                              batchInfo={j.download_batch_info || undefined}
+                              currentTitle={j.current_video_title || undefined}
+                              bytesDownloaded={j.current_video_bytes_downloaded || undefined}
+                              bytesTotal={j.current_video_bytes_total || undefined}
+                              speed={j.current_video_speed || undefined}
+                              eta={j.current_video_eta || undefined}
+                              variant="blue"
+                            />
+                          ) : (
+                            <ProgressBar
+                              completed={j.extract_completed}
+                              total={j.extract_total}
+                              variant="purple"
+                              height="sm"
+                              showLabel={true}
+                              label="Extraction"
+                            />
+                          )}
+                        </td>
+
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-500 dark:text-gray-400 text-[11px]">
+                          {j.created_at ? new Date(j.created_at).toLocaleTimeString() : '—'}
+                        </td>
+
+                        <td className="px-4 py-3 whitespace-nowrap text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => {
+                                setSelectedJobId(j.id)
+                                setActiveTab('jobs')
+                                if (onSelectJobForLogs) onSelectJobForLogs(j.id)
+                              }}
+                              icon={<Terminal className="w-3.5 h-3.5 text-blue-500" />}
+                              title="View Job Log Output"
+                            >
+                              Logs
+                            </Button>
+
+                            {(j.status === 'running' || j.status === 'pending') && onCancelJob && (
+                              <Button
+                                variant="danger"
+                                size="sm"
+                                onClick={() => onCancelJob(j.id)}
+                                icon={<XCircle className="w-3.5 h-3.5" />}
+                                title="Cancel Job"
+                              >
+                                Cancel
+                              </Button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
                     )
                   })}
-                </optgroup>
-              </select>
+                </tbody>
+              </table>
             </div>
           )}
+        </div>
+      ) : (
+        /* When Logs Tab or System Tab is Active: Controls, Header & Terminal */
+        <>
+          {/* Controls and Selectors Bar */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-5 border border-gray-200 dark:border-gray-700 space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              
+              {/* Sub-selector depending on active tab */}
+              {activeTab === 'system' ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mr-2">
+                    Observability Feed:
+                  </span>
+                  <button
+                    onClick={() => setSystemLogType('server')}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                      systemLogType === 'server'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    <Server className="w-3.5 h-3.5" />
+                    Central Server Logs (Ring Buffer & SSE)
+                  </button>
+
+                  <button
+                    onClick={() => setSystemLogType('browser')}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                      systemLogType === 'browser'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }`}
+                    title="Ephemeral client-side UI and WebSocket notifications recorded during the current browser tab session"
+                  >
+                    <Activity className="w-3.5 h-3.5" />
+                    Browser Session Events ({activityLogs.length})
+                  </button>
+                </div>
+              ) : (
+                <div className="flex-1 max-w-xl">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5 flex items-center gap-1.5">
+                    <Terminal className="w-3.5 h-3.5 text-blue-500" />
+                    Select Job Execution Log:
+                  </label>
+                  <select
+                    value={selectedJobId || ''}
+                    onChange={(e) => setSelectedJobId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                    className="w-full px-3.5 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-semibold text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  >
+                    <option value="" disabled>
+                      {jobs.length === 0 ? '-- No job executions recorded --' : '-- Select a job execution log --'}
+                    </option>
+
+                    {runningJobs.length > 0 && (
+                      <optgroup label="🟢 Active Running Jobs">
+                        {runningJobs.map(j => {
+                          const name = getJobDisplayName(j)
+                          return (
+                            <option key={j.id} value={j.id}>
+                              ⚡ Job #{j.id} — {name} [{j.status.toUpperCase()}]
+                            </option>
+                          )
+                        })}
+                      </optgroup>
+                    )}
+                    
+                    {completedJobs.length > 0 && (
+                      <optgroup label="⚪ Completed & Past Jobs">
+                        {completedJobs.slice(0, 50).map(j => {
+                          const name = getJobDisplayName(j)
+                          return (
+                            <option key={j.id} value={j.id}>
+                              Job #{j.id} — {name} [{j.status}]
+                            </option>
+                          )
+                        })}
+                      </optgroup>
+                    )}
+                  </select>
+                </div>
+              )}
 
           {/* Quick Actions Bar */}
           <div className="flex items-center gap-2 flex-wrap">
@@ -629,6 +805,8 @@ export const LogsPage: React.FC<LogsPageProps> = ({
           )
         )}
       </div>
+        </>
+      )}
     </div>
   )
 }

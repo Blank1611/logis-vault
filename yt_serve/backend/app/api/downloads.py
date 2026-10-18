@@ -58,7 +58,15 @@ class JobResponse(BaseModel):
     started_at: Optional[str]
     completed_at: Optional[str]
     error: Optional[str]
-    
+
+    # In-flight active video stream telemetry
+    current_video_title: Optional[str] = None
+    current_video_id: Optional[str] = None
+    current_video_bytes_downloaded: Optional[int] = None
+    current_video_bytes_total: Optional[int] = None
+    current_video_speed: Optional[float] = None
+    current_video_eta: Optional[int] = None
+
     class Config:
         from_attributes = True
 
@@ -122,7 +130,13 @@ async def list_jobs(
             created_at=job.created_at.isoformat(),
             started_at=job.started_at.isoformat() if job.started_at else None,
             completed_at=job.completed_at.isoformat() if job.completed_at else None,
-            error=job.error
+            error=job.error,
+            current_video_title=job.current_video_title,
+            current_video_id=job.current_video_id,
+            current_video_bytes_downloaded=job.current_video_bytes_downloaded,
+            current_video_bytes_total=job.current_video_bytes_total,
+            current_video_speed=job.current_video_speed,
+            current_video_eta=job.current_video_eta
         ))
     
     return result
@@ -211,7 +225,13 @@ async def create_job(
         created_at=db_job.created_at.isoformat(),
         started_at=db_job.started_at.isoformat() if db_job.started_at else None,
         completed_at=db_job.completed_at.isoformat() if db_job.completed_at else None,
-        error=db_job.error
+        error=db_job.error,
+        current_video_title=db_job.current_video_title,
+        current_video_id=db_job.current_video_id,
+        current_video_bytes_downloaded=db_job.current_video_bytes_downloaded,
+        current_video_bytes_total=db_job.current_video_bytes_total,
+        current_video_speed=db_job.current_video_speed,
+        current_video_eta=db_job.current_video_eta
     )
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
@@ -242,7 +262,13 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
         created_at=job.created_at.isoformat(),
         started_at=job.started_at.isoformat() if job.started_at else None,
         completed_at=job.completed_at.isoformat() if job.completed_at else None,
-        error=job.error
+        error=job.error,
+        current_video_title=job.current_video_title,
+        current_video_id=job.current_video_id,
+        current_video_bytes_downloaded=job.current_video_bytes_downloaded,
+        current_video_bytes_total=job.current_video_bytes_total,
+        current_video_speed=job.current_video_speed,
+        current_video_eta=job.current_video_eta
     )
 
 @router.post("/jobs/{job_id}/cancel")
@@ -539,11 +565,9 @@ async def start_adhoc_download(
 ):
     """
     Start asynchronous ad-hoc single video download and optional audio extraction.
-    Creates a background Job tracked in the shared Job queue.
+    Creates a background Job tracked in the shared Job queue and managed by JobManager.
     """
-    import threading
     from app.repositories import JobRepository
-    from app.services.adhoc_service import execute_adhoc_download
 
     if not req.url or not req.url.strip():
         raise HTTPException(status_code=400, detail="YouTube video URL is required")
@@ -555,20 +579,15 @@ async def start_adhoc_download(
         db=db
     )
 
-    # Launch in background thread
-    thread = threading.Thread(
-        target=execute_adhoc_download,
-        kwargs={
-            "job_id": job.id,
-            "url": req.url.strip(),
-            "video_quality": req.video_quality or "best",
-            "audio_format": req.audio_format or "copy",
-            "extract_mode": req.extract_mode or "both",
-            "custom_download_path": req.custom_download_path,
-        },
-        daemon=True
+    # Launch via JobManager to enforce concurrency semaphore and per-job log writing
+    await job_manager.start_adhoc_job(
+        job_id=job.id,
+        url=req.url.strip(),
+        video_quality=req.video_quality or "best",
+        audio_format=req.audio_format or "copy",
+        extract_mode=req.extract_mode or "both",
+        custom_download_path=req.custom_download_path
     )
-    thread.start()
 
     return {
         "status": "started",

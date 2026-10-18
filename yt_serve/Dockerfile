@@ -40,7 +40,7 @@ CMD ["discover", "tests"]
 # ==============================================================================
 # Stage 3: Build Frontend Assets (React + Vite)
 # ==============================================================================
-FROM node:18-alpine AS frontend-builder
+FROM node:22-slim AS frontend-builder
 LABEL project="logis-vault"
 WORKDIR /app/frontend
 
@@ -60,6 +60,9 @@ COPY backend/ ./
 
 # Copy compiled frontend static assets from frontend-builder stage
 COPY --from=frontend-builder /app/frontend/dist ./static
+
+# Reuse the prebuilt Node.js binary from frontend-builder stage for yt-dlp EJS challenges
+COPY --from=frontend-builder /usr/local/bin/node /usr/local/bin/node
 
 # Create non-root appuser (UID 1000 / GID 1000) and state directories
 RUN groupadd -g 1000 appuser && \

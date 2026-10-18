@@ -4,15 +4,25 @@ import {
   adhocApi, type AdhocProbeResult, type AdhocDownloadParams 
 } from '../../services/api'
 import { Button } from '../ui/Button'
+import type { Job } from '../../services/types'
+import { StatusBadge } from '../ui/StatusBadge'
+import { DualTierProgressBar } from '../ui/ProgressBar'
+import { jobsApi } from '../../services/api'
 import { 
-  Download, Search, Film, Music, Layers, CheckCircle2, AlertCircle, Loader2, Sparkles, Folder, Clock, Eye 
+  Download, Search, Film, Music, Layers, CheckCircle2, AlertCircle, Loader2, Sparkles, Folder, Clock, Eye, Terminal, XCircle
 } from 'lucide-react'
 
 export interface QuickDownloadCardProps {
+  jobs?: Job[]
   onJobStarted?: (jobId: number) => void
+  onViewJobLogs?: (jobId: number) => void
 }
 
-export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({ onJobStarted }) => {
+export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({ 
+  jobs = [], 
+  onJobStarted,
+  onViewJobLogs 
+}) => {
   const queryClient = useQueryClient()
   const [url, setUrl] = useState('')
   const [probeResult, setProbeResult] = useState<AdhocProbeResult | null>(null)
@@ -22,6 +32,7 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({ onJobStart
   const [useCustomPath, setUseCustomPath] = useState(false)
   const [customPath, setCustomPath] = useState('')
   const [successJobId, setSuccessJobId] = useState<number | null>(null)
+  const [cancellingJobId, setCancellingJobId] = useState<number | null>(null)
 
   // 1. Probe Mutation
   const probeMutation = useMutation({
@@ -47,6 +58,25 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({ onJobStart
       }
     },
   })
+
+  // Cancel Job Mutation
+  const handleCancelJob = async (jobId: number) => {
+    try {
+      setCancellingJobId(jobId)
+      await jobsApi.cancel(jobId)
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    } catch (err) {
+      console.error('Failed to cancel job:', err)
+    } finally {
+      setCancellingJobId(null)
+    }
+  }
+
+  // Find active adhoc jobs (or most recent matching successJobId)
+  const activeAdhocJob = jobs.find(j => 
+    (j.id === successJobId || (j.job_type && j.job_type.startsWith('adhoc_'))) && 
+    (j.status === 'running' || j.status === 'pending')
+  ) || (successJobId ? jobs.find(j => j.id === successJobId) : null)
 
   const handleProbe = (e: React.FormEvent) => {
     e.preventDefault()
@@ -247,10 +277,26 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({ onJobStart
                     <option value="best">Best Available (Source Resolution)</option>
                     {probeResult.available_resolutions.map((r, i) => (
                       <option key={i} value={String(r.height)}>
-                        {r.label}
+                        {r.label} {r.badge ? `[${r.badge}]` : ''}
                       </option>
                     ))}
                   </select>
+                  {(() => {
+                    const selected = probeResult.available_resolutions.find(r => String(r.height) === videoQuality)
+                    if (selected && selected.badge) {
+                      return (
+                        <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-500 dark:text-gray-400" title={selected.badge_tooltip}>
+                          <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                            selected.is_direct ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300' : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                          }`}>
+                            {selected.badge}
+                          </span>
+                          <span className="text-[11px]">{selected.badge_tooltip}</span>
+                        </div>
+                      )
+                    }
+                    return null
+                  })()}
                 </div>
               )}
 
@@ -333,8 +379,105 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({ onJobStart
           </div>
         )}
 
-        {/* Success Confirmation Toast */}
-        {successJobId && (
+        {/* Active Download Progress Card */}
+        {activeAdhocJob && (
+          <div className="bg-gradient-to-br from-indigo-50/70 to-blue-50/70 dark:from-indigo-950/30 dark:to-blue-950/30 border border-indigo-200 dark:border-indigo-800 rounded-2xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-sm">
+                  {activeAdhocJob.status === 'running' ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Film className="w-5 h-5" />
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-bold text-gray-900 dark:text-white">
+                      {activeAdhocJob.current_video_title || (probeResult && probeResult.title) || `Quick Download #${activeAdhocJob.id}`}
+                    </h3>
+                    <StatusBadge status={activeAdhocJob.status} />
+                    <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-semibold">
+                      Job #{activeAdhocJob.id}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 flex items-center gap-2">
+                    <span>Format: {activeAdhocJob.job_type.replace('adhoc_', '').toUpperCase()}</span>
+                    {activeAdhocJob.current_video_speed && activeAdhocJob.current_video_speed > 0 && (
+                      <>
+                        <span>•</span>
+                        <span className="font-semibold text-indigo-600 dark:text-indigo-400">
+                          {(activeAdhocJob.current_video_speed / (1024 * 1024)).toFixed(1)} MB/s
+                        </span>
+                      </>
+                    )}
+                    {activeAdhocJob.current_video_eta && activeAdhocJob.current_video_eta > 0 && (
+                      <>
+                        <span>•</span>
+                        <span>ETA: {activeAdhocJob.current_video_eta}s</span>
+                      </>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                {onViewJobLogs && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => onViewJobLogs(activeAdhocJob.id)}
+                    icon={<Terminal className="w-3.5 h-3.5 text-blue-500" />}
+                    title="View real-time job log terminal"
+                  >
+                    View Log
+                  </Button>
+                )}
+
+                {(activeAdhocJob.status === 'running' || activeAdhocJob.status === 'pending') && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => handleCancelJob(activeAdhocJob.id)}
+                    disabled={cancellingJobId === activeAdhocJob.id}
+                    icon={cancellingJobId === activeAdhocJob.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <XCircle className="w-3.5 h-3.5" />
+                    )}
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {/* Live Dual-Tier Progress Bar */}
+            <div className="bg-white dark:bg-gray-800 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
+              <DualTierProgressBar
+                itemCompleted={activeAdhocJob.completed_items || 0}
+                itemTotal={activeAdhocJob.total_items || 1}
+                itemLabel="Quick Download"
+                currentTitle={activeAdhocJob.current_video_title || undefined}
+                bytesDownloaded={activeAdhocJob.current_video_bytes_downloaded || undefined}
+                bytesTotal={activeAdhocJob.current_video_bytes_total || undefined}
+                speed={activeAdhocJob.current_video_speed || undefined}
+                eta={activeAdhocJob.current_video_eta || undefined}
+                variant="blue"
+              />
+            </div>
+
+            {activeAdhocJob.error && (
+              <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl text-xs text-rose-700 dark:text-rose-300">
+                <strong>Error:</strong> {activeAdhocJob.error}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Success Confirmation Toast when no active job is selected */}
+        {!activeAdhocJob && successJobId && (
           <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-700 rounded-xl flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5 text-xs text-emerald-900 dark:text-emerald-200">
               <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
@@ -343,6 +486,16 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({ onJobStart
                 <p>Track progress live in the background job queue or Activity Logs tab.</p>
               </div>
             </div>
+            {onViewJobLogs && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => onViewJobLogs(successJobId)}
+                icon={<Terminal className="w-3.5 h-3.5 text-blue-500" />}
+              >
+                View Log
+              </Button>
+            )}
           </div>
         )}
       </div>

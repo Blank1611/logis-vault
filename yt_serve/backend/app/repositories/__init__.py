@@ -5,10 +5,12 @@ from app.repositories.playlist_repo import PlaylistRepository
 from app.repositories.track_repo import TrackRepository
 from app.repositories.job_repo import JobRepository
 from app.repositories.system_setting_repo import SystemSettingRepository
+from app.repositories.profile_repo import QualityProfileRepository
 
 __all__ = [
     "PlaylistRepository",
     "TrackRepository",
     "JobRepository",
     "SystemSettingRepository",
+    "QualityProfileRepository",
 ]

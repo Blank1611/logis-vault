@@ -23,6 +23,7 @@ class PlaylistCreate(BaseModel):
     """Playlist creation model"""
     url: HttpUrl
     title: Optional[str] = None
+    quality_profile_id: Optional[str] = "standard_1080p"
 
 class PlaylistResponse(BaseModel):
     """Playlist response model"""
@@ -35,6 +36,7 @@ class PlaylistResponse(BaseModel):
     last_download: Optional[str]
     last_extract: Optional[str]
     excluded_ids: List[str]
+    quality_profile_id: Optional[str] = "standard_1080p"
     
     class Config:
         from_attributes = True
@@ -43,6 +45,7 @@ class PlaylistUpdate(BaseModel):
     """Playlist update model"""
     title: Optional[str] = None
     excluded_ids: Optional[List[str]] = None
+    quality_profile_id: Optional[str] = None
 
 def get_download_service() -> DownloadService:
     """Get download service instance"""
@@ -108,7 +111,8 @@ async def list_playlists(db: Session = Depends(get_db)):
             unavailable_count=p.unavailable_count,
             last_download=p.last_download.isoformat() if p.last_download else None,
             last_extract=p.last_extract.isoformat() if p.last_extract else None,
-            excluded_ids=p.excluded_ids or []
+            excluded_ids=p.excluded_ids or [],
+            quality_profile_id=getattr(p, "quality_profile_id", "standard_1080p") or "standard_1080p"
         ))
     
     return result
@@ -141,10 +145,12 @@ async def create_playlist(
         raise HTTPException(status_code=400, detail=f"Could not fetch playlist info: {str(e)}")
     
     # Create playlist
+    profile_id = playlist.quality_profile_id or "standard_1080p"
     db_playlist = Playlist(
         url=str(playlist.url),
         title=title,
-        excluded_ids=[]
+        excluded_ids=[],
+        quality_profile_id=profile_id
     )
     db.add(db_playlist)
     db.commit()
@@ -162,7 +168,8 @@ async def create_playlist(
         unavailable_count=0,
         last_download=None,
         last_extract=None,
-        excluded_ids=[]
+        excluded_ids=[],
+        quality_profile_id=db_playlist.quality_profile_id or "standard_1080p"
     )
 
 @router.get("/active-refreshes", response_model=List[int])
@@ -187,7 +194,8 @@ async def get_playlist(playlist_id: int, db: Session = Depends(get_db)):
         unavailable_count=playlist.unavailable_count,
         last_download=playlist.last_download.isoformat() if playlist.last_download else None,
         last_extract=playlist.last_extract.isoformat() if playlist.last_extract else None,
-        excluded_ids=playlist.excluded_ids or []
+        excluded_ids=playlist.excluded_ids or [],
+        quality_profile_id=getattr(playlist, "quality_profile_id", "standard_1080p") or "standard_1080p"
     )
 
 @router.put("/{playlist_id}", response_model=PlaylistResponse)
@@ -206,6 +214,8 @@ async def update_playlist(
         db_playlist.title = playlist.title
     if playlist.excluded_ids is not None:
         db_playlist.excluded_ids = playlist.excluded_ids
+    if playlist.quality_profile_id is not None:
+        db_playlist.quality_profile_id = playlist.quality_profile_id
     
     db_playlist.updated_at = datetime.utcnow()
     db.commit()
@@ -220,7 +230,8 @@ async def update_playlist(
         unavailable_count=db_playlist.unavailable_count,
         last_download=db_playlist.last_download.isoformat() if db_playlist.last_download else None,
         last_extract=db_playlist.last_extract.isoformat() if db_playlist.last_extract else None,
-        excluded_ids=db_playlist.excluded_ids or []
+        excluded_ids=db_playlist.excluded_ids or [],
+        quality_profile_id=getattr(db_playlist, "quality_profile_id", "standard_1080p") or "standard_1080p"
     )
 
 @router.delete("/{playlist_id}", status_code=204)
@@ -341,6 +352,423 @@ async def get_playlist_video_info(playlist_id: int, db: Session = Depends(get_db
                             'is_unavailable': is_unavail,
                         }
         except Exception as e:
-            logger.error(f"Error reading playlist info from {latest_file}: {e}")
-    
+            pass
     return video_info
+
+
+# =========================================================================
+# Track Quality & Upgrades Endpoints
+# =========================================================================
+
+class TrackUpgradeRequest(BaseModel):
+    target_resolution: int
+    delete_older: bool = False
+
+
+class AudioUpgradeRequest(BaseModel):
+    audio_format: str = "mp3_320"
+
+
+class SetPrimaryRequest(BaseModel):
+    resolution: str
+
+
+def _find_track_versions(playlist_folder: str, video_id: str) -> List[Dict[str, Any]]:
+    """Scan playlist directory for all video copies matching video_id"""
+    import re
+    versions = []
+    if not os.path.isdir(playlist_folder):
+        return versions
+    for fname in os.listdir(playlist_folder):
+        if f"[{video_id}]" in fname and fname.lower().endswith((".mp4", ".mkv", ".webm")):
+            fpath = os.path.join(playlist_folder, fname)
+            if os.path.isfile(fpath):
+                size = os.path.getsize(fpath)
+                res_match = re.search(r"\[(\d{3,4}p)\]", fname)
+                res = res_match.group(1) if res_match else "unknown"
+                versions.append({
+                    "resolution": res,
+                    "filename": fname,
+                    "filepath": fpath,
+                    "size_bytes": size
+                })
+    return versions
+
+
+@router.get("/{playlist_id}/tracks")
+async def get_playlist_tracks(playlist_id: int, db: Session = Depends(get_db)):
+    """Fetch all tracks belonging to this playlist with resolutions, specs, and file sizes"""
+    from app.models.database import Track
+    from app.services.ytdlp_service import ytdlp_service
+    import os
+
+    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    tracks = db.query(Track).all()
+    playlist_folder = ytdlp_service.resolve_playlist_folder(playlist.title)
+
+    result = []
+    for t in tracks:
+        pl_ids = list(t.playlists_json or [])
+        if playlist_id in pl_ids:
+            disk_versions = _find_track_versions(playlist_folder, t.video_id)
+            v_size = os.path.getsize(t.primary_filepath) if (t.primary_filepath and os.path.isfile(t.primary_filepath)) else 0
+            a_size = os.path.getsize(t.primary_audio_filepath) if (t.primary_audio_filepath and os.path.isfile(t.primary_audio_filepath)) else 0
+
+            # Merge known resolutions
+            known_resolutions = list(t.downloaded_resolutions_json or [])
+            for dv in disk_versions:
+                if dv["resolution"] != "unknown" and dv["resolution"] not in known_resolutions:
+                    known_resolutions.append(dv["resolution"])
+
+            result.append({
+                "video_id": t.video_id,
+                "title": t.title,
+                "artist": t.artist,
+                "duration": t.duration,
+                "primary_filepath": t.primary_filepath,
+                "primary_audio_filepath": t.primary_audio_filepath,
+                "primary_resolution": t.primary_resolution,
+                "downloaded_resolutions": known_resolutions,
+                "downloaded_fps": t.downloaded_fps,
+                "downloaded_audio_codec": t.downloaded_audio_codec,
+                "downloaded_audio_bitrate": t.downloaded_audio_bitrate,
+                "available_resolutions": t.available_resolutions_json or [],
+                "highest_available_resolution": t.highest_available_resolution,
+                "resolutions_last_checked": t.resolutions_last_checked.isoformat() if t.resolutions_last_checked else None,
+                "video_size_bytes": v_size,
+                "audio_size_bytes": a_size,
+                "is_hardlinked": t.is_hardlinked,
+                "disk_versions": disk_versions,
+            })
+
+    return result
+
+
+@router.post("/{playlist_id}/tracks/refresh-resolutions")
+async def refresh_tracks_resolutions(playlist_id: int, db: Session = Depends(get_db)):
+    """On-demand probe of YouTube available video resolutions for tracks in this playlist"""
+    from app.models.database import Track
+    from app.services.adhoc_service import probe_video_info
+
+    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    tracks = db.query(Track).all()
+    probed_count = 0
+
+    for t in tracks:
+        pl_ids = list(t.playlists_json or [])
+        if playlist_id in pl_ids:
+            try:
+                info = probe_video_info(f"https://www.youtube.com/watch?v={t.video_id}")
+                if info.get("status") == "success" and info.get("available_resolutions"):
+                    t.available_resolutions_json = info["available_resolutions"]
+                    t.resolutions_last_checked = datetime.utcnow()
+                    probed_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to refresh resolutions for {t.video_id}: {e}")
+
+    db.commit()
+    return {"message": f"Refreshed available resolutions for {probed_count} tracks", "playlist_id": playlist_id}
+
+
+@router.post("/{playlist_id}/tracks/{video_id}/upgrade")
+async def upgrade_track_resolution(
+    playlist_id: int,
+    video_id: str,
+    payload: TrackUpgradeRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Method B Track Upgrade:
+    Downloads the targeted resolution with verified bracket naming [1080p].
+    Retains older copy by default for verification; deletes if delete_older=True.
+    """
+    import yt_dlp
+    from app.models.database import Track
+    from app.services.ytdlp_service import ytdlp_service
+    from app.utils.ytdlp_opts import build_ytdlp_options
+    from app.core.track_indexer import probe_local_media_metadata
+
+    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    track = db.query(Track).filter(Track.video_id == video_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    playlist_folder = ytdlp_service.resolve_playlist_folder(playlist.title)
+    os.makedirs(playlist_folder, exist_ok=True)
+
+    target_res = payload.target_resolution
+    outtmpl = os.path.join(playlist_folder, f"%(title)s [%(id)s] [{target_res}p].%(ext)s")
+    format_selector = f"bestvideo[height<={target_res}]+bestaudio/best[height<={target_res}]/best"
+
+    ydl_opts = build_ytdlp_options(
+        mode="download",
+        playlist_folder=playlist_folder,
+        extra_opts={
+            "format": format_selector,
+            "outtmpl": outtmpl,
+            "merge_output_format": "mp4",
+            "noplaylist": True,
+        }
+    )
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            info = ydl.extract_info(video_url, download=True)
+            if not info:
+                raise ValueError("Could not extract or download upgraded stream from YouTube.")
+
+            upgraded_filepath = ydl.prepare_filename(info)
+            if not os.path.isfile(upgraded_filepath):
+                # Check mp4 fallback
+                base, _ = os.path.splitext(upgraded_filepath)
+                if os.path.isfile(f"{base}.mp4"):
+                    upgraded_filepath = f"{base}.mp4"
+
+            # Verify local media metadata with ffprobe
+            media_meta = probe_local_media_metadata(upgraded_filepath, track.primary_audio_filepath or "")
+
+            # Update downloaded resolutions
+            res_str = f"{target_res}p"
+            current_res = list(track.downloaded_resolutions_json or [])
+            if res_str not in current_res:
+                current_res.append(res_str)
+
+            # Delete older versions if requested
+            if payload.delete_older:
+                for fname in os.listdir(playlist_folder):
+                    if f"[{video_id}]" in fname and fname.lower().endswith((".mp4", ".mkv", ".webm")):
+                        fpath = os.path.join(playlist_folder, fname)
+                        if fpath != upgraded_filepath and os.path.isfile(fpath):
+                            try:
+                                os.remove(fpath)
+                            except Exception as ex:
+                                logger.warning(f"Could not delete older copy {fpath}: {ex}")
+                current_res = [res_str]
+
+            track.downloaded_resolutions_json = current_res
+            track.primary_filepath = upgraded_filepath
+            if media_meta.get("fps"):
+                track.downloaded_fps = media_meta["fps"]
+            track.updated_at = datetime.utcnow()
+
+            db.commit()
+            db.refresh(track)
+
+            return {
+                "status": "success",
+                "video_id": video_id,
+                "resolution": res_str,
+                "primary_filepath": upgraded_filepath,
+                "downloaded_resolutions": track.downloaded_resolutions_json,
+                "fps": track.downloaded_fps,
+            }
+
+    except Exception as e:
+        logger.error(f"Upgrade failed for {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Upgrade failed: {str(e)}")
+
+
+@router.post("/{playlist_id}/tracks/{video_id}/upgrade-audio")
+async def upgrade_track_audio(
+    playlist_id: int,
+    video_id: str,
+    payload: AudioUpgradeRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Upgrade track audio:
+    If local video exists, extract directly (0 network usage).
+    Otherwise, download standalone Format 251 Opus / MP3 from YouTube.
+    """
+    import subprocess
+    import yt_dlp
+    from app.models.database import Track
+    from app.services.ytdlp_service import ytdlp_service
+    from app.utils.ytdlp_opts import build_ytdlp_options
+    from app.core.track_indexer import probe_local_media_metadata
+
+    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    track = db.query(Track).filter(Track.video_id == video_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    playlist_folder = ytdlp_service.resolve_playlist_folder(playlist.title)
+    audio_folder = os.path.join(playlist_folder, "audio")
+    os.makedirs(audio_folder, exist_ok=True)
+
+    fmt = payload.audio_format
+    ext = "mp3" if "mp3" in fmt else ("opus" if "opus" in fmt else "m4a")
+
+    # If local video file exists, extract directly without downloading!
+    if track.primary_filepath and os.path.isfile(track.primary_filepath):
+        safe_title = os.path.splitext(os.path.basename(track.primary_filepath))[0]
+        # Remove any resolution bracket from audio filename
+        import re
+        safe_title = re.sub(r"\s*\[\d{3,4}p\]", "", safe_title)
+        target_audio = os.path.join(audio_folder, f"{safe_title}.{ext}")
+
+        bitrate = "320k" if "320" in fmt else ("160k" if "160" in fmt else "256k")
+        cmd = ["ffmpeg", "-y", "-i", track.primary_filepath, "-vn", "-b:a", bitrate, target_audio]
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if res.returncode == 0 and os.path.isfile(target_audio):
+            meta = probe_local_media_metadata(track.primary_filepath, target_audio)
+            track.primary_audio_filepath = target_audio
+            track.downloaded_audio_codec = meta.get("audio_codec") or ext
+            track.downloaded_audio_bitrate = meta.get("audio_bitrate") or bitrate
+            track.updated_at = datetime.utcnow()
+            db.commit()
+            return {
+                "status": "success",
+                "source": "local_extraction",
+                "audio_filepath": target_audio,
+                "codec": track.downloaded_audio_codec,
+                "bitrate": track.downloaded_audio_bitrate
+            }
+
+    # Otherwise fetch Format 251 Opus from YouTube
+    outtmpl = os.path.join(audio_folder, f"%(title)s [%(id)s].%(ext)s")
+    codec = "mp3" if "mp3" in fmt else ("opus" if "opus" in fmt else "m4a")
+    ydl_opts = build_ytdlp_options(
+        mode="extract",
+        playlist_folder=audio_folder,
+        extra_opts={
+            "format": "bestaudio/best",
+            "outtmpl": outtmpl,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": codec,
+                "preferredquality": "320" if "320" in fmt else "160",
+            }]
+        }
+    )
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            info = ydl.extract_info(video_url, download=True)
+            downloaded = ydl.prepare_filename(info)
+            base, _ = os.path.splitext(downloaded)
+            final_audio = f"{base}.{codec}" if os.path.isfile(f"{base}.{codec}") else downloaded
+
+            meta = probe_local_media_metadata(track.primary_filepath or "", final_audio)
+            track.primary_audio_filepath = final_audio
+            track.downloaded_audio_codec = meta.get("audio_codec") or codec
+            track.downloaded_audio_bitrate = meta.get("audio_bitrate") or "320k"
+            track.updated_at = datetime.utcnow()
+            db.commit()
+
+            return {
+                "status": "success",
+                "source": "youtube_download",
+                "audio_filepath": final_audio,
+                "codec": track.downloaded_audio_codec,
+                "bitrate": track.downloaded_audio_bitrate
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Audio upgrade failed: {str(e)}")
+
+
+@router.post("/{playlist_id}/tracks/{video_id}/set-primary")
+async def set_primary_track_version(
+    playlist_id: int,
+    video_id: str,
+    payload: SetPrimaryRequest,
+    db: Session = Depends(get_db)
+):
+    """Set a specific resolution file as the primary copy"""
+    from app.models.database import Track
+    from app.services.ytdlp_service import ytdlp_service
+
+    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    track = db.query(Track).filter(Track.video_id == video_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    playlist_folder = ytdlp_service.resolve_playlist_folder(playlist.title)
+    target_res = payload.resolution.lower()
+
+    # Search for file matching resolution
+    found_path = None
+    for fname in os.listdir(playlist_folder):
+        if f"[{video_id}]" in fname and f"[{target_res}]" in fname.lower():
+            found_path = os.path.join(playlist_folder, fname)
+            break
+
+    if not found_path or not os.path.isfile(found_path):
+        raise HTTPException(status_code=404, detail=f"No local file found with resolution '{target_res}'")
+
+    track.primary_filepath = found_path
+    track.updated_at = datetime.utcnow()
+    db.commit()
+
+    return {"status": "success", "primary_filepath": found_path, "primary_resolution": track.primary_resolution}
+
+
+@router.delete("/{playlist_id}/tracks/{video_id}/versions/{resolution}")
+async def delete_track_version(
+    playlist_id: int,
+    video_id: str,
+    resolution: str,
+    db: Session = Depends(get_db)
+):
+    """Delete a specific resolution file for a track"""
+    from app.models.database import Track
+    from app.services.ytdlp_service import ytdlp_service
+
+    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    track = db.query(Track).filter(Track.video_id == video_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    playlist_folder = ytdlp_service.resolve_playlist_folder(playlist.title)
+    target_res = resolution.lower()
+
+    # Find file matching resolution
+    deleted = False
+    for fname in os.listdir(playlist_folder):
+        if f"[{video_id}]" in fname and f"[{target_res}]" in fname.lower():
+            fpath = os.path.join(playlist_folder, fname)
+            if os.path.isfile(fpath):
+                os.remove(fpath)
+                deleted = True
+
+    # Update downloaded resolutions
+    current_res = [r for r in (track.downloaded_resolutions_json or []) if r.lower() != target_res]
+    track.downloaded_resolutions_json = current_res
+
+    # If deleted copy was primary, reassign primary to highest remaining version
+    remaining_versions = _find_track_versions(playlist_folder, video_id)
+    if remaining_versions:
+        track.primary_filepath = remaining_versions[0]["filepath"]
+    else:
+        track.primary_filepath = ""
+
+    track.updated_at = datetime.utcnow()
+    db.commit()
+
+    return {
+        "status": "success",
+        "deleted": deleted,
+        "remaining_resolutions": track.downloaded_resolutions_json,
+        "primary_filepath": track.primary_filepath
+    }
+

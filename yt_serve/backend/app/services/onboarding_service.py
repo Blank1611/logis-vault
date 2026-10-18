@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.database import SessionLocal, Playlist, Track
-from app.core.track_indexer import index_track
+from app.core.track_indexer import index_track, backfill_all_local_tracks_metadata
 from app.core.logging_engine import get_logger
 
 logger = get_logger("app.services.onboarding_service")
@@ -360,6 +360,11 @@ def ingest_discovered_library(
                 )
                 indexed_ids.add(vid)
                 tracks_indexed_count += 1
+
+        try:
+            backfill_all_local_tracks_metadata(session)
+        except Exception as bf_err:
+            logger.debug(f"Media metadata backfill notice: {bf_err}")
 
         logger.info(f"Onboarding complete: {imported_count} playlists imported, {skipped_count} existing, {tracks_indexed_count} tracks indexed.")
 

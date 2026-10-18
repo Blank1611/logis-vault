@@ -304,7 +304,7 @@ function AppContent() {
           <main className="w-full max-w-[min(94vw,1920px)] mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <SchedulerBanner schedulerStatus={schedulerStatus} />
 
-            {activeTab === 'playlists' && (
+            <div className={activeTab === 'playlists' ? 'block' : 'hidden'}>
               <PlaylistsPage
                 playlists={playlists}
                 jobs={jobs}
@@ -328,24 +328,29 @@ function AppContent() {
                 cancellingJobId={cancellingJobId}
                 openFolderPlaylistId={openFolderPlaylistId}
               />
-            )}
+            </div>
 
-            {activeTab === 'quick-download' && (
-              <div className="space-y-6">
-                <QuickDownloadCard onJobStarted={() => {
+            <div className={activeTab === 'quick-download' ? 'block space-y-6' : 'hidden'}>
+              <QuickDownloadCard 
+                jobs={jobs}
+                onJobStarted={() => {
                   // Stay on page and let user see active progress
-                }} />
-              </div>
-            )}
+                }} 
+                onViewJobLogs={() => {
+                  setActiveTab('logs')
+                }}
+              />
+            </div>
 
-            {activeTab === 'logs' && (
+            <div className={activeTab === 'logs' ? 'block' : 'hidden'}>
               <LogsPage
                 jobs={jobs}
                 playlists={playlists}
                 activityLogs={activityLogs}
                 onClearActivity={() => setActivityLogs([])}
+                onCancelJob={(jobId) => cancelJob.mutate(jobId)}
               />
-            )}
+            </div>
           </main>
         </>
       )}

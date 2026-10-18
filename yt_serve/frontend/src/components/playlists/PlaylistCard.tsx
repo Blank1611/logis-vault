@@ -47,15 +47,20 @@ export const PlaylistCard: React.FC<PlaylistCardProps> = ({
             <h3 className="text-lg font-bold text-gray-900 dark:text-white line-clamp-2" title={playlist.title}>
               {playlist.title}
             </h3>
-            <a
-              href={playlist.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1 mt-1"
-            >
-              View on YouTube
-              <ExternalLink className="w-3 h-3" />
-            </a>
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
+              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                {playlist.quality_profile_id ? playlist.quality_profile_id.replace(/_/g, ' ').toUpperCase() : 'STANDARD 1080P'}
+              </span>
+              <a
+                href={playlist.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
+              >
+                View on YouTube
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
           </div>
 
           {/* Open Folder Button */}
