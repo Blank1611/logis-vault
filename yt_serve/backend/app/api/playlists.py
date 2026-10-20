@@ -9,7 +9,8 @@ from datetime import datetime
 import os
 import threading
 
-from app.models.database import get_db, Playlist
+from app.models.database import get_db, Playlist, Track
+from app.repositories import PlaylistRepository, TrackRepository
 from app.services.ytdlp_service import DownloadService
 from app.core.config import settings
 
@@ -64,7 +65,7 @@ async def refresh_playlist_stats_task(playlist_id: int):
     db = SessionLocal()
     
     try:
-        playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+        playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
         if not playlist:
             return
         
@@ -77,11 +78,13 @@ async def refresh_playlist_stats_task(playlist_id: int):
             force_refresh=True
         )
         
-        playlist.local_count = local_count
-        playlist.playlist_count = available_count
-        playlist.unavailable_count = unavailable_count
-        playlist.updated_at = datetime.utcnow()
-        db.commit()
+        PlaylistRepository.update_counts(
+            playlist_id=playlist.id,
+            local_count=local_count,
+            playlist_count=available_count,
+            unavailable_count=unavailable_count,
+            db=db
+        )
 
         # Notify connected frontend clients via WebSocket
         try:
@@ -132,7 +135,7 @@ async def create_playlist(
 ):
     """Add a new playlist"""
     # Check if playlist already exists
-    existing = db.query(Playlist).filter(Playlist.url == str(playlist.url)).first()
+    existing = PlaylistRepository.get_by_url(str(playlist.url), db=db)
     if existing:
         raise HTTPException(status_code=400, detail="Playlist already exists")
     
@@ -144,17 +147,14 @@ async def create_playlist(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not fetch playlist info: {str(e)}")
     
-    # Create playlist
+    # Create playlist via repository with atomic commit
     profile_id = playlist.quality_profile_id or "standard_1080p"
-    db_playlist = Playlist(
+    db_playlist = PlaylistRepository.create(
         url=str(playlist.url),
         title=title,
-        excluded_ids=[],
-        quality_profile_id=profile_id
+        quality_profile_id=profile_id,
+        db=db
     )
-    db.add(db_playlist)
-    db.commit()
-    db.refresh(db_playlist)
     
     # Fetch stats in background
     background_tasks.add_task(refresh_playlist_stats_task, db_playlist.id)
@@ -181,7 +181,7 @@ async def get_active_refreshes():
 @router.get("/{playlist_id}", response_model=PlaylistResponse)
 async def get_playlist(playlist_id: int, db: Session = Depends(get_db)):
     """Get playlist by ID"""
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
@@ -204,22 +204,16 @@ async def update_playlist(
     playlist: PlaylistUpdate,
     db: Session = Depends(get_db)
 ):
-    """Update playlist"""
-    db_playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    """Update playlist via repository with atomic commit"""
+    db_playlist = PlaylistRepository.update(
+        playlist_id=playlist_id,
+        title=playlist.title,
+        quality_profile_id=playlist.quality_profile_id,
+        excluded_ids=playlist.excluded_ids,
+        db=db
+    )
     if not db_playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    
-    # Update fields
-    if playlist.title is not None:
-        db_playlist.title = playlist.title
-    if playlist.excluded_ids is not None:
-        db_playlist.excluded_ids = playlist.excluded_ids
-    if playlist.quality_profile_id is not None:
-        db_playlist.quality_profile_id = playlist.quality_profile_id
-    
-    db_playlist.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(db_playlist)
     
     return PlaylistResponse(
         id=db_playlist.id,
@@ -236,13 +230,10 @@ async def update_playlist(
 
 @router.delete("/{playlist_id}", status_code=204)
 async def delete_playlist(playlist_id: int, db: Session = Depends(get_db)):
-    """Delete playlist"""
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
-    if not playlist:
+    """Delete playlist via repository with atomic commit"""
+    success = PlaylistRepository.delete(playlist_id, db=db)
+    if not success:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    
-    db.delete(playlist)
-    db.commit()
     return None
 
 @router.post("/{playlist_id}/refresh")
@@ -466,13 +457,11 @@ async def refresh_tracks_resolutions(playlist_id: int, db: Session = Depends(get
             try:
                 info = probe_video_info(f"https://www.youtube.com/watch?v={t.video_id}")
                 if info.get("status") == "success" and info.get("available_resolutions"):
-                    t.available_resolutions_json = info["available_resolutions"]
-                    t.resolutions_last_checked = datetime.utcnow()
+                    TrackRepository.set_available_resolutions(t.video_id, info["available_resolutions"], db=db)
                     probed_count += 1
             except Exception as e:
                 logger.warning(f"Failed to refresh resolutions for {t.video_id}: {e}")
 
-    db.commit()
     return {"message": f"Refreshed available resolutions for {probed_count} tracks", "playlist_id": playlist_id}
 
 
@@ -555,14 +544,13 @@ async def upgrade_track_resolution(
                                 logger.warning(f"Could not delete older copy {fpath}: {ex}")
                 current_res = [res_str]
 
-            track.downloaded_resolutions_json = current_res
-            track.primary_filepath = upgraded_filepath
-            if media_meta.get("fps"):
-                track.downloaded_fps = media_meta["fps"]
-            track.updated_at = datetime.utcnow()
-
-            db.commit()
-            db.refresh(track)
+            track = TrackRepository.update_resolutions_metadata(
+                video_id=video_id,
+                primary_filepath=upgraded_filepath,
+                downloaded_resolutions=current_res,
+                downloaded_fps=media_meta.get("fps"),
+                db=db
+            )
 
             return {
                 "status": "success",
@@ -625,11 +613,13 @@ async def upgrade_track_audio(
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if res.returncode == 0 and os.path.isfile(target_audio):
             meta = probe_local_media_metadata(track.primary_filepath, target_audio)
-            track.primary_audio_filepath = target_audio
-            track.downloaded_audio_codec = meta.get("audio_codec") or ext
-            track.downloaded_audio_bitrate = meta.get("audio_bitrate") or bitrate
-            track.updated_at = datetime.utcnow()
-            db.commit()
+            track = TrackRepository.update_audio_metadata(
+                video_id=video_id,
+                audio_filepath=target_audio,
+                codec=meta.get("audio_codec") or ext,
+                bitrate=meta.get("audio_bitrate") or bitrate,
+                db=db
+            )
             return {
                 "status": "success",
                 "source": "local_extraction",
@@ -664,11 +654,13 @@ async def upgrade_track_audio(
             final_audio = f"{base}.{codec}" if os.path.isfile(f"{base}.{codec}") else downloaded
 
             meta = probe_local_media_metadata(track.primary_filepath or "", final_audio)
-            track.primary_audio_filepath = final_audio
-            track.downloaded_audio_codec = meta.get("audio_codec") or codec
-            track.downloaded_audio_bitrate = meta.get("audio_bitrate") or "320k"
-            track.updated_at = datetime.utcnow()
-            db.commit()
+            track = TrackRepository.update_audio_metadata(
+                video_id=video_id,
+                audio_filepath=final_audio,
+                codec=meta.get("audio_codec") or codec,
+                bitrate=meta.get("audio_bitrate") or "320k",
+                db=db
+            )
 
             return {
                 "status": "success",
@@ -713,9 +705,11 @@ async def set_primary_track_version(
     if not found_path or not os.path.isfile(found_path):
         raise HTTPException(status_code=404, detail=f"No local file found with resolution '{target_res}'")
 
-    track.primary_filepath = found_path
-    track.updated_at = datetime.utcnow()
-    db.commit()
+    track = TrackRepository.update_resolutions_metadata(
+        video_id=video_id,
+        primary_filepath=found_path,
+        db=db
+    )
 
     return {"status": "success", "primary_filepath": found_path, "primary_resolution": track.primary_resolution}
 
@@ -731,11 +725,11 @@ async def delete_track_version(
     from app.models.database import Track
     from app.services.ytdlp_service import ytdlp_service
 
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
-    track = db.query(Track).filter(Track.video_id == video_id).first()
+    track = TrackRepository.get_by_video_id(video_id, db=db)
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 
@@ -753,17 +747,17 @@ async def delete_track_version(
 
     # Update downloaded resolutions
     current_res = [r for r in (track.downloaded_resolutions_json or []) if r.lower() != target_res]
-    track.downloaded_resolutions_json = current_res
 
     # If deleted copy was primary, reassign primary to highest remaining version
     remaining_versions = _find_track_versions(playlist_folder, video_id)
-    if remaining_versions:
-        track.primary_filepath = remaining_versions[0]["filepath"]
-    else:
-        track.primary_filepath = ""
+    new_primary = remaining_versions[0]["filepath"] if remaining_versions else ""
 
-    track.updated_at = datetime.utcnow()
-    db.commit()
+    track = TrackRepository.update_resolutions_metadata(
+        video_id=video_id,
+        primary_filepath=new_primary,
+        downloaded_resolutions=current_res,
+        db=db
+    )
 
     return {
         "status": "success",

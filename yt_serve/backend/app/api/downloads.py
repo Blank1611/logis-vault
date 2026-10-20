@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from app.models.database import get_db, Job, Playlist
+from app.repositories import JobRepository, PlaylistRepository
 from app.services.job_manager import job_manager
 from app.services.ytdlp_service import DownloadService
 from app.api.websocket import manager as ws_manager
@@ -396,7 +397,7 @@ async def handle_interrupted_jobs(
     - cancel_all: Cancel all interrupted jobs
     - individual: Handle each job based on decision map
     """
-    interrupted_jobs = db.query(Job).filter(Job.status == 'running').all()
+    interrupted_jobs = JobRepository.get_interrupted(db=db)
     
     if not interrupted_jobs:
         return JobRecoveryResponse(
@@ -416,25 +417,18 @@ async def handle_interrupted_jobs(
         # Resume all interrupted jobs
         for job in interrupted_jobs:
             try:
-                job.status = 'pending'
-                job.error = None
-                db.commit()
-                
+                JobRepository.update_status(job.id, status='pending', error=None, db=db)
                 # Start the job in background using singleton job_manager
                 await job_manager.start_job(job.id)
                 resumed_count += 1
             except Exception as e:
-                job.status = 'failed'
-                job.error = f"Failed to resume: {str(e)}"
-                db.commit()
+                JobRepository.update_status(job.id, status='failed', error=f"Failed to resume: {str(e)}", db=db)
     
     elif request.action == 'cancel_all':
         # Cancel all interrupted jobs
         for job in interrupted_jobs:
-            job.status = 'cancelled'
-            job.error = 'Cancelled by user during startup'
+            JobRepository.update_status(job.id, status='cancelled', error='Cancelled by user during startup', db=db)
             cancelled_count += 1
-        db.commit()
     
     elif request.action == 'individual' and request.job_decisions:
         # Handle each job individually based on user decisions
@@ -443,22 +437,15 @@ async def handle_interrupted_jobs(
             
             if decision == 'resume':
                 try:
-                    job.status = 'pending'
-                    job.error = None
-                    db.commit()
+                    JobRepository.update_status(job.id, status='pending', error=None, db=db)
                     await job_manager.start_job(job.id)
                     resumed_count += 1
                 except Exception as e:
-                    job.status = 'failed'
-                    job.error = f"Failed to resume: {str(e)}"
-                    db.commit()
+                    JobRepository.update_status(job.id, status='failed', error=f"Failed to resume: {str(e)}", db=db)
             
             elif decision == 'cancel':
-                job.status = 'cancelled'
-                job.error = 'Cancelled by user during startup'
+                JobRepository.update_status(job.id, status='cancelled', error='Cancelled by user during startup', db=db)
                 cancelled_count += 1
-        
-        db.commit()
     
     else:
         raise HTTPException(

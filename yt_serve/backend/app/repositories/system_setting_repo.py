@@ -33,7 +33,7 @@ class SystemSettingRepository:
                 else:
                     setting = SystemSetting(key=key, value=str(value), updated_at=datetime.utcnow())
                     session.add(setting)
-                session.flush()
+                session.commit()
                 session.refresh(setting)
                 return setting
         except Exception as e:

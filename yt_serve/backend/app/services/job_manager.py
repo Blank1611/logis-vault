@@ -10,6 +10,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.models.database import Job, Playlist
+from app.repositories import JobRepository, PlaylistRepository
 from app.services.ytdlp_service import DownloadService
 from app.core.config import settings
 from app.core.cancellation import CancellationToken
@@ -130,26 +131,18 @@ class JobManager:
         """
         Create and start a download job
         """
-        playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+        playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
         if not playlist:
             raise ValueError(f"Playlist {playlist_id} not found")
         
         self._cleanup_old_logs()
         
-        job = Job(
+        job = JobRepository.create(
             playlist_id=playlist_id,
             job_type=job_type,
-            status="pending",
-            download_status="pending" if job_type in ["download", "both"] else None,
-            extract_status="pending" if job_type in ["extract", "both"] else None,
-            download_total=0,
-            download_completed=0,
-            extract_total=0,
-            extract_completed=0
+            total_items=0,
+            db=db
         )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
         
         cancel_token = CancellationToken()
         self.cancel_tokens[job.id] = cancel_token

@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from app.models.database import Base
+from app.models.database import Base, init_db
 
 
 def create_isolated_test_db():
@@ -14,8 +14,8 @@ def create_isolated_test_db():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool
     )
-    Base.metadata.create_all(bind=test_engine)
-    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+    init_db(test_engine)
+    TestingSession = sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=test_engine)
     return test_engine, TestingSession
 
 

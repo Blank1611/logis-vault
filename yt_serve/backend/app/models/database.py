@@ -49,7 +49,7 @@ def set_sqlite_pragmas(dbapi_connection, connection_record):
     except Exception as e:
         print(f"[DB] Note setting SQLite pragmas: {e}")
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=engine)
 
 Base = declarative_base()
 
@@ -195,43 +195,14 @@ class SystemSetting(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 def get_system_setting(key: str, default: Optional[str] = None, db: Optional[Session] = None) -> Optional[str]:
-    """Retrieve a system setting from SQLite database."""
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-    try:
-        setting = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-        return setting.value if setting else default
-    except Exception:
-        return default
-    finally:
-        if close_db:
-            db.close()
+    """Retrieve a system setting (delegates to SystemSettingRepository)."""
+    from app.repositories.system_setting_repo import SystemSettingRepository
+    return SystemSettingRepository.get(key, default=default, db=db)
 
 def set_system_setting(key: str, value: str, db: Optional[Session] = None) -> Optional[SystemSetting]:
-    """Persist a system setting into SQLite database."""
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-    try:
-        setting = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-        if setting:
-            setting.value = str(value)
-            setting.updated_at = datetime.utcnow()
-        else:
-            setting = SystemSetting(key=key, value=str(value), updated_at=datetime.utcnow())
-            db.add(setting)
-        db.commit()
-        db.refresh(setting)
-        return setting
-    except Exception as e:
-        print(f"[DB] Error setting system setting {key}: {e}")
-        return None
-    finally:
-        if close_db:
-            db.close()
+    """Persist a system setting (delegates to SystemSettingRepository)."""
+    from app.repositories.system_setting_repo import SystemSettingRepository
+    return SystemSettingRepository.set(key, value=value, db=db)
 
 class FolderStatus(Base):
     """Lifecycle tracking for disk folders (e.g. excluded, pending_deletion for soft-delete retention)"""
@@ -245,18 +216,9 @@ class FolderStatus(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 def get_folder_status(folder_name: str, db: Optional[Session] = None) -> Optional[FolderStatus]:
-    """Retrieve status record for a folder."""
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-    try:
-        return db.query(FolderStatus).filter(FolderStatus.folder_name == folder_name).first()
-    except Exception:
-        return None
-    finally:
-        if close_db:
-            db.close()
+    """Retrieve status record for a folder (delegates to FolderStatusRepository)."""
+    from app.repositories.folder_status_repo import FolderStatusRepository
+    return FolderStatusRepository.get(folder_name, db=db)
 
 def set_folder_status(
     folder_name: str,
@@ -265,83 +227,27 @@ def set_folder_status(
     delete_after: Optional[datetime] = None,
     db: Optional[Session] = None
 ) -> Optional[FolderStatus]:
-    """Upsert a folder status record."""
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-    try:
-        record = db.query(FolderStatus).filter(FolderStatus.folder_name == folder_name).first()
-        if record:
-            record.status = status
-            record.reason = reason
-            record.delete_after = delete_after
-            record.updated_at = datetime.utcnow()
-        else:
-            record = FolderStatus(
-                folder_name=folder_name,
-                status=status,
-                reason=reason,
-                delete_after=delete_after,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
-            )
-            db.add(record)
-        db.commit()
-        db.refresh(record)
-        return record
-    except Exception as e:
-        print(f"[DB] Error setting folder status for {folder_name}: {e}")
-        return None
-    finally:
-        if close_db:
-            db.close()
+    """Upsert a folder status record (delegates to FolderStatusRepository)."""
+    from app.repositories.folder_status_repo import FolderStatusRepository
+    return FolderStatusRepository.set(folder_name, status, reason=reason, delete_after=delete_after, db=db)
 
 def remove_folder_status(folder_name: str, db: Optional[Session] = None) -> bool:
-    """Delete a folder status record (restoring it to normal/unmanaged)."""
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-    try:
-        record = db.query(FolderStatus).filter(FolderStatus.folder_name == folder_name).first()
-        if record:
-            db.delete(record)
-            db.commit()
-            return True
-        return False
-    except Exception as e:
-        print(f"[DB] Error removing folder status for {folder_name}: {e}")
-        return False
-    finally:
-        if close_db:
-            db.close()
+    """Delete a folder status record (delegates to FolderStatusRepository)."""
+    from app.repositories.folder_status_repo import FolderStatusRepository
+    return FolderStatusRepository.remove(folder_name, db=db)
 
 def list_folder_statuses(status: Optional[str] = None, db: Optional[Session] = None) -> List[FolderStatus]:
-    """List all folder statuses, optionally filtered by status."""
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-    try:
-        query = db.query(FolderStatus)
-        if status:
-            query = query.filter(FolderStatus.status == status)
-        return query.all()
-    except Exception:
-        return []
-    finally:
-        if close_db:
-            db.close()
+    """List all folder statuses (delegates to FolderStatusRepository)."""
+    from app.repositories.folder_status_repo import FolderStatusRepository
+    return FolderStatusRepository.list(status=status, db=db)
 
-# Create tables
-Base.metadata.create_all(bind=engine)
 
-def _auto_migrate_sqlite_columns():
+def _auto_migrate_sqlite_columns(target_engine=None):
     """Ensure newly added columns exist in existing SQLite database tables and seed default profiles."""
+    eng = target_engine or engine
     try:
         from sqlalchemy import text
-        with engine.connect() as conn:
+        with eng.connect() as conn:
             # 1. Check existing columns in jobs table
             result = conn.execute(text("PRAGMA table_info(jobs)"))
             existing_cols_jobs = {row[1] for row in result.fetchall()}
@@ -411,10 +317,19 @@ def _auto_migrate_sqlite_columns():
     except Exception as e:
         print(f"[DB] Auto-migration check note: {e}")
 
-_auto_migrate_sqlite_columns()
 
-# Dispose connection pool after import-time table creation and auto-migration
-engine.dispose()
+def init_db(target_engine=None):
+    """
+    Explicitly initialize database tables, apply SQLite schema migrations,
+    and seed built-in profiles. Invoked during server startup or test setup.
+    """
+    eng = target_engine or engine
+    Base.metadata.create_all(bind=eng)
+    _auto_migrate_sqlite_columns(eng)
+
+
+# Initialize database schema and built-in profiles for default engine
+init_db()
 
 import atexit
 atexit.register(engine.dispose)
@@ -422,10 +337,14 @@ atexit.register(engine.dispose)
 
 # Dependency for FastAPI
 def get_db():
-    """Get database session for FastAPI request lifecycle"""
+    """Get database session for FastAPI request lifecycle with auto-commit on success"""
     db = SessionLocal()
     try:
         yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

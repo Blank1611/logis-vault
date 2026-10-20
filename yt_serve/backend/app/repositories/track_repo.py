@@ -93,6 +93,8 @@ class TrackRepository:
                     track.playlists_json = current_playlists
 
                 track.updated_at = datetime.utcnow()
+                session.commit()
+                session.refresh(track)
                 return track
             else:
                 playlists = [playlist_id] if playlist_id is not None else []
@@ -113,9 +115,74 @@ class TrackRepository:
                     updated_at=datetime.utcnow(),
                 )
                 session.add(new_track)
-                session.flush()
+                session.commit()
                 session.refresh(new_track)
                 return new_track
+
+    @staticmethod
+    def update_resolutions_metadata(
+        video_id: str,
+        primary_filepath: Optional[str] = None,
+        downloaded_resolutions: Optional[List[str]] = None,
+        downloaded_fps: Optional[int] = None,
+        db: Optional[Session] = None
+    ) -> Optional[Track]:
+        """Update downloaded resolutions, primary filepath, and fps with commit"""
+        with get_db_context(db) as session:
+            track = session.query(Track).filter(Track.video_id == video_id).first()
+            if not track:
+                return None
+            if primary_filepath is not None:
+                track.primary_filepath = primary_filepath
+            if downloaded_resolutions is not None:
+                track.downloaded_resolutions_json = downloaded_resolutions
+            if downloaded_fps is not None:
+                track.downloaded_fps = downloaded_fps
+            track.updated_at = datetime.utcnow()
+            session.commit()
+            session.refresh(track)
+            return track
+
+    @staticmethod
+    def update_audio_metadata(
+        video_id: str,
+        audio_filepath: str,
+        codec: Optional[str] = None,
+        bitrate: Optional[str] = None,
+        db: Optional[Session] = None
+    ) -> Optional[Track]:
+        """Update extracted audio filepath, codec, bitrate, and commit"""
+        with get_db_context(db) as session:
+            track = session.query(Track).filter(Track.video_id == video_id).first()
+            if not track:
+                return None
+            track.primary_audio_filepath = audio_filepath
+            if codec is not None:
+                track.downloaded_audio_codec = codec
+            if bitrate is not None:
+                track.downloaded_audio_bitrate = bitrate
+            track.updated_at = datetime.utcnow()
+            session.commit()
+            session.refresh(track)
+            return track
+
+    @staticmethod
+    def set_available_resolutions(
+        video_id: str,
+        available_resolutions: List[Any],
+        db: Optional[Session] = None
+    ) -> Optional[Track]:
+        """Update probed available resolutions and commit"""
+        with get_db_context(db) as session:
+            track = session.query(Track).filter(Track.video_id == video_id).first()
+            if not track:
+                return None
+            track.available_resolutions_json = available_resolutions
+            track.resolutions_last_checked = datetime.utcnow()
+            track.updated_at = datetime.utcnow()
+            session.commit()
+            session.refresh(track)
+            return track
 
     @staticmethod
     def record_move_history(
@@ -128,7 +195,7 @@ class TrackRepository:
         status: str = "auto_moved",
         db: Optional[Session] = None
     ) -> MovedTrackHistory:
-        """Record an inter-playlist track move audit entry"""
+        """Record an inter-playlist track move audit entry and commit"""
         with get_db_context(db) as session:
             history = MovedTrackHistory(
                 video_id=video_id,
@@ -141,7 +208,7 @@ class TrackRepository:
                 status=status,
             )
             session.add(history)
-            session.flush()
+            session.commit()
             session.refresh(history)
             return history
 

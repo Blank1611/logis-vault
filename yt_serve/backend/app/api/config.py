@@ -103,8 +103,8 @@ def _check_needs_setup(db=None) -> bool:
 
     # 2. Check persistent database state in system_settings table
     try:
-        from app.models.database import get_system_setting
-        val = get_system_setting("setup_completed", default="false", db=db)
+        from app.repositories import SystemSettingRepository
+        val = SystemSettingRepository.get("setup_completed", default="false", db=db)
         if val and val.lower() in ("true", "1", "yes"):
             return False
     except Exception:
@@ -117,8 +117,8 @@ def _check_needs_setup(db=None) -> bool:
 @router.get("/", response_model=ConfigResponse)
 async def get_config(db: Session = Depends(get_db)):
     """Get current configuration"""
-    from app.models.database import get_system_setting
-    is_setup_done = get_system_setting("setup_completed", default="false", db=db).lower() in ("true", "1", "yes")
+    from app.repositories import SystemSettingRepository
+    is_setup_done = (SystemSettingRepository.get("setup_completed", default="false", db=db) or "false").lower() in ("true", "1", "yes")
 
     return ConfigResponse(
         base_download_path=settings.BASE_DOWNLOAD_PATH,
@@ -140,8 +140,8 @@ async def get_config(db: Session = Depends(get_db)):
         git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
         git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
         git_branch=getattr(settings, "GIT_BRANCH", "main") or "main",
-        git_user_name=get_system_setting("git_user_name", default=getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"), db=db),
-        git_user_email=get_system_setting("git_user_email", default=getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"), db=db),
+        git_user_name=SystemSettingRepository.get("git_user_name", default=getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"), db=db),
+        git_user_email=SystemSettingRepository.get("git_user_email", default=getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"), db=db),
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
@@ -354,8 +354,8 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
     # Persist to .env file
     _save_to_env(config)
 
-    from app.models.database import get_system_setting
-    is_setup_done = get_system_setting("setup_completed", default="false", db=db).lower() in ("true", "1", "yes")
+    from app.repositories import SystemSettingRepository
+    is_setup_done = (SystemSettingRepository.get("setup_completed", default="false", db=db) or "false").lower() in ("true", "1", "yes")
     
     return ConfigResponse(
         base_download_path=settings.BASE_DOWNLOAD_PATH,
@@ -377,8 +377,8 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
         git_remote_url=getattr(settings, "GIT_REMOTE_URL", None),
         git_auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
         git_branch=getattr(settings, "GIT_BRANCH", "main") or "main",
-        git_user_name=get_system_setting("git_user_name", default=getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"), db=db),
-        git_user_email=get_system_setting("git_user_email", default=getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"), db=db),
+        git_user_name=SystemSettingRepository.get("git_user_name", default=getattr(settings, "GIT_USER_NAME", "YouTube Playlist Manager"), db=db),
+        git_user_email=SystemSettingRepository.get("git_user_email", default=getattr(settings, "GIT_USER_EMAIL", "yt-manager@homelab.local"), db=db),
         cookies_file=settings.COOKIES_FILE,
         use_browser_cookies=settings.USE_BROWSER_COOKIES,
         browser_name=settings.BROWSER_NAME,
@@ -847,15 +847,15 @@ async def batch_exclude_folders(payload: BatchExcludeRequest, db: Session = Depe
 @router.post("/restore-excluded-folder")
 async def restore_excluded_folder(payload: RestoreExcludedRequest, db: Session = Depends(get_db)):
     """Remove a folder from excluded status, restoring it to unmanaged"""
-    from app.models.database import remove_folder_status, list_folder_statuses
+    from app.repositories import FolderStatusRepository
     folder_name = payload.folder_name.strip()
     logger.info(f"[Unmanaged Exclude] Restoring excluded folder: {folder_name}")
     
     # 1. Remove from database FolderStatus
-    remove_folder_status(folder_name, db=db)
-    for fs in list_folder_statuses(status="excluded", db=db):
+    FolderStatusRepository.remove(folder_name, db=db)
+    for fs in FolderStatusRepository.list(status="excluded", db=db):
         if fs.folder_name.lower() == folder_name.lower():
-            remove_folder_status(fs.folder_name, db=db)
+            FolderStatusRepository.remove(fs.folder_name, db=db)
             
     # 2. Sync in-memory settings.EXCLUDED_DIRS
     current_excluded = [x.strip() for x in (getattr(settings, "EXCLUDED_DIRS", "") or "").split(",") if x.strip()]

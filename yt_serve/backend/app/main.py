@@ -9,7 +9,6 @@ from pathlib import Path
 import os
 import traceback
 
-from app.api.v1.router import router as api_v1_router
 from app.api import playlists, downloads, config, websocket, metrics, sse, logs, tracks, housekeeping, profiles
 from app.core.config import settings
 from app.core.logging_engine import setup_logging, get_logger
@@ -30,8 +29,11 @@ async def startup_event():
     logger.info("Playlist Manager - Server Startup")
     logger.info("=" * 60)
     
-    from app.models.database import SessionLocal, Playlist, Job
+    from app.models.database import SessionLocal, Playlist, Job, init_db
     from app.services.ytdlp_service import DownloadService
+    
+    # Initialize schema, migrations, and seed default profiles cleanly at startup
+    init_db()
     
     db = SessionLocal()
     try:
@@ -134,8 +136,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include API routers FIRST
-app.include_router(api_v1_router, prefix="/api/v1")
+# Include API routers
 app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
 app.include_router(profiles.router, prefix="/api/profiles", tags=["profiles"])
 app.include_router(downloads.router, prefix="/api/downloads", tags=["downloads"])

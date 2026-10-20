@@ -49,7 +49,7 @@ class PlaylistRepository:
         excluded_ids: Optional[List[str]] = None,
         db: Optional[Session] = None
     ) -> Playlist:
-        """Create and persist a new Playlist"""
+        """Create and persist a new Playlist with atomic commit"""
         with get_db_context(db) as session:
             playlist = Playlist(
                 url=url,
@@ -63,20 +63,44 @@ class PlaylistRepository:
                 updated_at=datetime.utcnow()
             )
             session.add(playlist)
-            session.flush()
+            session.commit()
+            session.refresh(playlist)
+            return playlist
+
+    @staticmethod
+    def update(
+        playlist_id: int,
+        title: Optional[str] = None,
+        quality_profile_id: Optional[str] = None,
+        excluded_ids: Optional[List[str]] = None,
+        db: Optional[Session] = None
+    ) -> Optional[Playlist]:
+        """Update playlist properties and commit"""
+        with get_db_context(db) as session:
+            playlist = session.query(Playlist).filter(Playlist.id == playlist_id).first()
+            if not playlist:
+                return None
+            if title is not None:
+                playlist.title = title
+            if quality_profile_id is not None:
+                playlist.quality_profile_id = quality_profile_id
+            if excluded_ids is not None:
+                playlist.excluded_ids = excluded_ids
+            playlist.updated_at = datetime.utcnow()
+            session.commit()
             session.refresh(playlist)
             return playlist
 
     @staticmethod
     def update_quality_profile(playlist_id: int, quality_profile_id: str, db: Optional[Session] = None) -> Optional[Playlist]:
-        """Update playlist assigned quality profile"""
+        """Update playlist assigned quality profile and commit"""
         with get_db_context(db) as session:
             playlist = session.query(Playlist).filter(Playlist.id == playlist_id).first()
             if not playlist:
                 return None
             playlist.quality_profile_id = quality_profile_id or "standard_1080p"
             playlist.updated_at = datetime.utcnow()
-            session.flush()
+            session.commit()
             session.refresh(playlist)
             return playlist
 
@@ -90,7 +114,7 @@ class PlaylistRepository:
         last_extract: Optional[datetime] = None,
         db: Optional[Session] = None
     ) -> Optional[Playlist]:
-        """Update playlist track counts and timestamps"""
+        """Update playlist track counts, timestamps, and commit"""
         with get_db_context(db) as session:
             playlist = session.query(Playlist).filter(Playlist.id == playlist_id).first()
             if not playlist:
@@ -106,28 +130,62 @@ class PlaylistRepository:
             if last_extract is not None:
                 playlist.last_extract = last_extract
             playlist.updated_at = datetime.utcnow()
+            session.commit()
+            session.refresh(playlist)
             return playlist
 
     @staticmethod
     def update_exclusions(playlist_id: int, excluded_ids: List[str], db: Optional[Session] = None) -> Optional[Playlist]:
-        """Update excluded video IDs list"""
+        """Update excluded video IDs list and commit"""
         with get_db_context(db) as session:
             playlist = session.query(Playlist).filter(Playlist.id == playlist_id).first()
             if not playlist:
                 return None
             playlist.excluded_ids = excluded_ids
             playlist.updated_at = datetime.utcnow()
+            session.commit()
+            session.refresh(playlist)
+            return playlist
+
+    @staticmethod
+    def exclude_video_id(playlist_id: int, video_id: str, db: Optional[Session] = None) -> Optional[Playlist]:
+        """Add a video ID to the exclusion list and commit"""
+        with get_db_context(db) as session:
+            playlist = session.query(Playlist).filter(Playlist.id == playlist_id).first()
+            if not playlist:
+                return None
+            current_exclusions = list(playlist.excluded_ids or [])
+            if video_id not in current_exclusions:
+                current_exclusions.append(video_id)
+                playlist.excluded_ids = current_exclusions
+                playlist.updated_at = datetime.utcnow()
+                session.commit()
+                session.refresh(playlist)
+            return playlist
+
+    @staticmethod
+    def include_video_id(playlist_id: int, video_id: str, db: Optional[Session] = None) -> Optional[Playlist]:
+        """Remove a video ID from the exclusion list and commit"""
+        with get_db_context(db) as session:
+            playlist = session.query(Playlist).filter(Playlist.id == playlist_id).first()
+            if not playlist:
+                return None
+            current_exclusions = list(playlist.excluded_ids or [])
+            if video_id in current_exclusions:
+                current_exclusions.remove(video_id)
+                playlist.excluded_ids = current_exclusions
+                playlist.updated_at = datetime.utcnow()
+                session.commit()
+                session.refresh(playlist)
             return playlist
 
     @staticmethod
     def delete(playlist_id: int, db: Optional[Session] = None) -> bool:
-        """Delete a playlist by ID"""
+        """Delete a playlist by ID and commit"""
         with get_db_context(db) as session:
             playlist = session.query(Playlist).filter(Playlist.id == playlist_id).first()
             if not playlist:
                 return False
             session.delete(playlist)
-            session.flush()
-            if db is not None:
-                session.commit()
+            session.commit()
             return True

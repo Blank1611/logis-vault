@@ -8,9 +8,10 @@ from app.repositories import (
     PlaylistRepository,
     TrackRepository,
     JobRepository,
-    SystemSettingRepository
+    SystemSettingRepository,
+    FolderStatusRepository
 )
-from app.models.database import Playlist, get_db_context
+from app.models.database import Playlist, Job, get_db_context
 
 
 class TestRepositories(unittest.TestCase):
@@ -21,6 +22,77 @@ class TestRepositories(unittest.TestCase):
 
     def tearDown(self):
         dispose_isolated_test_db(self.test_engine, self.db)
+
+    def test_cross_session_job_durability(self):
+        """Verify repository mutations persist immediately and are readable from independent sessions"""
+        session_a = self.TestingSession()
+        # 1. Create job using session A without manual caller commit
+        job = JobRepository.create(
+            playlist_id=999,
+            job_type="adhoc_both",
+            total_items=1,
+            db=session_a
+        )
+        job_id = job.id
+        session_a.close()
+
+        # 2. Query from a completely fresh session B
+        session_b = self.TestingSession()
+        fetched_b = JobRepository.get_by_id(job_id, db=session_b)
+        self.assertIsNotNone(fetched_b)
+        self.assertEqual(fetched_b.job_type, "adhoc_both")
+        self.assertEqual(fetched_b.status, "pending")
+
+        # 3. Update stream metrics with session A
+        session_a = self.TestingSession()
+        JobRepository.update_stream_progress(
+            job_id=job_id,
+            title="Live Video Title",
+            bytes_downloaded=5000000,
+            bytes_total=10000000,
+            speed=2.5,
+            eta=2,
+            db=session_a
+        )
+        session_a.close()
+
+        # 4. Independent session B sees updated metrics immediately
+        session_b.expire_all()
+        fetched_after_progress = JobRepository.get_by_id(job_id, db=session_b)
+        self.assertEqual(fetched_after_progress.current_video_title, "Live Video Title")
+        self.assertEqual(fetched_after_progress.current_video_speed, 2.5)
+
+        # 5. Complete job via session A
+        session_a = self.TestingSession()
+        JobRepository.update_status(job_id=job_id, status="completed", completed_items=1, db=session_a)
+        session_a.close()
+
+        # 6. Independent session B sees completed status
+        session_b.expire_all()
+        final_job = JobRepository.get_by_id(job_id, db=session_b)
+        self.assertEqual(final_job.status, "completed")
+        session_b.close()
+
+    def test_folder_status_repository(self):
+        """Verify FolderStatusRepository CRUD and durability"""
+        # Set status
+        record = FolderStatusRepository.set("MyExcludedPlaylist", "excluded", reason="user_test", db=self.db)
+        self.assertIsNotNone(record)
+        self.assertEqual(record.status, "excluded")
+
+        # Get status
+        fetched = FolderStatusRepository.get("MyExcludedPlaylist", db=self.db)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched.reason, "user_test")
+
+        # List statuses
+        excluded_list = FolderStatusRepository.list(status="excluded", db=self.db)
+        self.assertEqual(len(excluded_list), 1)
+
+        # Remove status
+        removed = FolderStatusRepository.remove("MyExcludedPlaylist", db=self.db)
+        self.assertTrue(removed)
+        self.assertIsNone(FolderStatusRepository.get("MyExcludedPlaylist", db=self.db))
 
     def test_playlist_repository(self):
         # Create playlist
@@ -50,6 +122,10 @@ class TestRepositories(unittest.TestCase):
         # Update counts
         updated = PlaylistRepository.update_counts(pl.id, local_count=12, playlist_count=15, db=self.db)
         self.assertEqual(updated.local_count, 12)
+
+        # Update general
+        updated_gen = PlaylistRepository.update(pl.id, title="Renamed Playlist", db=self.db)
+        self.assertEqual(updated_gen.title, "Renamed Playlist")
 
         # Delete
         success = PlaylistRepository.delete(pl.id, db=self.db)
@@ -131,14 +207,15 @@ class TestRepositories(unittest.TestCase):
         test_url = "https://youtube.com/pl_fail_rollback_test"
         try:
             with get_db_context(self.db) as session:
-                pl = PlaylistRepository.create(url=test_url, title="Will Rollback", db=session)
+                pl = Playlist(url=test_url, title="Will Rollback")
+                session.add(pl)
                 session.flush()
                 raise RuntimeError("Intentional transaction failure")
         except RuntimeError:
             self.db.rollback()
 
         # Verify rollback worked
-        pl = self.db.query(PlaylistRepository.get_by_url(test_url, db=self.db) if False else Playlist).filter(Playlist.url == test_url).first()
+        pl = self.db.query(Playlist).filter(Playlist.url == test_url).first()
         self.assertIsNone(pl)
 
 

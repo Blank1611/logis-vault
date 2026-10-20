@@ -26,13 +26,35 @@ class JobRepository:
             ).all()
 
     @staticmethod
+    def get_all(
+        playlist_id: Optional[int] = None,
+        limit: Optional[int] = None,
+        db: Optional[Session] = None
+    ) -> List[Job]:
+        """Fetch jobs with optional playlist filter, newest first"""
+        with get_db_context(db) as session:
+            query = session.query(Job)
+            if playlist_id is not None:
+                query = query.filter(Job.playlist_id == playlist_id)
+            query = query.order_by(Job.created_at.desc())
+            if limit:
+                query = query.limit(limit)
+            return query.all()
+
+    @staticmethod
+    def get_interrupted(db: Optional[Session] = None) -> List[Job]:
+        """Fetch interrupted (running) jobs needing startup recovery"""
+        with get_db_context(db) as session:
+            return session.query(Job).filter(Job.status == "running").all()
+
+    @staticmethod
     def create(
         playlist_id: int,
         job_type: str,
         total_items: int = 0,
         db: Optional[Session] = None
     ) -> Job:
-        """Create a new job record"""
+        """Create a new job record with durable commit"""
         with get_db_context(db) as session:
             job = Job(
                 playlist_id=playlist_id,
@@ -52,7 +74,7 @@ class JobRepository:
                 created_at=datetime.utcnow()
             )
             session.add(job)
-            session.flush()
+            session.commit()
             session.refresh(job)
             return job
 
@@ -65,7 +87,7 @@ class JobRepository:
         error: Optional[str] = None,
         db: Optional[Session] = None
     ) -> Optional[Job]:
-        """Update job lifecycle status and counts"""
+        """Update job lifecycle status, counts, and commit"""
         with get_db_context(db) as session:
             job = session.query(Job).filter(Job.id == job_id).first()
             if not job:
@@ -79,6 +101,8 @@ class JobRepository:
                 job.error = error
             if status in ("completed", "failed", "cancelled"):
                 job.completed_at = datetime.utcnow()
+            session.commit()
+            session.refresh(job)
             return job
 
     @staticmethod
@@ -92,7 +116,7 @@ class JobRepository:
         eta: Optional[int] = None,
         db: Optional[Session] = None
     ) -> Optional[Job]:
-        """Update in-flight byte stream metrics for reconnect recovery"""
+        """Update in-flight byte stream metrics with commit for live polling and reconnect recovery"""
         with get_db_context(db) as session:
             job = session.query(Job).filter(Job.id == job_id).first()
             if not job:
@@ -109,4 +133,6 @@ class JobRepository:
                 job.current_video_speed = speed
             if eta is not None:
                 job.current_video_eta = eta
+            session.commit()
+            session.refresh(job)
             return job
