@@ -8,7 +8,7 @@ import os
 import json
 import time
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
 from sqlalchemy.orm import Session
 import yt_dlp
@@ -45,6 +45,23 @@ def sanitize_youtube_url(url: str) -> str:
     except Exception:
         pass
     return clean
+
+
+def extract_video_id_from_url(url: str) -> Optional[str]:
+    """Extract YouTube video ID from standard or shortened URL"""
+    clean = url.strip()
+    try:
+        parsed = urlparse(clean)
+        if "youtube.com" in parsed.netloc:
+            qs = parse_qs(parsed.query)
+            vid = qs.get("v")
+            if vid:
+                return vid[0]
+        elif "youtu.be" in parsed.netloc:
+            return parsed.path.strip("/")
+    except Exception:
+        pass
+    return None
 
 
 def format_duration(seconds: Optional[int]) -> str:
@@ -242,6 +259,130 @@ def _update_adhoc_metadata(target_dir: str, video_info: Dict[str, Any], filepath
         logger.warning(f"[Adhoc] Could not update adhoc_info.json: {e}")
 
 
+def find_existing_local_video(target_dir: str, video_id: str, db: Optional[Session] = None) -> Optional[str]:
+    """
+    Check if a video file already exists locally in target_dir or the global track index.
+    """
+    if not video_id:
+        return None
+
+    # 1. Scan target directory for files containing [video_id]
+    if os.path.isdir(target_dir):
+        for fname in os.listdir(target_dir):
+            if f"[{video_id}]" in fname:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in (".mp4", ".mkv", ".webm"):
+                    candidate = os.path.join(target_dir, fname)
+                    if os.path.isfile(candidate):
+                        return candidate
+
+    # 2. Check central SQLite Track Index
+    try:
+        from app.core.track_indexer import check_track_exists_locally
+        track_info = check_track_exists_locally(video_id, db=db)
+        if track_info and track_info.get("primary_filepath"):
+            fp = track_info["primary_filepath"]
+            if os.path.isfile(fp):
+                ext = os.path.splitext(fp)[1].lower()
+                if ext in (".mp4", ".mkv", ".webm"):
+                    return fp
+    except Exception as e:
+        logger.warning(f"[Adhoc] Error querying track index for video {video_id}: {e}")
+
+    return None
+
+
+def extract_audio_from_video(
+    video_path: str,
+    audio_format: str = "copy",
+    write_log: Optional[Callable] = None
+) -> Optional[str]:
+    """
+    Extract audio from a local video container.
+    Honors audio_format:
+    - 'copy' (Native Copy): probes stream codec; uses -c:a copy into .opus or .m4a (lossless, zero-CPU).
+    - 'opus': copies if already Opus, else encodes via libopus at 160k into .opus.
+    - 'mp3' / 'mp3_best': encodes via libmp3lame at 320k into .mp3.
+    - 'flac': encodes via flac into .flac.
+    - 'm4a': copies if already AAC, else encodes via aac at 256k into .m4a.
+    """
+    import subprocess
+    from app.core.track_indexer import probe_local_media_metadata
+
+    def log(msg: str, lvl: str = "INFO"):
+        if write_log:
+            try:
+                write_log(msg, lvl)
+            except Exception:
+                pass
+        else:
+            logger.info(msg)
+
+    if not video_path or not os.path.isfile(video_path):
+        return None
+
+    media_meta = probe_local_media_metadata(video_path, None)
+    detected_codec = (media_meta.get("audio_codec") or "").lower()
+
+    base, _ = os.path.splitext(video_path)
+
+    if audio_format == "copy":
+        if "opus" in detected_codec:
+            ext = "opus"
+            ffmpeg_args = ["-c:a", "copy"]
+        elif "aac" in detected_codec:
+            ext = "m4a"
+            ffmpeg_args = ["-c:a", "copy"]
+        elif "mp3" in detected_codec:
+            ext = "mp3"
+            ffmpeg_args = ["-c:a", "copy"]
+        elif "flac" in detected_codec:
+            ext = "flac"
+            ffmpeg_args = ["-c:a", "copy"]
+        else:
+            # Default copy strategy
+            ext = "opus" if "webm" in video_path.lower() else "m4a"
+            ffmpeg_args = ["-c:a", "copy"]
+    elif audio_format == "opus":
+        ext = "opus"
+        if "opus" in detected_codec:
+            ffmpeg_args = ["-c:a", "copy"]
+        else:
+            ffmpeg_args = ["-c:a", "libopus", "-b:a", "160k"]
+    elif audio_format in ("mp3_best", "mp3"):
+        ext = "mp3"
+        if "mp3" in detected_codec:
+            ffmpeg_args = ["-c:a", "copy"]
+        else:
+            ffmpeg_args = ["-c:a", "libmp3lame", "-b:a", "320k"]
+    elif audio_format == "flac":
+        ext = "flac"
+        ffmpeg_args = ["-c:a", "flac"]
+    elif audio_format == "m4a":
+        ext = "m4a"
+        if "aac" in detected_codec:
+            ffmpeg_args = ["-c:a", "copy"]
+        else:
+            ffmpeg_args = ["-c:a", "aac", "-b:a", "256k"]
+    else:
+        # Default fallback
+        ext = "mp3"
+        ffmpeg_args = ["-c:a", "libmp3lame", "-b:a", "320k"]
+
+    target_audio = f"{base}.{ext}"
+    log(f"Extracting {ext.upper()} audio ({audio_format}): {os.path.basename(target_audio)}")
+    try:
+        cmd = ["ffmpeg", "-y", "-i", video_path, "-vn"] + ffmpeg_args + [target_audio]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        if os.path.isfile(target_audio):
+            log(f"✓ Extracted {ext.upper()} audio: {os.path.basename(target_audio)}", "SUCCESS")
+            return target_audio
+    except Exception as ex:
+        log(f"⚠️ Audio extraction failed: {ex}", "WARN")
+
+    return None
+
+
 def execute_adhoc_download(
     job_id: int,
     url: str,
@@ -267,11 +408,52 @@ def execute_adhoc_download(
             logger.info(f"[Adhoc Job #{job_id}] {msg}")
 
     clean_url = sanitize_youtube_url(url)
+    vid = extract_video_id_from_url(clean_url) or ""
     target_dir = os.path.abspath(custom_download_path or settings.get_adhoc_download_path())
     os.makedirs(target_dir, exist_ok=True)
     write_log(f"Target Directory: {target_dir} | Mode: {extract_mode} | Quality: {video_quality}")
 
     JobRepository.update_status(job_id, status="running", db=db)
+
+    # Check for zero-network audio-only fast-path if video is already on disk
+    if extract_mode == "audio_only" and vid:
+        existing_video = find_existing_local_video(target_dir, vid, db=db)
+        if existing_video:
+            write_log(f"Found existing local video: {os.path.basename(existing_video)}. Extracting audio locally without network usage...", "INFO")
+            audio_file = extract_audio_from_video(existing_video, audio_format=audio_format, write_log=write_log)
+            if audio_file:
+                from app.core.track_indexer import probe_local_media_metadata
+                media_meta = probe_local_media_metadata(None, audio_file)
+                base_name = os.path.splitext(os.path.basename(existing_video))[0]
+                
+                # Update adhoc metadata file
+                _update_adhoc_metadata(
+                    target_dir=target_dir,
+                    video_info={"id": vid, "title": base_name, "uploader": "Local Media", "duration": 0},
+                    filepath="",
+                    audio_filepath=audio_file
+                )
+                
+                # Register in global Track Index
+                write_log("Indexing audio in central SQLite track index...", "INFO")
+                TrackRepository.index_or_update_track(
+                    video_id=vid,
+                    title=base_name,
+                    filepath="",
+                    audio_filepath=audio_file,
+                    downloaded_audio_codec=media_meta.get("audio_codec"),
+                    downloaded_audio_bitrate=media_meta.get("audio_bitrate"),
+                    db=db
+                )
+                JobRepository.update_status(job_id=job_id, status="completed", completed_items=1, failed_items=0, db=db)
+                write_log(f"✓ Extracted and indexed local audio: {os.path.basename(audio_file)}", "SUCCESS")
+                return {
+                    "status": "success",
+                    "job_id": job_id,
+                    "video_id": vid,
+                    "title": base_name,
+                    "filepath": audio_file
+                }
 
     # Format selector configuration based on chosen resolution
     if video_quality and video_quality not in ("best", "0"):
@@ -318,8 +500,8 @@ def execute_adhoc_download(
         elif d.get("status") == "finished":
             write_log(f"Stream download finished, finalizing container...")
 
-    # Base yt-dlp options
-    ydl_opts = {
+    # Build yt-dlp options with Node.js runtime and network resilience
+    extra_opts = {
         "outtmpl": outtmpl,
         "noplaylist": True,
         "progress_hooks": [progress_hook],
@@ -329,8 +511,7 @@ def execute_adhoc_download(
     }
 
     if extract_mode == "audio_only":
-        # Extract audio directly
-        ydl_opts["format"] = "bestaudio/best"
+        extra_opts["format"] = "bestaudio/best"
         postprocessors = []
         if audio_format in ("mp3_best", "mp3"):
             postprocessors.append({
@@ -355,17 +536,14 @@ def execute_adhoc_download(
                 "preferredcodec": "m4a",
                 "preferredquality": "256",
             })
-        else:
-            # Default copy / extract native
-            postprocessors.append({
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "m4a",
-            })
-        ydl_opts["postprocessors"] = postprocessors
+        # If audio_format == "copy", do not add postprocessors to keep native bestaudio
+        if postprocessors:
+            extra_opts["postprocessors"] = postprocessors
     else:
-        # Complete video or both
-        ydl_opts["format"] = format_selector
-        ydl_opts["merge_output_format"] = "mp4"
+        extra_opts["format"] = format_selector
+        extra_opts["merge_output_format"] = "mp4"
+
+    ydl_opts = build_ytdlp_options(mode="download", extra_opts=extra_opts)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -381,9 +559,8 @@ def execute_adhoc_download(
             # Determine primary downloaded filepath
             downloaded_file = ydl.prepare_filename(info)
             if extract_mode == "audio_only":
-                # Extracted audio extension
                 base, _ = os.path.splitext(downloaded_file)
-                ext = "mp3" if "mp3" in audio_format else ("opus" if audio_format == "opus" else "m4a")
+                ext = "mp3" if "mp3" in audio_format else ("opus" if audio_format == "opus" else ("m4a" if audio_format == "m4a" else "opus"))
                 audio_file = f"{base}.{ext}" if not downloaded_file.endswith(f".{ext}") else downloaded_file
                 primary_video = ""
                 primary_audio = audio_file if os.path.isfile(audio_file) else downloaded_file
@@ -391,20 +568,13 @@ def execute_adhoc_download(
                 primary_video = downloaded_file
                 primary_audio = None
 
-                # If "both", extract standalone audio copy
+                # If "both", extract standalone audio copy respecting audio_format
                 if extract_mode == "both" and os.path.isfile(primary_video):
-                    try:
-                        import subprocess
-                        base, _ = os.path.splitext(primary_video)
-                        audio_target = f"{base}.mp3"
-                        write_log(f"Extracting high-bitrate MP3 audio: {os.path.basename(audio_target)}")
-                        cmd = ["ffmpeg", "-y", "-i", primary_video, "-vn", "-b:a", "320k", audio_target]
-                        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-                        if os.path.isfile(audio_target):
-                            primary_audio = audio_target
-                            write_log(f"✓ Extracted MP3 audio: {os.path.basename(audio_target)}", "SUCCESS")
-                    except Exception as ex:
-                        write_log(f"⚠️ Standalone audio extraction failed for {primary_video}: {ex}", "WARN")
+                    primary_audio = extract_audio_from_video(
+                        primary_video,
+                        audio_format=audio_format,
+                        write_log=write_log
+                    )
 
             # Update adhoc metadata file
             write_log("Updating adhoc metadata index (adhoc_info.json)...")

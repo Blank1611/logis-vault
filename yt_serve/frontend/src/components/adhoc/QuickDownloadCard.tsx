@@ -9,7 +9,7 @@ import { StatusBadge } from '../ui/StatusBadge'
 import { DualTierProgressBar } from '../ui/ProgressBar'
 import { jobsApi } from '../../services/api'
 import { 
-  Download, Search, Film, Music, Layers, CheckCircle2, AlertCircle, Loader2, Sparkles, Folder, Clock, Eye, Terminal, XCircle
+  Download, Search, Film, Music, Layers, CheckCircle2, AlertCircle, Loader2, Sparkles, Folder, Clock, Eye, Terminal, XCircle, ListOrdered
 } from 'lucide-react'
 
 export interface QuickDownloadCardProps {
@@ -491,9 +491,9 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
                 variant="secondary"
                 size="sm"
                 onClick={() => onViewJobLogs(successJobId)}
-                icon={<Terminal className="w-3.5 h-3.5 text-blue-500" />}
+                icon={<ListOrdered className="w-3.5 h-3.5 text-indigo-500" />}
               >
-                View Log
+                View in Queue
               </Button>
             )}
           </div>

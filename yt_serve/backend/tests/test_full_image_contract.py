@@ -25,6 +25,11 @@ from app.utils.ytdlp_opts import build_ytdlp_options
 class TestFullImageContract(unittest.TestCase):
     """Integration contract tests for the full containerized environment"""
 
+    @classmethod
+    def setUpClass(cls):
+        if shutil.which("node") is None:
+            raise unittest.SkipTest("Full image contract tests require Node.js runtime (present in runner/dev images)")
+
     def test_nodejs_runtime_available_and_valid_version(self):
         """Verify Node.js v22+ is present in PATH for yt-dlp EJS challenges"""
         node_path = shutil.which("node")

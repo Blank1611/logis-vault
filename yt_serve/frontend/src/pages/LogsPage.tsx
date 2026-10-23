@@ -347,7 +347,50 @@ export const LogsPage: React.FC<LogsPageProps> = ({
                         </td>
 
                         <td className="px-4 py-3">
-                          {j.job_type !== 'extract' ? (
+                          {isAdhoc ? (
+                            <div className="space-y-1">
+                              <div className="flex justify-between items-center text-[11px] text-gray-600 dark:text-gray-400 font-medium">
+                                <span className="truncate max-w-[200px]" title={j.current_video_title || 'Video Stream'}>
+                                  {j.current_video_title ? `~ ${j.current_video_title}` : 'Streaming Video'}
+                                </span>
+                                <span className="font-mono whitespace-nowrap">
+                                  {j.current_video_bytes_total && j.current_video_bytes_total > 0
+                                    ? `${((j.current_video_bytes_downloaded || 0) / (1024 * 1024)).toFixed(1)} / ${(j.current_video_bytes_total / (1024 * 1024)).toFixed(1)} MB (${Math.round(((j.current_video_bytes_downloaded || 0) / j.current_video_bytes_total) * 100)}%)`
+                                    : (j.status === 'completed' ? '100%' : `${j.progress || 0}%`)}
+                                </span>
+                              </div>
+                              <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full transition-all duration-200 rounded-full ${
+                                    j.status === 'completed' 
+                                      ? 'bg-emerald-500' 
+                                      : (j.status === 'failed' ? 'bg-rose-500' : 'bg-indigo-600')
+                                  }`}
+                                  style={{
+                                    width: `${
+                                      j.status === 'completed'
+                                        ? 100
+                                        : (j.current_video_bytes_total && j.current_video_bytes_total > 0
+                                            ? Math.min(100, Math.round(((j.current_video_bytes_downloaded || 0) / j.current_video_bytes_total) * 100))
+                                            : (j.progress || 0))
+                                    }%`
+                                  }}
+                                />
+                              </div>
+                              {j.status === 'running' && (
+                                <div className="flex items-center justify-between text-[10px] text-gray-500 dark:text-gray-400 font-mono">
+                                  <span>
+                                    {j.current_video_speed && j.current_video_speed > 0
+                                      ? `${(j.current_video_speed / (1024 * 1024)).toFixed(1)} MB/s`
+                                      : 'Connecting...'}
+                                  </span>
+                                  {j.current_video_eta && j.current_video_eta > 0 ? (
+                                    <span>ETA: {Math.floor(j.current_video_eta / 60)}m {j.current_video_eta % 60}s</span>
+                                  ) : null}
+                                </div>
+                              )}
+                            </div>
+                          ) : j.job_type !== 'extract' ? (
                             <DualTierProgressBar
                               itemCompleted={j.download_completed || j.completed_items || 0}
                               itemTotal={j.download_total || j.total_items || 1}
