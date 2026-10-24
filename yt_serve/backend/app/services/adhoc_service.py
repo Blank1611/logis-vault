@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.logging_engine import get_logger
 from app.utils.ytdlp_opts import build_ytdlp_options
 from app.repositories import JobRepository, TrackRepository
-from app.models.database import get_db_context
+from app.models.database import get_db_context, Job
 
 logger = get_logger("app.services.adhoc")
 
@@ -295,7 +295,8 @@ def find_existing_local_video(target_dir: str, video_id: str, db: Optional[Sessi
 def extract_audio_from_video(
     video_path: str,
     audio_format: str = "copy",
-    write_log: Optional[Callable] = None
+    write_log: Optional[Callable] = None,
+    metadata: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
     """
     Extract audio from a local video container.
@@ -371,8 +372,20 @@ def extract_audio_from_video(
 
     target_audio = f"{base}.{ext}"
     log(f"Extracting {ext.upper()} audio ({audio_format}): {os.path.basename(target_audio)}")
+
+    meta_args = []
+    if metadata:
+        if metadata.get("title"):
+            meta_args.extend(["-metadata", f"title={metadata['title']}"])
+        artist = metadata.get("artist") or metadata.get("uploader") or ""
+        if artist:
+            meta_args.extend(["-metadata", f"artist={artist}"])
+        meta_args.extend(["-metadata", f"album={metadata.get('album') or 'Ad-hoc Downloads'}"])
+        if metadata.get("upload_date"):
+            meta_args.extend(["-metadata", f"date={str(metadata['upload_date'])[:4]}"])
+
     try:
-        cmd = ["ffmpeg", "-y", "-i", video_path, "-vn"] + ffmpeg_args + [target_audio]
+        cmd = ["ffmpeg", "-y", "-i", video_path, "-vn"] + ffmpeg_args + meta_args + [target_audio]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         if os.path.isfile(target_audio):
             log(f"✓ Extracted {ext.upper()} audio: {os.path.basename(target_audio)}", "SUCCESS")
@@ -414,13 +427,21 @@ def execute_adhoc_download(
     write_log(f"Target Directory: {target_dir} | Mode: {extract_mode} | Quality: {video_quality}")
 
     JobRepository.update_status(job_id, status="running", db=db)
+    if db and vid:
+        try:
+            job_record = db.query(Job).filter(Job.id == job_id).first()
+            if job_record:
+                job_record.current_video_id = vid
+                db.commit()
+        except Exception:
+            pass
 
     # Check for zero-network audio-only fast-path if video is already on disk
     if extract_mode == "audio_only" and vid:
         existing_video = find_existing_local_video(target_dir, vid, db=db)
         if existing_video:
             write_log(f"Found existing local video: {os.path.basename(existing_video)}. Extracting audio locally without network usage...", "INFO")
-            audio_file = extract_audio_from_video(existing_video, audio_format=audio_format, write_log=write_log)
+            audio_file = extract_audio_from_video(existing_video, audio_format=audio_format, write_log=write_log, metadata={"title": os.path.splitext(os.path.basename(existing_video))[0], "album": "Ad-hoc Downloads"})
             if audio_file:
                 from app.core.track_indexer import probe_local_media_metadata
                 media_meta = probe_local_media_metadata(None, audio_file)
@@ -446,6 +467,14 @@ def execute_adhoc_download(
                     db=db
                 )
                 JobRepository.update_status(job_id=job_id, status="completed", completed_items=1, failed_items=0, db=db)
+                if db and os.path.isfile(audio_file):
+                    try:
+                        job_record = db.query(Job).filter(Job.id == job_id).first()
+                        if job_record:
+                            job_record.current_video_title = os.path.basename(audio_file)
+                            db.commit()
+                    except Exception:
+                        pass
                 write_log(f"✓ Extracted and indexed local audio: {os.path.basename(audio_file)}", "SUCCESS")
                 return {
                     "status": "success",
@@ -573,7 +602,8 @@ def execute_adhoc_download(
                     primary_audio = extract_audio_from_video(
                         primary_video,
                         audio_format=audio_format,
-                        write_log=write_log
+                        write_log=write_log,
+                        metadata=info
                     )
 
             # Update adhoc metadata file
@@ -617,6 +647,15 @@ def execute_adhoc_download(
                 failed_items=0,
                 db=db
             )
+            final_out = primary_audio if extract_mode == "audio_only" else (primary_video or primary_audio)
+            if db and final_out and os.path.isfile(final_out):
+                try:
+                    job_record = db.query(Job).filter(Job.id == job_id).first()
+                    if job_record:
+                        job_record.current_video_title = os.path.basename(final_out)
+                        db.commit()
+                except Exception:
+                    pass
 
             write_log(f"✓ Successfully processed and indexed: {title} ({vid})", "SUCCESS")
             return {

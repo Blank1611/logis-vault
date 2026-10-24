@@ -436,6 +436,18 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
                   </Button>
                 )}
 
+                {activeAdhocJob.status === 'completed' && (
+                  <a
+                    href={`/api/downloads/adhoc/${activeAdhocJob.id}/download`}
+                    download
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors"
+                    title="Direct browser download to your device"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Download File
+                  </a>
+                )}
+
                 {(activeAdhocJob.status === 'running' || activeAdhocJob.status === 'pending') && (
                   <Button
                     variant="danger"

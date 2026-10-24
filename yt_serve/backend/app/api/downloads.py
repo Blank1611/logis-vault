@@ -2,6 +2,7 @@
 Download management API endpoints
 """
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import FileResponse
 from typing import List, Optional
 from pydantic import BaseModel
 from enum import Enum
@@ -75,6 +76,7 @@ class JobCreate(BaseModel):
     """Job creation model"""
     playlist_id: int
     job_type: JobType
+    target_format: Optional[str] = None
 
 class LogEntry(BaseModel):
     """Log entry model"""
@@ -199,7 +201,8 @@ async def create_job(
         job.job_type.value,
         download_service,
         log_callback,
-        progress_callback
+        progress_callback,
+        target_format=job.target_format
     )
     
     # Return job
@@ -582,5 +585,65 @@ async def start_adhoc_download(
         "job_type": job.job_type,
         "message": "Ad-hoc download enqueued successfully."
     }
+
+
+@router.get("/adhoc/{job_id}/download")
+async def download_adhoc_file(job_id: int, db: Session = Depends(get_db)):
+    """
+    Direct browser download of completed ad-hoc media (audio or video).
+    """
+    import os
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Job is not completed yet")
+    
+    file_to_send = None
+    if job.current_video_id:
+        from app.models.database import Track
+        track = db.query(Track).filter(Track.video_id == job.current_video_id).first()
+        if track:
+            if "audio" in (job.job_type or "") and track.primary_audio_filepath and os.path.isfile(track.primary_audio_filepath):
+                file_to_send = track.primary_audio_filepath
+            elif track.primary_filepath and os.path.isfile(track.primary_filepath):
+                file_to_send = track.primary_filepath
+            elif track.primary_audio_filepath and os.path.isfile(track.primary_audio_filepath):
+                file_to_send = track.primary_audio_filepath
+
+    if not file_to_send and job.current_video_title:
+        candidate = os.path.join(settings.get_adhoc_download_path(), job.current_video_title)
+        if os.path.isfile(candidate):
+            file_to_send = candidate
+
+    if not file_to_send:
+        adhoc_dir = settings.get_adhoc_download_path()
+        info_json = os.path.join(adhoc_dir, "adhoc_info.json")
+        if os.path.isfile(info_json):
+            try:
+                import json
+                with open(info_json, "r", encoding="utf-8") as f:
+                    entries = json.load(f)
+                    for item in entries:
+                        if item.get("id") == job.current_video_id:
+                            if "audio" in (job.job_type or "") and item.get("audio_filepath") and os.path.isfile(item["audio_filepath"]):
+                                file_to_send = item["audio_filepath"]
+                            elif item.get("filepath") and os.path.isfile(item["filepath"]):
+                                file_to_send = item["filepath"]
+                            elif item.get("audio_filepath") and os.path.isfile(item["audio_filepath"]):
+                                file_to_send = item["audio_filepath"]
+                            break
+            except Exception:
+                pass
+
+    if not file_to_send or not os.path.isfile(file_to_send):
+        raise HTTPException(status_code=404, detail="Downloaded media file not found on server")
+
+    filename = os.path.basename(file_to_send)
+    return FileResponse(
+        path=file_to_send,
+        filename=filename,
+        media_type="application/octet-stream"
+    )
 
 

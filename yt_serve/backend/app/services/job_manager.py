@@ -29,6 +29,7 @@ class JobManager:
         
         # Video extraction queue system (pub-sub)
         self.extraction_queues: Dict[int, asyncio.Queue] = {}  # job_id -> queue of video paths
+        self.job_formats: Dict[int, str] = {}  # job_id -> custom target_format override
         
         # Ensure logs directory exists
         self.logs_dir = os.path.join(settings.BASE_DOWNLOAD_PATH, "logs")
@@ -126,7 +127,8 @@ class JobManager:
         job_type: str,
         download_service: DownloadService,
         log_callback: Optional[Callable] = None,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
+        target_format: Optional[str] = None
     ) -> int:
         """
         Create and start a download job
@@ -143,6 +145,9 @@ class JobManager:
             total_items=0,
             db=db
         )
+        
+        if target_format:
+            self.job_formats[job.id] = target_format
         
         cancel_token = CancellationToken()
         self.cancel_tokens[job.id] = cancel_token
@@ -463,7 +468,8 @@ class JobManager:
                 db.commit()
                 
                 profile = getattr(playlist_obj, "quality_profile", None)
-                effective_audio_fmt = (profile.audio_format if profile and profile.audio_format else settings.AUDIO_EXTRACT_MODE)
+                override_fmt = self.job_formats.get(job_id)
+                effective_audio_fmt = override_fmt or (profile.audio_format if profile and profile.audio_format else settings.AUDIO_EXTRACT_MODE)
                 await log_wrapper(f"Starting audio extraction ({effective_audio_fmt})...")
                 
                 await download_service.extract_audio(
@@ -582,6 +588,7 @@ class JobManager:
                 del self.download_services[job_id]
             if job_id in self.extraction_queues:
                 del self.extraction_queues[job_id]
+            self.job_formats.pop(job_id, None)
             
             db.close()
     
@@ -705,12 +712,14 @@ class JobManager:
                 db.commit()
             
             profile = getattr(playlist, "quality_profile", None)
-            effective_audio_fmt = (profile.audio_format if profile and profile.audio_format else settings.AUDIO_EXTRACT_MODE)
-            await log_callback(f"Starting extraction phase (queue-based, {effective_audio_fmt})...")
+            override_fmt = self.job_formats.get(job_id)
+            effective_audio_fmt = override_fmt or (profile.audio_format if profile and profile.audio_format else settings.AUDIO_EXTRACT_MODE)
+            format_label, audio_ext, effective_mode = tools.resolve_audio_format_info(effective_audio_fmt)
+            await log_callback(f"Starting extraction phase (queue-based, {effective_audio_fmt} -> [{format_label}])...")
             
             safe_title = tools._sanitize_title(playlist.title)
             playlist_folder = os.path.join(download_service.base_path, safe_title)
-            audio_folder = os.path.join(playlist_folder, safe_title)
+            audio_folder = os.path.join(playlist_folder, f"{safe_title} [{format_label}]")
             os.makedirs(audio_folder, exist_ok=True)
             
             ffmpeg_path = tools._find_ffmpeg()
@@ -780,7 +789,7 @@ class JobManager:
                                 continue
                             
                             base_name = os.path.splitext(os.path.basename(video_path))[0]
-                            audio_path = os.path.join(audio_folder, base_name + ".mp3")
+                            audio_path = os.path.join(audio_folder, base_name + audio_ext)
                             
                             if os.path.exists(audio_path):
                                 await log_callback(f"Skipping (audio exists): {os.path.basename(video_path)}")
@@ -843,6 +852,10 @@ class JobManager:
                             await progress_callback(total_videos, len(extracted_videos))
                     
                     await log_callback(f"Extraction complete: {len(extracted_videos)} extracted, {len(failed_videos)} failed")
+                    try:
+                        tools.generate_m3u_playlists(playlist_folder, [audio_folder])
+                    except Exception as m3u_err:
+                        await log_callback(f"Warning: Could not update playlists (.m3u8): {m3u_err}")
                 
             finally:
                 executor.shutdown(wait=False)

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { playlistsApi } from '../../services/api'
+import { playlistsApi, jobsApi } from '../../services/api'
 import type { Playlist, PlaylistTrack } from '../../services/types'
 import { Modal } from '../ui/Modal'
 import { useToast } from '../../context/ToastContext'
@@ -12,7 +12,9 @@ import {
   Film,
   Music,
   Loader2,
-  Trash2
+  Trash2,
+  Download,
+  Zap
 } from 'lucide-react'
 
 export interface TrackInspectionModalProps {
@@ -25,6 +27,8 @@ export const TrackInspectionModal: React.FC<TrackInspectionModalProps> = ({ play
   const { toast } = useToast()
   const [search, setSearch] = useState('')
   const [upgradingVideoId, setUpgradingVideoId] = useState<string | null>(null)
+  const [exportFormat, setExportFormat] = useState('mp3')
+  const [extractingAudioVideoId, setExtractingAudioVideoId] = useState<string | null>(null)
 
   const hasLocalTracks = (playlist.local_count || 0) > 0
 
@@ -86,6 +90,42 @@ export const TrackInspectionModal: React.FC<TrackInspectionModalProps> = ({ play
     },
   })
 
+  // Full playlist audio extraction mutation
+  const extractPlaylistAudio = useMutation({
+    mutationFn: (fmt: string) => jobsApi.create(playlist.id, 'extract', fmt),
+    onSuccess: () => {
+      toast.success(`Audio extraction job started (${exportFormat.toUpperCase()})! View live progress in Activity Logs.`)
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+    onError: (err: any) => {
+      const msg = err.response?.data?.detail || err.message
+      toast.error(`Failed to start extraction: ${msg}`)
+    },
+  })
+
+  // Per-track single audio extraction mutation
+  const extractTrackAudio = useMutation({
+    mutationFn: async ({ videoId, fmt }: { videoId: string; fmt: string }) => {
+      setExtractingAudioVideoId(videoId)
+      return playlistsApi.extractTrackAudio(playlist.id, videoId, fmt)
+    },
+    onSuccess: (_, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['playlistTracks', playlist.id] })
+      toast.success(`Audio extracted for track in ${vars.fmt.toUpperCase()}!`)
+      setExtractingAudioVideoId(null)
+    },
+    onError: (err: any) => {
+      const msg = err.response?.data?.detail || err.message
+      toast.error(`Audio extraction failed: ${msg}`)
+      setExtractingAudioVideoId(null)
+    },
+  })
+
+  const handleDownloadZip = () => {
+    const url = playlistsApi.getExportAudioZipUrl(playlist.id, exportFormat)
+    window.open(url, '_blank')
+  }
+
   const filteredTracks = tracks.filter((t: PlaylistTrack) => {
     const q = search.toLowerCase()
     return t.title.toLowerCase().includes(q) || t.video_id.toLowerCase().includes(q)
@@ -136,6 +176,58 @@ export const TrackInspectionModal: React.FC<TrackInspectionModalProps> = ({ play
       }
     >
       <div className="space-y-4">
+        {/* Audio Export & Offline Sync Bar */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3.5 rounded-xl bg-gradient-to-r from-emerald-950/40 via-slate-900/60 to-indigo-950/40 border border-emerald-500/20 shadow-xs">
+          <div className="flex items-center gap-2.5 text-xs">
+            <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-xs">
+              <Music className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="font-semibold text-white">Audio Export &amp; Offline Sync</span>
+              <p className="text-[11px] text-slate-400">Phone-ready folders with dual UTF-8 .m3u8 &amp; .m3u playlists</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto justify-end">
+            <select
+              value={exportFormat}
+              onChange={(e) => setExportFormat(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg text-xs bg-slate-800 text-slate-200 border border-emerald-500/30 focus:outline-none focus:border-emerald-400 font-medium"
+              title="Target audio export format and bitrate"
+            >
+              <option value="mp3">MP3 320k (CBR)</option>
+              <option value="mp3_v0">MP3 V0 (VBR High)</option>
+              <option value="flac">FLAC (Lossless)</option>
+              <option value="aac">AAC (256k M4A)</option>
+              <option value="opus">OPUS (Standard)</option>
+            </select>
+
+            <button
+              onClick={() => extractPlaylistAudio.mutate(exportFormat)}
+              disabled={extractPlaylistAudio.isPending || !hasLocalTracks}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs transition-all disabled:opacity-50"
+              title="Transcode all tracks into dedicated export folder with YouTube index tags"
+            >
+              {extractPlaylistAudio.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Zap className="w-3.5 h-3.5" />
+              )}
+              <span>Extract to Folder</span>
+            </button>
+
+            <button
+              onClick={handleDownloadZip}
+              disabled={!hasLocalTracks}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs transition-all disabled:opacity-50"
+              title="Stream lossless uncompressed ZIP archive of this format directly to browser"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Download ZIP</span>
+            </button>
+          </div>
+        </div>
+
         {/* Search & Stats Bar */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/60 border border-white/10">
           <div className="relative w-full sm:w-80">
@@ -342,6 +434,21 @@ export const TrackInspectionModal: React.FC<TrackInspectionModalProps> = ({ play
                         ))}
                       </select>
                     )}
+
+                    {/* Per-track Audio Extraction Button */}
+                    <button
+                      onClick={() => extractTrackAudio.mutate({ videoId: track.video_id, fmt: exportFormat })}
+                      disabled={extractingAudioVideoId === track.video_id}
+                      className="px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-800/90 hover:bg-emerald-950/60 text-emerald-300 border border-emerald-500/30 hover:border-emerald-400 flex items-center gap-1 transition-all disabled:opacity-50"
+                      title={`Extract audio copy in ${exportFormat.toUpperCase()} with ID3 tags and update M3U8`}
+                    >
+                      {extractingAudioVideoId === track.video_id ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Zap className="w-3 h-3 text-emerald-400" />
+                      )}
+                      <span>{exportFormat.toUpperCase()}</span>
+                    </button>
 
                     {/* Multi-version management: delete version */}
                     {track.downloaded_resolutions && track.downloaded_resolutions.length > 1 && (

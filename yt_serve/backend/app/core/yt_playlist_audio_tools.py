@@ -878,7 +878,35 @@ def _check_browser_cookies_available(browser_name: str = BROWSER_NAME) -> bool:
         print(f"[WARN] Failed to inspect browser cookies: {e}")
         return False
 
-def _build_playlist_paths(title: str, create_folders: bool = True) -> Tuple[str, str, str]:
+def resolve_audio_format_info(extract_mode: Optional[str]) -> Tuple[str, str, str]:
+    """
+    Returns (format_label, audio_ext, effective_mode)
+    e.g. ("MP3", ".mp3", "mp3_best")
+         ("FLAC", ".flac", "flac")
+         ("AAC", ".m4a", "aac")
+         ("OPUS", ".opus", "opus")
+    """
+    raw = (extract_mode or getattr(settings, "AUDIO_EXTRACT_MODE", "mp3_320") or "mp3_320").lower()
+    if "flac" in raw:
+        return "FLAC", ".flac", "flac"
+    elif "aac" in raw or "m4a" in raw:
+        return "AAC", ".m4a", "aac"
+    elif "opus" in raw:
+        return "OPUS", ".opus", "opus"
+    elif "v0" in raw or "vbr" in raw or "high" in raw:
+        return "MP3 V0", ".mp3", "mp3_high"
+    elif "copy" in raw or "direct" in raw:
+        return "COPY", ".copy", "copy"
+    else:  # default mp3 320k
+        return "MP3", ".mp3", "mp3_best"
+
+
+def _build_playlist_paths(
+    title: str,
+    create_folders: bool = True,
+    format_label: Optional[str] = None,
+    extract_mode: Optional[str] = None
+) -> Tuple[str, str, str]:
     """
     Build paths for playlist folder, archive file, and audio folder.
     If create_folders is True, creates the folders immediately including playlist_info_snapshot.
@@ -886,7 +914,11 @@ def _build_playlist_paths(title: str, create_folders: bool = True) -> Tuple[str,
     safe_title = _sanitize_title(title)
     playlist_folder = os.path.join(BASE_DOWNLOAD_PATH, safe_title)
     archive_file = os.path.join(playlist_folder, "archive.txt")
-    audio_folder = os.path.join(playlist_folder, safe_title)
+    if not format_label and extract_mode:
+        label = resolve_audio_format_info(extract_mode)[0]
+    else:
+        label = format_label or resolve_audio_format_info(None)[0]
+    audio_folder = os.path.join(playlist_folder, f"{safe_title} [{label}]")
     snapshot_folder = os.path.join(playlist_folder, "playlist_info_snapshot")
 
     if create_folders:
@@ -1597,7 +1629,8 @@ def download_playlist_with_video_and_audio(
 def extract_audio_for_existing_playlist(title: str, extract_mode: Optional[str] = None):
     safe_title = _sanitize_title(title)
     playlist_folder = os.path.join(BASE_DOWNLOAD_PATH, safe_title)
-    audio_folder = os.path.join(playlist_folder, safe_title)
+    format_label, _, _ = resolve_audio_format_info(extract_mode)
+    audio_folder = os.path.join(playlist_folder, f"{safe_title} [{format_label}]")
     os.makedirs(audio_folder, exist_ok=True)
     extract_audio_for_existing_playlist_folder(playlist_folder, audio_folder, extract_mode=extract_mode)
 
@@ -1625,33 +1658,40 @@ def _detect_audio_codec(vid_path: str, ffmpeg_path: str) -> Optional[str]:
     return None
 
 
-def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, idx: int, total: int, extract_mode: Optional[str] = None) -> Dict:
-    """Extract audio from a single video file. Returns result dict."""
+def _extract_single_audio(
+    vid_path: str,
+    audio_folder: str,
+    ffmpeg_path: str,
+    idx: int,
+    total: int,
+    extract_mode: Optional[str] = None,
+    metadata: Optional[Dict] = None
+) -> Dict:
+    """Extract audio from a single video or audio file with ID3 tags. Returns result dict."""
     from subprocess import run, DEVNULL, CalledProcessError
     import threading
     
     thread_id = threading.current_thread().name
     base_name = os.path.splitext(os.path.basename(vid_path))[0]
     
-    # Check if audio already exists in ANY format (mp3, m4a, opus, etc.)
-    audio_extensions = [".mp3", ".m4a", ".opus", ".mka", ".aac", ".ogg"]
-    for ext in audio_extensions:
-        existing_audio = os.path.join(audio_folder, base_name + ext)
-        if os.path.isfile(existing_audio):
-            # If the file is 0-byte or corrupt (<=1KB), clean it up so we re-extract cleanly
-            if os.path.getsize(existing_audio) <= 1024:
-                try:
-                    os.remove(existing_audio)
-                except Exception:
-                    pass
-            else:
-                return {
-                    "status": "skipped",
-                    "video": vid_path,
-                    "audio": existing_audio,
-                    "reason": f"already exists as {ext}",
-                    "thread_id": thread_id
-                }
+    format_label, target_audio_ext, effective_mode = resolve_audio_format_info(extract_mode)
+    
+    # Check collision only for the specific target audio extension
+    existing_audio = os.path.join(audio_folder, base_name + target_audio_ext)
+    if os.path.isfile(existing_audio):
+        if os.path.getsize(existing_audio) <= 1024:
+            try:
+                os.remove(existing_audio)
+            except Exception:
+                pass
+        else:
+            return {
+                "status": "skipped",
+                "video": vid_path,
+                "audio": existing_audio,
+                "reason": f"already exists as {target_audio_ext}",
+                "thread_id": thread_id
+            }
     
     # Check if video file exists and is readable
     if not os.path.exists(vid_path):
@@ -1672,22 +1712,28 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
             "thread_id": thread_id
         }
     
-    # Normalize extraction mode from parameter or global fallback
-    raw_mode = (extract_mode or AUDIO_EXTRACT_MODE or "copy").lower()
-    if raw_mode in ("copy", "direct"):
-        effective_mode = "copy"
-    elif "opus" in raw_mode:
-        effective_mode = "opus"
-    elif "320" in raw_mode or "best" in raw_mode or raw_mode == "mp3":
-        effective_mode = "mp3_best"
-    elif "192" in raw_mode or "high" in raw_mode:
-        effective_mode = "mp3_high"
-    else:
-        effective_mode = "copy"
-
-    # Determine output file extension and command based on extraction mode and audio codec
-    detected_codec = None
-    if effective_mode == "copy":
+    # Determine output extension and codec based on effective mode
+    if effective_mode == "flac":
+        audio_ext = ".flac"
+        codec_args = ["-acodec", "flac"]
+        mode_label = "FLAC"
+    elif effective_mode == "aac":
+        audio_ext = ".m4a"
+        codec_args = ["-acodec", "aac", "-b:a", "256k"]
+        mode_label = "AAC"
+    elif effective_mode == "opus":
+        audio_ext = ".opus"
+        codec_args = ["-acodec", "libopus", "-b:a", "128k"]
+        mode_label = "OPUS"
+    elif effective_mode == "mp3_high":
+        audio_ext = ".mp3"
+        codec_args = ["-acodec", "libmp3lame", "-q:a", "0"]
+        mode_label = "MP3 V0"
+    elif effective_mode == "mp3_best":
+        audio_ext = ".mp3"
+        codec_args = ["-acodec", "libmp3lame", "-b:a", "320k"]
+        mode_label = "MP3 320k"
+    elif effective_mode == "copy":
         detected_codec = _detect_audio_codec(vid_path, ffmpeg_path)
         if detected_codec == "opus":
             audio_ext = ".opus"
@@ -1699,14 +1745,16 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
             audio_ext = ".ogg"
         else:
             audio_ext = ".m4a"
-    elif effective_mode == "opus":
-        audio_ext = ".opus"
-    else:  # mp3_best or mp3_high
+        codec_args = ["-acodec", "copy"]
+        mode_label = f"copy ({detected_codec or 'stream'})"
+    else:
         audio_ext = ".mp3"
-    
+        codec_args = ["-acodec", "libmp3lame", "-b:a", "320k"]
+        mode_label = "MP3"
+
     # Final destination audio path on main storage
     audio_path = os.path.join(audio_folder, base_name + audio_ext)
-    
+
     # Optional SSD temp working directory
     temp_dir = getattr(settings, "TEMP_DOWNLOAD_PATH", None)
     if temp_dir and temp_dir.strip():
@@ -1715,32 +1763,24 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
         working_audio_path = os.path.join(temp_audio_folder, base_name + audio_ext)
     else:
         working_audio_path = audio_path
-    
-    # Build ffmpeg command based on extraction mode
-    if effective_mode == "copy":
-        cmd = [
-            ffmpeg_path, "-y", "-i", vid_path,
-            "-vn", "-acodec", "copy", working_audio_path,
-        ]
-        mode_label = f"copy ({detected_codec or 'stream'})"
-    elif effective_mode == "opus":
-        cmd = [
-            ffmpeg_path, "-y", "-i", vid_path,
-            "-vn", "-acodec", "libopus", "-b:a", "128k", working_audio_path,
-        ]
-        mode_label = "OPUS"
-    elif effective_mode == "mp3_best":
-        cmd = [
-            ffmpeg_path, "-y", "-i", vid_path,
-            "-vn", "-acodec", "libmp3lame", "-q:a", "0", working_audio_path,
-        ]
-        mode_label = "MP3 best"
-    else:  # mp3_high
-        cmd = [
-            ffmpeg_path, "-y", "-i", vid_path,
-            "-vn", "-acodec", "libmp3lame", "-q:a", "2", working_audio_path,
-        ]
-        mode_label = "MP3 high"
+
+    # Build ffmpeg command with codec parameters and rich ID3 metadata tags
+    cmd = [ffmpeg_path, "-y", "-i", vid_path, "-vn"]
+    cmd.extend(codec_args)
+
+    if metadata:
+        if metadata.get("title"):
+            cmd.extend(["-metadata", f"title={metadata['title']}"])
+        if metadata.get("artist"):
+            cmd.extend(["-metadata", f"artist={metadata['artist']}"])
+        if metadata.get("album"):
+            cmd.extend(["-metadata", f"album={metadata['album']}"])
+        if metadata.get("track"):
+            cmd.extend(["-metadata", f"track={metadata['track']}"])
+        if metadata.get("date"):
+            cmd.extend(["-metadata", f"date={metadata['date']}"])
+
+    cmd.append(working_audio_path)
     
     timestamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] [{thread_id}] [{idx}/{total}] Extracting ({mode_label}): {os.path.basename(vid_path)}")
@@ -1849,23 +1889,105 @@ def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folde
         return
 
     effective_mode = extract_mode or AUDIO_EXTRACT_MODE
+    format_label, target_audio_ext, _ = resolve_audio_format_info(effective_mode)
+    safe_title = os.path.basename(playlist_folder)
     print(f"\nUsing FFmpeg at: {ffmpeg_path}")
-    print(f"Scanning for video files in: {playlist_folder}")
-    print(f"Audio output folder: {audio_folder}")
+    print(f"Scanning for local tracks in: {playlist_folder}")
+    print(f"Audio output folder: {audio_folder} [{format_label}]")
     print(f"Extraction mode: {effective_mode}")
     print(f"Parallel workers: {MAX_EXTRACTION_WORKERS}\n")
 
-    video_exts = ("*.mp4", "*.mkv", "*.webm", "*.m4v")
-    video_files: List[str] = []
-    for pattern in video_exts:
-        video_files.extend(glob.glob(os.path.join(playlist_folder, pattern)))
+    # 1. Load playlist snapshot metadata for offline YouTube index and ID3 tags
+    entries_by_id: Dict[str, dict] = {}
+    info_path = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
+    if not os.path.isfile(info_path):
+        info_path = os.path.join(playlist_folder, "playlist_info.json")
+    if os.path.isfile(info_path):
+        try:
+            with open(info_path, "r", encoding="utf-8") as jf:
+                data = json.load(jf)
+                for pos, ent in enumerate(data.get("entries") or [], start=1):
+                    eid = ent.get("id")
+                    if eid:
+                        entries_by_id[eid] = {
+                            "track": pos,
+                            "title": ent.get("title") or "",
+                            "artist": ent.get("artist") or ent.get("uploader") or ent.get("channel") or "",
+                            "album": safe_title,
+                            "date": str(ent.get("release_year") or (ent.get("upload_date") or "")[:4] or "")
+                        }
+        except Exception as je:
+            print(f"  [WARN] Could not parse playlist info snapshot: {je}")
 
-    if not video_files:
-        print("No video files found to extract audio from.")
+    # 2. Discover video and audio candidate files (Smart Source Selection)
+    video_exts = (".mp4", ".mkv", ".webm", ".m4v")
+    audio_exts = (".opus", ".m4a", ".ogg", ".webm", ".aac", ".flac")
+
+    candidates_by_id: Dict[str, Dict[str, str]] = {}
+    unmatched_sources: List[str] = []
+
+    try:
+        all_root_files = [os.path.join(playlist_folder, f) for f in os.listdir(playlist_folder) if os.path.isfile(os.path.join(playlist_folder, f))]
+    except Exception:
+        all_root_files = []
+
+    # Also discover any existing audio subdirectories for fast transcoding sources
+    sub_audio_files: List[str] = []
+    try:
+        for entry in os.listdir(playlist_folder):
+            full_sub = os.path.join(playlist_folder, entry)
+            if os.path.isdir(full_sub) and full_sub != audio_folder and (entry == safe_title or entry == "audio" or ("[" in entry and "]" in entry)):
+                sub_audio_files.extend([
+                    os.path.join(full_sub, f) for f in os.listdir(full_sub)
+                    if os.path.isfile(os.path.join(full_sub, f)) and any(f.lower().endswith(ext) for ext in audio_exts)
+                ])
+    except Exception:
+        pass
+
+    import re
+    # Index root files
+    for fpath in all_root_files:
+        fname = os.path.basename(fpath).lower()
+        is_vid = any(fname.endswith(ext) for ext in video_exts)
+        is_aud = any(fname.endswith(ext) for ext in audio_exts)
+        if not is_vid and not is_aud:
+            continue
+        m = re.search(r"\[([a-zA-Z0-9_-]{11})\]", fpath)
+        if m:
+            vid_id = m.group(1)
+            if vid_id not in candidates_by_id:
+                candidates_by_id[vid_id] = {}
+            if is_aud and not candidates_by_id[vid_id].get("audio"):
+                candidates_by_id[vid_id]["audio"] = fpath
+            elif is_vid and not candidates_by_id[vid_id].get("video"):
+                candidates_by_id[vid_id]["video"] = fpath
+        else:
+            unmatched_sources.append(fpath)
+
+    # Index sub-folder audio files as fast sources
+    for fpath in sub_audio_files:
+        m = re.search(r"\[([a-zA-Z0-9_-]{11})\]", fpath)
+        if m:
+            vid_id = m.group(1)
+            if vid_id in candidates_by_id and not candidates_by_id[vid_id].get("audio"):
+                candidates_by_id[vid_id]["audio"] = fpath
+
+    # Smart Source Selection: Prefer local audio source (10x faster) over video container
+    selected_sources: List[Tuple[str, Optional[str]]] = []
+    for vid_id, cands in candidates_by_id.items():
+        chosen = cands.get("audio") or cands.get("video")
+        if chosen:
+            selected_sources.append((chosen, vid_id))
+
+    for un_path in unmatched_sources:
+        selected_sources.append((un_path, None))
+
+    if not selected_sources:
+        print("No video or audio files found to extract from.")
         return
 
-    total = len(video_files)
-    print(f"Found {total} video files to process\n")
+    total = len(selected_sources)
+    print(f"Found {total} track sources to process\n")
     
     start_time = time.time()
     completed = 0
@@ -1873,21 +1995,28 @@ def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folde
     
     # Use ThreadPoolExecutor for parallel extraction
     with ThreadPoolExecutor(max_workers=MAX_EXTRACTION_WORKERS) as executor:
-        # Submit all extraction tasks
-        future_to_video = {
-            executor.submit(_extract_single_audio, vid_path, audio_folder, ffmpeg_path, idx, total, effective_mode): vid_path
-            for idx, vid_path in enumerate(video_files, start=1)
+        future_to_src = {
+            executor.submit(
+                _extract_single_audio,
+                src_path,
+                audio_folder,
+                ffmpeg_path,
+                idx,
+                total,
+                effective_mode,
+                metadata=entries_by_id.get(vid_id) if vid_id else None
+            ): src_path
+            for idx, (src_path, vid_id) in enumerate(selected_sources, start=1)
         }
         
         # Process results as they complete
-        for future in as_completed(future_to_video):
-            # Check for cancellation
+        for future in as_completed(future_to_src):
             if GLOBAL_RUNSTATE is not None and getattr(GLOBAL_RUNSTATE, "cancelled", False):
                 print("\n⚠️  Cancellation requested. Stopping extraction...")
                 executor.shutdown(wait=False, cancel_futures=True)
                 break
             
-            vid_path = future_to_video[future]
+            src_path = future_to_src[future]
             try:
                 result = future.result()
                 completed += 1
@@ -1905,7 +2034,7 @@ def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folde
                     callback(total, completed)
                     
             except Exception as e:
-                print(f"  ⚠️  Unexpected error processing {os.path.basename(vid_path)}: {e}")
+                print(f"  ⚠️  Unexpected error processing {os.path.basename(src_path)}: {e}")
                 failed += 1
     
     end_time = time.time()
@@ -1922,16 +2051,113 @@ def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folde
         print(f"  Average: {duration/len(EXTRACTED_AUDIO):.1f} sec/file")
     print("="*60)
 
-    if SKIPPED_AUDIO_EXISTING and len(SKIPPED_AUDIO_EXISTING) <= 10:
-        print("\nSkipped (already exist):")
-        for item in SKIPPED_AUDIO_EXISTING:
-            print(f"  - {os.path.basename(item['audio'])}")
-    elif len(SKIPPED_AUDIO_EXISTING) > 10:
-        print(f"\nSkipped {len(SKIPPED_AUDIO_EXISTING)} files (already exist)")
+    # 3. Auto-generate .m3u8 and .m3u playlist files for video and audio
+    try:
+        generate_m3u_playlists(playlist_folder, [audio_folder])
+    except Exception as m3u_err:
+        print(f"  [WARN] Failed to generate .m3u playlists: {m3u_err}")
 
-    if EXTRACTED_AUDIO and len(EXTRACTED_AUDIO) <= 10:
-        print("\nNewly extracted:")
-        for item in EXTRACTED_AUDIO:
-            print(f"  - {os.path.basename(item['audio'])}")
-    elif len(EXTRACTED_AUDIO) > 10:
-        print(f"\nExtracted {len(EXTRACTED_AUDIO)} new audio files")
+
+def generate_m3u_playlists(playlist_folder: str, audio_folders: Optional[List[str]] = None) -> None:
+    """
+    Generate both .m3u8 (UTF-8 standard) and .m3u (UTF-8 legacy) playlist files
+    for the video root folder and any audio export folders, preserving the exact
+    top-to-bottom YouTube order from playlist_info.json snapshot.
+    """
+    safe_title = os.path.basename(playlist_folder)
+    info_path = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
+    if not os.path.isfile(info_path):
+        info_path = os.path.join(playlist_folder, "playlist_info.json")
+
+    entries: List[dict] = []
+    if os.path.isfile(info_path):
+        try:
+            with open(info_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                entries = data.get("entries") or []
+        except Exception as e:
+            print(f"Warning: could not read {info_path} for m3u generation: {e}")
+
+    def _write_playlist(folder: str, tracks: List[Tuple[float, str, str]]) -> None:
+        if not tracks or not os.path.isdir(folder):
+            return
+        folder_base = os.path.basename(folder)
+        names = {safe_title, folder_base}
+        content_lines = ["#EXTM3U\n"]
+        for duration, title, filename in tracks:
+            dur_int = int(duration) if duration and duration > 0 else -1
+            content_lines.append(f"#EXTINF:{dur_int},{title}\n{filename}\n")
+        content = "".join(content_lines)
+        for name in names:
+            m3u8_path = os.path.join(folder, f"{name}.m3u8")
+            m3u_path = os.path.join(folder, f"{name}.m3u")
+            try:
+                with open(m3u8_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                with open(m3u_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception as err:
+                print(f"Warning: could not write m3u playlist to {folder}: {err}")
+
+    # 1. Video root playlist
+    video_exts = (".mp4", ".mkv", ".webm", ".m4v")
+    try:
+        root_files = [f for f in os.listdir(playlist_folder) if os.path.isfile(os.path.join(playlist_folder, f))]
+    except Exception:
+        root_files = []
+
+    video_tracks: List[Tuple[float, str, str]] = []
+    if entries:
+        for entry in entries:
+            vid_id = entry.get("id")
+            if not vid_id:
+                continue
+            matching = [f for f in root_files if f"[{vid_id}]" in f and any(f.lower().endswith(ext) for ext in video_exts)]
+            if matching:
+                dur = float(entry.get("duration") or -1)
+                title = entry.get("title") or matching[0]
+                video_tracks.append((dur, title, matching[0]))
+    else:
+        for f in sorted(root_files):
+            if any(f.lower().endswith(ext) for ext in video_exts):
+                video_tracks.append((-1, os.path.splitext(f)[0], f))
+
+    _write_playlist(playlist_folder, video_tracks)
+
+    # 2. Audio folders
+    target_audio_dirs = list(audio_folders or [])
+    try:
+        for d in os.listdir(playlist_folder):
+            sub_p = os.path.join(playlist_folder, d)
+            if os.path.isdir(sub_p) and d.startswith(safe_title) and "[" in d and "]" in d:
+                if sub_p not in target_audio_dirs:
+                    target_audio_dirs.append(sub_p)
+    except Exception:
+        pass
+
+    audio_exts = (".mp3", ".opus", ".m4a", ".flac", ".ogg", ".aac")
+    for a_dir in target_audio_dirs:
+        if not os.path.isdir(a_dir):
+            continue
+        try:
+            a_files = [f for f in os.listdir(a_dir) if os.path.isfile(os.path.join(a_dir, f))]
+        except Exception:
+            a_files = []
+
+        audio_tracks: List[Tuple[float, str, str]] = []
+        if entries:
+            for entry in entries:
+                vid_id = entry.get("id")
+                if not vid_id:
+                    continue
+                matching = [f for f in a_files if f"[{vid_id}]" in f and any(f.lower().endswith(ext) for ext in audio_exts)]
+                if matching:
+                    dur = float(entry.get("duration") or -1)
+                    title = entry.get("title") or matching[0]
+                    audio_tracks.append((dur, title, matching[0]))
+        else:
+            for f in sorted(a_files):
+                if any(f.lower().endswith(ext) for ext in audio_exts):
+                    audio_tracks.append((-1, os.path.splitext(f)[0], f))
+
+        _write_playlist(a_dir, audio_tracks)

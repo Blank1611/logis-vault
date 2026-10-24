@@ -253,7 +253,16 @@ def hardlink_track_to_playlist(
             success = True
 
     # 2. Hardlink Audio
-    if src_audio and os.path.isfile(src_audio) and target_audio_dir:
+    if src_audio and os.path.isfile(src_audio):
+        if not target_audio_dir:
+            audio_sub = os.path.basename(os.path.dirname(src_audio))
+            to_title = os.path.basename(target_playlist_dir)
+            import re
+            m = re.search(r"(\[.*?\])$", audio_sub)
+            tag = m.group(1) if m else "[MP3]"
+            target_audio_dir = os.path.join(target_playlist_dir, f"{to_title} {tag}")
+            os.makedirs(target_audio_dir, exist_ok=True)
+
         audio_name = os.path.basename(src_audio)
         dst_audio = os.path.join(target_audio_dir, audio_name)
         create_hardlink_or_copy(src_audio, dst_audio)
@@ -270,6 +279,13 @@ def hardlink_track_to_playlist(
         )
         logger.info(f"✓ Zero-space hardlinked track '{track_info['title']}' ({video_id}) to playlist #{target_playlist_id}")
 
+        # Regenerate .m3u8 playlists for target playlist
+        try:
+            from app.core.yt_playlist_audio_tools import generate_m3u_playlists
+            generate_m3u_playlists(target_playlist_dir, [target_audio_dir] if target_audio_dir else None)
+        except Exception as m3u_e:
+            logger.debug(f"Target playlist m3u generation note: {m3u_e}")
+
     return success
 
 
@@ -283,6 +299,8 @@ def execute_track_move(
     """
     Relocate track files from one playlist folder to another and log the move.
     """
+    from app.core.config import settings
+
     with get_db_context(db) as session:
         from_playlist = session.query(Playlist).filter(Playlist.id == from_playlist_id).first()
         to_playlist = session.query(Playlist).filter(Playlist.id == to_playlist_id).first()
@@ -303,6 +321,57 @@ def execute_track_move(
             track.playlists_json = current_playlists
             track.updated_at = datetime.utcnow()
 
+        # Physical file relocation / hardlinks
+        safe_from = "".join(c for c in from_playlist.title if c not in r'\/:*?"<>|').strip() or "playlist"
+        safe_to = "".join(c for c in to_playlist.title if c not in r'\/:*?"<>|').strip() or "playlist"
+        from_dir = os.path.join(settings.BASE_DOWNLOAD_PATH, safe_from)
+        to_dir = os.path.join(settings.BASE_DOWNLOAD_PATH, safe_to)
+        os.makedirs(to_dir, exist_ok=True)
+
+        # 1. Move/Relocate video
+        if track and track.primary_filepath and os.path.isfile(track.primary_filepath):
+            fname = os.path.basename(track.primary_filepath)
+            dest_video = os.path.join(to_dir, fname)
+            if os.path.dirname(track.primary_filepath) == from_dir and not os.path.exists(dest_video):
+                try:
+                    shutil.move(track.primary_filepath, dest_video)
+                    track.primary_filepath = dest_video
+                except Exception as mv_e:
+                    logger.warning(f"Could not move video file {track.primary_filepath} -> {dest_video}: {mv_e}")
+            elif not os.path.exists(dest_video):
+                create_hardlink_or_copy(track.primary_filepath, dest_video)
+
+        # 2. Move/Relocate audio
+        if track and track.primary_audio_filepath and os.path.isfile(track.primary_audio_filepath):
+            audio_fname = os.path.basename(track.primary_audio_filepath)
+            src_audio_dir = os.path.dirname(track.primary_audio_filepath)
+            audio_sub = os.path.basename(src_audio_dir)
+            import re
+            m = re.search(r"(\[.*?\])$", audio_sub)
+            tag = m.group(1) if m else "[MP3]"
+            dest_audio_dir = os.path.join(to_dir, f"{safe_to} {tag}")
+            os.makedirs(dest_audio_dir, exist_ok=True)
+            dest_audio = os.path.join(dest_audio_dir, audio_fname)
+
+            if src_audio_dir.startswith(from_dir) and not os.path.exists(dest_audio):
+                try:
+                    shutil.move(track.primary_audio_filepath, dest_audio)
+                    track.primary_audio_filepath = dest_audio
+                    # Fast metadata touch to update Album tag to new playlist title
+                    try:
+                        import subprocess
+                        temp_meta_path = dest_audio + ".tmp"
+                        cmd = ["ffmpeg", "-y", "-i", dest_audio, "-c", "copy", "-metadata", f"album={to_playlist.title}", temp_meta_path]
+                        ret = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        if ret.returncode == 0 and os.path.isfile(temp_meta_path):
+                            shutil.move(temp_meta_path, dest_audio)
+                    except Exception as meta_touch_e:
+                        logger.debug(f"Audio metadata touch skipped: {meta_touch_e}")
+                except Exception as mv_a_e:
+                    logger.warning(f"Could not move audio file: {mv_a_e}")
+            elif not os.path.exists(dest_audio):
+                create_hardlink_or_copy(track.primary_audio_filepath, dest_audio)
+
         # Record Move in History
         history_entry = MovedTrackHistory(
             video_id=video_id,
@@ -316,6 +385,14 @@ def execute_track_move(
         )
         session.add(history_entry)
         session.flush()
+
+        # Regenerate .m3u8 playlists for both playlists
+        try:
+            from app.core.yt_playlist_audio_tools import generate_m3u_playlists
+            generate_m3u_playlists(from_dir)
+            generate_m3u_playlists(to_dir)
+        except Exception as m3u_e:
+            logger.debug(f"M3U playlist regeneration note: {m3u_e}")
 
         logger.info(f"Moved track '{title}' ({video_id}) from '{from_playlist.title}' to '{to_playlist.title}'")
 

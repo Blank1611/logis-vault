@@ -2,6 +2,8 @@
 Playlist management API endpoints for multi-platform playlist operations
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from typing import List, Optional, Set
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
@@ -764,5 +766,208 @@ async def delete_track_version(
         "deleted": deleted,
         "remaining_resolutions": track.downloaded_resolutions_json,
         "primary_filepath": track.primary_filepath
+    }
+
+
+@router.get("/{playlist_id}/export-audio/zip")
+async def export_audio_as_zip(
+    playlist_id: int,
+    format: str = "mp3",
+    db: Session = Depends(get_db)
+):
+    """
+    Stream a lossless, uncompressed ZIP archive containing the extracted audio folder
+    and its .m3u8/.m3u playlist files for immediate browser download.
+    """
+    import zipfile
+    import tempfile
+    from app.services.ytdlp_service import ytdlp_service
+    from app.core import yt_playlist_audio_tools as tools
+
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    format_label, audio_ext, effective_mode = tools.resolve_audio_format_info(format)
+    playlist_folder = ytdlp_service.resolve_playlist_folder(playlist.title)
+    safe_title = tools._sanitize_title(playlist.title)
+
+    candidates = [
+        os.path.join(playlist_folder, f"{safe_title} [{format_label}]"),
+        os.path.join(playlist_folder, safe_title),
+        os.path.join(playlist_folder, "audio")
+    ]
+
+    target_audio_folder = None
+    for cand in candidates:
+        if os.path.isdir(cand):
+            files = [f for f in os.listdir(cand) if f.lower().endswith(audio_ext)]
+            if files:
+                target_audio_folder = cand
+                break
+
+    if not target_audio_folder:
+        for cand in candidates:
+            if os.path.isdir(cand):
+                files = [f for f in os.listdir(cand) if f.lower().endswith((".mp3", ".opus", ".flac", ".m4a", ".aac"))]
+                if files:
+                    target_audio_folder = cand
+                    break
+
+    if not target_audio_folder or not os.path.isdir(target_audio_folder):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No audio files found for format '{format_label}'. Please run audio extraction first."
+        )
+
+    # Ensure m3u8 and m3u exist in target_audio_folder
+    try:
+        tools.generate_m3u_playlists(playlist_folder, [target_audio_folder])
+    except Exception:
+        pass
+
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    temp_zip_path = temp_zip.name
+    temp_zip.close()
+
+    folder_name_in_zip = f"{safe_title} [{format_label}]"
+    with zipfile.ZipFile(temp_zip_path, "w", zipfile.ZIP_STORED) as zf:
+        for root, dirs, files in os.walk(target_audio_folder):
+            for file in sorted(files):
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, target_audio_folder)
+                arcname = os.path.join(folder_name_in_zip, rel_path)
+                zf.write(full_path, arcname=arcname)
+
+    return FileResponse(
+        temp_zip_path,
+        filename=f"{folder_name_in_zip}.zip",
+        media_type="application/zip",
+        background=BackgroundTask(os.remove, temp_zip_path)
+    )
+
+
+@router.post("/{playlist_id}/tracks/{video_id}/extract-audio")
+async def extract_single_track_audio(
+    playlist_id: int,
+    video_id: str,
+    format: str = "mp3",
+    db: Session = Depends(get_db)
+):
+    """
+    On-demand single track audio extraction with rich ID3 metadata injection and M3U8 update.
+    Prioritizes local audio source or extracts from local video container without network call.
+    """
+    import json
+    from app.services.ytdlp_service import ytdlp_service
+    from app.core import yt_playlist_audio_tools as tools
+    from app.core.track_indexer import probe_local_media_metadata
+
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    track = TrackRepository.get_by_video_id(video_id, db=db)
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    format_label, audio_ext, effective_mode = tools.resolve_audio_format_info(format)
+    playlist_folder = ytdlp_service.resolve_playlist_folder(playlist.title)
+    safe_title = tools._sanitize_title(playlist.title)
+    audio_folder = os.path.join(playlist_folder, f"{safe_title} [{format_label}]")
+    os.makedirs(audio_folder, exist_ok=True)
+
+    # Find source file
+    source_file = None
+    if track.primary_audio_filepath and os.path.isfile(track.primary_audio_filepath):
+        source_file = track.primary_audio_filepath
+    elif track.primary_filepath and os.path.isfile(track.primary_filepath):
+        source_file = track.primary_filepath
+    else:
+        for fname in os.listdir(playlist_folder):
+            if f"[{video_id}]" in fname:
+                full = os.path.join(playlist_folder, fname)
+                if os.path.isfile(full):
+                    source_file = full
+                    break
+
+    if not source_file or not os.path.isfile(source_file):
+        raise HTTPException(
+            status_code=404,
+            detail="No local media file found for this track. Please download the track first."
+        )
+
+    ffmpeg_path = tools._find_ffmpeg()
+    if not ffmpeg_path:
+        raise HTTPException(status_code=500, detail="FFmpeg not found on system")
+
+    # Read YouTube index and metadata from snapshot
+    meta = None
+    idx = 1
+    total_tracks = 1
+    snapshot_file = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
+    if os.path.isfile(snapshot_file):
+        try:
+            with open(snapshot_file, "r", encoding="utf-8") as f:
+                s_data = json.load(f)
+                entries = s_data.get("entries") or []
+                total_tracks = max(len(entries), 1)
+                for i, e in enumerate(entries, start=1):
+                    if e.get("id") == video_id:
+                        idx = i
+                        meta = {
+                            "title": e.get("title") or track.title,
+                            "artist": e.get("uploader") or e.get("channel") or track.artist or "Unknown Artist",
+                            "album": playlist.title,
+                            "track": f"{idx}/{total_tracks}",
+                            "date": (e.get("upload_date") or "")[:4] or str(datetime.utcnow().year)
+                        }
+                        break
+        except Exception:
+            pass
+
+    if not meta:
+        meta = {
+            "title": track.title,
+            "artist": track.artist or "Unknown Artist",
+            "album": playlist.title,
+            "track": "1/1",
+            "date": str(datetime.utcnow().year)
+        }
+
+    res = tools._extract_single_audio(
+        vid_path=source_file,
+        audio_folder=audio_folder,
+        ffmpeg_path=ffmpeg_path,
+        idx=idx,
+        total=total_tracks,
+        extract_mode=format,
+        metadata=meta
+    )
+
+    if res.get("status") == "failed":
+        raise HTTPException(status_code=500, detail="Audio extraction failed")
+
+    target_audio = res.get("audio")
+    if target_audio and os.path.isfile(target_audio):
+        meta_probe = probe_local_media_metadata(track.primary_filepath or "", target_audio)
+        track = TrackRepository.update_audio_metadata(
+            video_id=video_id,
+            audio_filepath=target_audio,
+            codec=meta_probe.get("audio_codec") or audio_ext.lstrip("."),
+            bitrate=meta_probe.get("audio_bitrate") or "320k",
+            db=db
+        )
+        try:
+            tools.generate_m3u_playlists(playlist_folder, [audio_folder])
+        except Exception:
+            pass
+
+    return {
+        "status": "success",
+        "audio_filepath": target_audio,
+        "format": format_label,
+        "codec": track.downloaded_audio_codec,
+        "bitrate": track.downloaded_audio_bitrate
     }
 

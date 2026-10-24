@@ -25,6 +25,10 @@ export const playlistsApi = {
     api.post<{ status: string; primary_filepath: string; primary_resolution: string }>(`/playlists/${playlistId}/tracks/${videoId}/set-primary`, { resolution }),
   deleteTrackVersion: (playlistId: number, videoId: string, resolution: string) =>
     api.delete<{ status: string; deleted: boolean; remaining_resolutions: string[]; primary_filepath: string }>(`/playlists/${playlistId}/tracks/${videoId}/versions/${resolution}`),
+  extractTrackAudio: (playlistId: number, videoId: string, format: string = 'mp3') =>
+    api.post<{ status: string; audio_filepath: string; format: string; codec?: string; bitrate?: string }>(`/playlists/${playlistId}/tracks/${videoId}/extract-audio`, null, { params: { format } }),
+  getExportAudioZipUrl: (playlistId: number, format: string = 'mp3') =>
+    `/api/playlists/${playlistId}/export-audio/zip?format=${encodeURIComponent(format)}`,
 }
 
 export const profilesApi = {
@@ -39,8 +43,8 @@ export const jobsApi = {
   list: (playlistId?: number) => 
     api.get<Job[]>('/downloads/jobs', { params: { playlist_id: playlistId } }),
   get: (id: number) => api.get<Job>(`/downloads/jobs/${id}`),
-  create: (playlistId: number, jobType: 'download' | 'extract' | 'both') =>
-    api.post<Job>('/downloads/jobs', { playlist_id: playlistId, job_type: jobType }),
+  create: (playlistId: number, jobType: 'download' | 'extract' | 'both', targetFormat?: string) =>
+    api.post<Job>('/downloads/jobs', { playlist_id: playlistId, job_type: jobType, target_format: targetFormat }),
   cancel: (id: number) => api.post(`/downloads/jobs/${id}/cancel`),
   logs: (id: number, lines?: number) =>
     api.get<LogEntry[]>(`/downloads/jobs/${id}/logs`, { params: { lines } }),
