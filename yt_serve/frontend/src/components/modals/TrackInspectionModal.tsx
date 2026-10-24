@@ -26,13 +26,17 @@ export const TrackInspectionModal: React.FC<TrackInspectionModalProps> = ({ play
   const [search, setSearch] = useState('')
   const [upgradingVideoId, setUpgradingVideoId] = useState<string | null>(null)
 
-  // Fetch playlist tracks
+  const hasLocalTracks = (playlist.local_count || 0) > 0
+
+  // Fetch playlist tracks (instant render with 0ms delay if local_count === 0)
   const { data: tracks = [], isLoading } = useQuery({
     queryKey: ['playlistTracks', playlist.id],
     queryFn: async () => {
       const res = await playlistsApi.getTracks(playlist.id)
       return res.data
     },
+    enabled: hasLocalTracks,
+    initialData: hasLocalTracks ? undefined : [],
   })
 
   // Refresh available resolutions mutation
@@ -163,8 +167,24 @@ export const TrackInspectionModal: React.FC<TrackInspectionModalProps> = ({ play
             <p className="text-sm font-medium">Loading playlist track catalog...</p>
           </div>
         ) : filteredTracks.length === 0 ? (
-          <div className="text-center py-12 text-slate-400 bg-slate-900/30 rounded-xl border border-white/5">
-            <p className="text-sm">No tracks matched your criteria.</p>
+          <div className="text-center py-12 text-slate-400 bg-slate-900/30 rounded-xl border border-white/5 space-y-1.5">
+            {tracks.length === 0 ? (
+              <>
+                <Film className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                <p className="text-sm font-semibold text-slate-300">No tracks downloaded yet</p>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                  Run a download job for this playlist to inspect video tracks, audio codecs, and available resolutions.
+                </p>
+              </>
+            ) : (
+              <>
+                <Search className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                <p className="text-sm font-semibold text-slate-300">No tracks match "{search}"</p>
+                <p className="text-xs text-slate-500">
+                  Try searching for a different title or video ID.
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="space-y-2.5 max-h-[60vh] overflow-y-auto pr-1">
