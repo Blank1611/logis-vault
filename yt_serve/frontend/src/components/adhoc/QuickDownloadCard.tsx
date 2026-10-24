@@ -97,17 +97,19 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden mb-8">
+    <div className="glass-panel rounded-2xl shadow-2xl border border-white/10 overflow-hidden mb-8">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 p-6 text-white">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 bg-white/10 rounded-xl backdrop-blur-sm">
-            <Sparkles className="w-6 h-6 text-yellow-300" />
+      <div className="bg-gradient-to-r from-cyan-600/40 via-blue-600/40 to-indigo-600/40 border-b border-white/10 p-6 text-white backdrop-blur-xl">
+        <div className="flex items-center gap-3.5">
+          <div className="p-3 bg-cyan-500/20 rounded-2xl border border-cyan-400/40 backdrop-blur-md shadow-lg shadow-cyan-500/20">
+            <Sparkles className="w-6 h-6 text-cyan-300" />
           </div>
           <div>
-            <h2 className="text-xl font-bold">Quick / Single Video Downloader</h2>
-            <p className="text-xs text-blue-100 mt-0.5">
-              Download individual YouTube videos without creating a playlist. Includes format probing, resolution choice, and audio extraction.
+            <h2 className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-cyan-300 bg-clip-text text-transparent">
+              Quick / Single Video Downloader
+            </h2>
+            <p className="text-xs text-slate-300 mt-0.5">
+              Probe formats, choose any target resolution up to 4K, extract lossless audio, and download directly without subscribing to a playlist.
             </p>
           </div>
         </div>
@@ -116,7 +118,7 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
       <div className="p-6 space-y-6">
         {/* URL Input Form */}
         <form onSubmit={handleProbe} className="space-y-2">
-          <label className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+          <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
             YouTube Video URL
           </label>
           <div className="flex gap-2">
@@ -125,13 +127,12 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
               placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/..."
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              className="flex-1 glass-input px-4 py-2.5 rounded-xl text-sm placeholder-slate-400 focus:outline-none"
             />
-            <Button
+            <button
               type="submit"
-              variant="primary"
               disabled={!url.trim() || probeMutation.isPending}
-              className="px-5 bg-indigo-600 hover:bg-indigo-700 flex items-center gap-2 shrink-0"
+              className="glass-btn-cyan px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 shrink-0 disabled:opacity-50 cursor-pointer shadow-md"
             >
               {probeMutation.isPending ? (
                 <>
@@ -144,7 +145,7 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
                   <span>Inspect Streams</span>
                 </>
               )}
-            </Button>
+            </button>
           </div>
         </form>
 

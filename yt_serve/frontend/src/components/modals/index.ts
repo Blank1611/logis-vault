@@ -4,4 +4,6 @@ export * from './LogsModal'
 export * from './InitialSetupModal'
 export * from './ReorganizeModal'
 export * from './DeduplicateModal'
+export * from './TrackInspectionModal'
 export * from '../InterruptedJobsDialog'
+

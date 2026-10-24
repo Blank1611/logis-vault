@@ -67,51 +67,51 @@ export function FieldHeader({
 export function AudioModeCard({ mode }: { mode: string }) {
   if (mode === 'copy') {
     return (
-      <div className="mt-2.5 p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-xl text-xs space-y-1">
-        <div className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-          <Zap className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+      <div className="mt-2.5 p-3.5 bg-emerald-950/40 backdrop-blur-md border border-emerald-500/40 rounded-xl text-xs space-y-1 shadow-[0_0_15px_rgba(16,185,129,0.15)]">
+        <div className="font-semibold text-emerald-300 flex items-center gap-1.5">
+          <Zap className="w-4 h-4 text-emerald-400" />
           Direct Stream Copy (Lossless & Instantaneous)
         </div>
-        <p className="text-emerald-700 dark:text-emerald-300/90 leading-relaxed">
-          Extracts YouTube's original native audio track (<code className="font-mono bg-emerald-100 dark:bg-emerald-900/60 px-1 py-0.5 rounded">.m4a</code> for AAC, <code className="font-mono bg-emerald-100 dark:bg-emerald-900/60 px-1 py-0.5 rounded">.opus</code> for Opus) without transcoding. Takes ~0.2s per song with zero CPU load and zero acoustic compression loss.
+        <p className="text-emerald-300/80 leading-relaxed">
+          Extracts YouTube's original native audio track (<code className="font-mono bg-emerald-900/60 text-emerald-200 px-1 py-0.5 rounded">.m4a</code> for AAC, <code className="font-mono bg-emerald-900/60 text-emerald-200 px-1 py-0.5 rounded">.opus</code> for Opus) without transcoding. Takes ~0.2s per song with zero CPU load and zero acoustic compression loss.
         </p>
       </div>
     )
   }
   if (mode === 'mp3_best') {
     return (
-      <div className="mt-2.5 p-3 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 rounded-xl text-xs space-y-1">
-        <div className="font-semibold text-indigo-800 dark:text-indigo-300 flex items-center gap-1.5">
-          <Music className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+      <div className="mt-2.5 p-3.5 bg-indigo-950/40 backdrop-blur-md border border-indigo-500/40 rounded-xl text-xs space-y-1 shadow-[0_0_15px_rgba(99,102,241,0.15)]">
+        <div className="font-semibold text-indigo-300 flex items-center gap-1.5">
+          <Music className="w-4 h-4 text-indigo-400" />
           MP3 Best Quality (VBR ~250–320 kbps)
         </div>
-        <p className="text-indigo-700 dark:text-indigo-300/90 leading-relaxed">
-          Re-encodes audio to universal MP3 at maximum variable bitrate (<code className="font-mono bg-indigo-100 dark:bg-indigo-900/60 px-1 py-0.5 rounded">libmp3lame -q:a 0</code>). 100% compatible with older car stereos and legacy MP3 players.
+        <p className="text-indigo-300/80 leading-relaxed">
+          Re-encodes audio to universal MP3 at maximum variable bitrate (<code className="font-mono bg-indigo-900/60 text-indigo-200 px-1 py-0.5 rounded">libmp3lame -q:a 0</code>). 100% compatible with older car stereos and legacy MP3 players.
         </p>
       </div>
     )
   }
   if (mode === 'mp3_high') {
     return (
-      <div className="mt-2.5 p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/60 rounded-xl text-xs space-y-1">
-        <div className="font-semibold text-blue-800 dark:text-blue-300 flex items-center gap-1.5">
-          <Music className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+      <div className="mt-2.5 p-3.5 bg-blue-950/40 backdrop-blur-md border border-blue-500/40 rounded-xl text-xs space-y-1 shadow-[0_0_15px_rgba(59,130,246,0.15)]">
+        <div className="font-semibold text-blue-300 flex items-center gap-1.5">
+          <Music className="w-4 h-4 text-blue-400" />
           MP3 High Quality (VBR ~190–250 kbps)
         </div>
-        <p className="text-blue-700 dark:text-blue-300/90 leading-relaxed">
-          Standard high-quality MP3 encoding (<code className="font-mono bg-blue-100 dark:bg-blue-900/60 px-1 py-0.5 rounded">libmp3lame -q:a 2</code>). Great balance of smaller file sizes and high audio fidelity.
+        <p className="text-blue-300/80 leading-relaxed">
+          Standard high-quality MP3 encoding (<code className="font-mono bg-blue-900/60 text-blue-200 px-1 py-0.5 rounded">libmp3lame -q:a 2</code>). Great balance of smaller file sizes and high audio fidelity.
         </p>
       </div>
     )
   }
   if (mode === 'opus') {
     return (
-      <div className="mt-2.5 p-3 bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/60 rounded-xl text-xs space-y-1">
-        <div className="font-semibold text-purple-800 dark:text-purple-300 flex items-center gap-1.5">
-          <Disc className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+      <div className="mt-2.5 p-3.5 bg-purple-950/40 backdrop-blur-md border border-purple-500/40 rounded-xl text-xs space-y-1 shadow-[0_0_15px_rgba(168,85,247,0.15)]">
+        <div className="font-semibold text-purple-300 flex items-center gap-1.5">
+          <Disc className="w-4 h-4 text-purple-400" />
           Opus Audio (~160 kbps)
         </div>
-        <p className="text-purple-700 dark:text-purple-300/90 leading-relaxed">
+        <p className="text-purple-300/80 leading-relaxed">
           Modern, highly-efficient Opus audio stream. Exceptional fidelity at lower bitrates.
         </p>
       </div>

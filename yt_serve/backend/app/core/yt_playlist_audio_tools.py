@@ -1594,12 +1594,12 @@ def download_playlist_with_video_and_audio(
 
 # ====== MODE 1: EXTRACT FROM EXISTING ======
 
-def extract_audio_for_existing_playlist(title: str):
+def extract_audio_for_existing_playlist(title: str, extract_mode: Optional[str] = None):
     safe_title = _sanitize_title(title)
     playlist_folder = os.path.join(BASE_DOWNLOAD_PATH, safe_title)
     audio_folder = os.path.join(playlist_folder, safe_title)
     os.makedirs(audio_folder, exist_ok=True)
-    extract_audio_for_existing_playlist_folder(playlist_folder, audio_folder)
+    extract_audio_for_existing_playlist_folder(playlist_folder, audio_folder, extract_mode=extract_mode)
 
 
 def _detect_audio_codec(vid_path: str, ffmpeg_path: str) -> Optional[str]:
@@ -1625,7 +1625,7 @@ def _detect_audio_codec(vid_path: str, ffmpeg_path: str) -> Optional[str]:
     return None
 
 
-def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, idx: int, total: int) -> Dict:
+def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, idx: int, total: int, extract_mode: Optional[str] = None) -> Dict:
     """Extract audio from a single video file. Returns result dict."""
     from subprocess import run, DEVNULL, CalledProcessError
     import threading
@@ -1672,9 +1672,22 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
             "thread_id": thread_id
         }
     
+    # Normalize extraction mode from parameter or global fallback
+    raw_mode = (extract_mode or AUDIO_EXTRACT_MODE or "copy").lower()
+    if raw_mode in ("copy", "direct"):
+        effective_mode = "copy"
+    elif "opus" in raw_mode:
+        effective_mode = "opus"
+    elif "320" in raw_mode or "best" in raw_mode or raw_mode == "mp3":
+        effective_mode = "mp3_best"
+    elif "192" in raw_mode or "high" in raw_mode:
+        effective_mode = "mp3_high"
+    else:
+        effective_mode = "copy"
+
     # Determine output file extension and command based on extraction mode and audio codec
     detected_codec = None
-    if AUDIO_EXTRACT_MODE == "copy":
+    if effective_mode == "copy":
         detected_codec = _detect_audio_codec(vid_path, ffmpeg_path)
         if detected_codec == "opus":
             audio_ext = ".opus"
@@ -1686,7 +1699,7 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
             audio_ext = ".ogg"
         else:
             audio_ext = ".m4a"
-    elif AUDIO_EXTRACT_MODE == "opus":
+    elif effective_mode == "opus":
         audio_ext = ".opus"
     else:  # mp3_best or mp3_high
         audio_ext = ".mp3"
@@ -1704,19 +1717,19 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
         working_audio_path = audio_path
     
     # Build ffmpeg command based on extraction mode
-    if AUDIO_EXTRACT_MODE == "copy":
+    if effective_mode == "copy":
         cmd = [
             ffmpeg_path, "-y", "-i", vid_path,
             "-vn", "-acodec", "copy", working_audio_path,
         ]
         mode_label = f"copy ({detected_codec or 'stream'})"
-    elif AUDIO_EXTRACT_MODE == "opus":
+    elif effective_mode == "opus":
         cmd = [
             ffmpeg_path, "-y", "-i", vid_path,
             "-vn", "-acodec", "libopus", "-b:a", "128k", working_audio_path,
         ]
         mode_label = "OPUS"
-    elif AUDIO_EXTRACT_MODE == "mp3_best":
+    elif effective_mode == "mp3_best":
         cmd = [
             ffmpeg_path, "-y", "-i", vid_path,
             "-vn", "-acodec", "libmp3lame", "-q:a", "0", working_audio_path,
@@ -1821,7 +1834,7 @@ def _extract_single_audio(vid_path: str, audio_folder: str, ffmpeg_path: str, id
             "thread_id": thread_id
         }
 
-def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folder: str):
+def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folder: str, extract_mode: Optional[str] = None):
     global SKIPPED_AUDIO_EXISTING, EXTRACTED_AUDIO
     SKIPPED_AUDIO_EXISTING = []
     EXTRACTED_AUDIO = []
@@ -1835,10 +1848,11 @@ def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folde
         print("FFmpeg not found; cannot extract audio.")
         return
 
+    effective_mode = extract_mode or AUDIO_EXTRACT_MODE
     print(f"\nUsing FFmpeg at: {ffmpeg_path}")
     print(f"Scanning for video files in: {playlist_folder}")
     print(f"Audio output folder: {audio_folder}")
-    print(f"Extraction mode: {AUDIO_EXTRACT_MODE}")
+    print(f"Extraction mode: {effective_mode}")
     print(f"Parallel workers: {MAX_EXTRACTION_WORKERS}\n")
 
     video_exts = ("*.mp4", "*.mkv", "*.webm", "*.m4v")
@@ -1861,7 +1875,7 @@ def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folde
     with ThreadPoolExecutor(max_workers=MAX_EXTRACTION_WORKERS) as executor:
         # Submit all extraction tasks
         future_to_video = {
-            executor.submit(_extract_single_audio, vid_path, audio_folder, ffmpeg_path, idx, total): vid_path
+            executor.submit(_extract_single_audio, vid_path, audio_folder, ffmpeg_path, idx, total, effective_mode): vid_path
             for idx, vid_path in enumerate(video_files, start=1)
         }
         

@@ -2,8 +2,8 @@ import React, { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { playlistsApi, profilesApi } from '../../services/api'
 import { useToast } from '../../context/ToastContext'
-import { Button } from '../ui/Button'
 import { Plus } from 'lucide-react'
+import { formatProfileOptionLabel } from '../../services/types'
 
 export const AddPlaylistBar: React.FC = () => {
   const [url, setUrl] = useState('')
@@ -40,9 +40,17 @@ export const AddPlaylistBar: React.FC = () => {
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-8 border border-gray-100 dark:border-gray-700">
+    <div className="glass-panel rounded-2xl p-6 mb-8 border border-white/10 shadow-2xl">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Add Playlist</h2>
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center shadow-md">
+            <Plus className="w-4 h-4 text-white" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-white tracking-tight">Add Playlist</h2>
+            <p className="text-xs text-slate-400">Queue a playlist to archive, synchronize, or extract audio</p>
+          </div>
+        </div>
       </div>
       <form onSubmit={handleAdd} className="flex flex-col sm:flex-row gap-3">
         <input
@@ -50,40 +58,39 @@ export const AddPlaylistBar: React.FC = () => {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="https://www.youtube.com/playlist?list=... (YouTube supported)"
-          className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 text-sm"
+          className="flex-1 glass-input px-4 py-2.5 rounded-xl text-sm placeholder-slate-400 focus:outline-none"
         />
         <div className="flex items-center gap-2">
           <select
             value={selectedProfile}
             onChange={(e) => setSelectedProfile(e.target.value)}
-            className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-xs bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="glass-select px-3 py-2.5 rounded-xl text-xs text-slate-200 cursor-pointer focus:outline-none shadow-sm"
             title="Quality Profile"
           >
             {profiles.length > 0 ? (
               profiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.is_audio_only ? 'Audio Only' : `${p.max_resolution}p`})
+                <option key={p.id} value={p.id} className="bg-slate-900 text-white">
+                  {formatProfileOptionLabel(p)}
                 </option>
               ))
             ) : (
               <>
-                <option value="standard_1080p">Standard HD (1080p)</option>
-                <option value="standard_720p">Standard HD (720p)</option>
-                <option value="ultra_4k">Ultra 4K (2160p)</option>
-                <option value="fast_mixtape_360p">Fast 360p (Challenge-Free)</option>
-                <option value="audio_only">Audio Only Vault</option>
+                <option value="standard_1080p" className="bg-slate-900 text-white">Standard HD (1080p • Direct Copy)</option>
+                <option value="standard_720p" className="bg-slate-900 text-white">Standard HD (720p • Direct Copy)</option>
+                <option value="ultra_4k" className="bg-slate-900 text-white">Ultra 4K (2160p • Direct Copy)</option>
+                <option value="fast_mixtape_360p" className="bg-slate-900 text-white">Fast 360p (360p • Direct Copy)</option>
+                <option value="audio_only" className="bg-slate-900 text-white">Audio Only Vault (Audio Only • Direct Copy)</option>
               </>
             )}
           </select>
-          <Button
+          <button
             type="submit"
-            loading={addPlaylist.isPending}
-            disabled={!url.trim()}
-            icon={<Plus className="w-4 h-4" />}
-            className="px-6 shrink-0"
+            disabled={addPlaylist.isPending || !url.trim()}
+            className="glass-btn-cyan px-6 py-2.5 rounded-xl text-xs font-bold shrink-0 flex items-center gap-1.5 disabled:opacity-50 transition-all cursor-pointer"
           >
-            Add
-          </Button>
+            <Plus className="w-4 h-4" />
+            <span>Add</span>
+          </button>
         </div>
       </form>
     </div>

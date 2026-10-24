@@ -4,6 +4,7 @@ Centralized data access for Radarr/Sonarr-style quality and extraction profiles.
 """
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+import uuid
 from sqlalchemy.orm import Session
 
 from app.models.database import QualityProfile, Playlist, get_db_context
@@ -26,26 +27,34 @@ class QualityProfileRepository:
 
     @staticmethod
     def create(
-        id: str,
-        name: str,
+        id: Optional[str] = None,
+        name: str = "",
         description: Optional[str] = None,
         max_resolution: int = 1080,
-        audio_format: str = "mp3_320",
+        audio_format: str = "copy",
         cipher_strategy: str = "web_decipher",
         is_audio_only: bool = False,
         is_builtin: bool = False,
         db: Optional[Session] = None
     ) -> QualityProfile:
         """Create and persist a new Quality Profile"""
-        clean_id = id.strip().lower().replace(" ", "_")
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Profile name cannot be empty.")
+
+        clean_id = (id.strip().lower().replace(" ", "_")) if (id and id.strip()) else f"prof_{uuid.uuid4().hex[:8]}"
         with get_db_context(db) as session:
-            existing = session.query(QualityProfile).filter(QualityProfile.id == clean_id).first()
-            if existing:
+            existing_id = session.query(QualityProfile).filter(QualityProfile.id == clean_id).first()
+            if existing_id:
                 raise ValueError(f"Profile with ID '{clean_id}' already exists.")
+
+            existing_name = session.query(QualityProfile).filter(QualityProfile.name.ilike(clean_name)).first()
+            if existing_name:
+                raise ValueError(f"Profile with name '{clean_name}' already exists.")
 
             profile = QualityProfile(
                 id=clean_id,
-                name=name.strip(),
+                name=clean_name,
                 description=description,
                 max_resolution=max_resolution,
                 audio_format=audio_format,
@@ -78,7 +87,16 @@ class QualityProfileRepository:
                 return None
 
             if name is not None:
-                profile.name = name.strip()
+                new_name = name.strip()
+                if not new_name:
+                    raise ValueError("Profile name cannot be empty.")
+                existing_name = session.query(QualityProfile).filter(
+                    QualityProfile.name.ilike(new_name),
+                    QualityProfile.id != profile_id
+                ).first()
+                if existing_name:
+                    raise ValueError(f"Profile with name '{new_name}' already exists.")
+                profile.name = new_name
             if description is not None:
                 profile.description = description
             if max_resolution is not None:

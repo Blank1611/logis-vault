@@ -462,12 +462,15 @@ class JobManager:
                 job.extract_status = "pending"
                 db.commit()
                 
-                await log_wrapper("Starting audio extraction...")
+                profile = getattr(playlist_obj, "quality_profile", None)
+                effective_audio_fmt = (profile.audio_format if profile and profile.audio_format else settings.AUDIO_EXTRACT_MODE)
+                await log_wrapper(f"Starting audio extraction ({effective_audio_fmt})...")
                 
                 await download_service.extract_audio(
                     playlist.title,
                     progress_callback=extract_progress_wrapper,
-                    log_callback=log_wrapper
+                    log_callback=log_wrapper,
+                    extract_mode=effective_audio_fmt
                 )
                 
                 playlist_obj.last_extract = datetime.utcnow()
@@ -701,7 +704,9 @@ class JobManager:
                 job.extract_status = "running"
                 db.commit()
             
-            await log_callback("Starting extraction phase (queue-based)...")
+            profile = getattr(playlist, "quality_profile", None)
+            effective_audio_fmt = (profile.audio_format if profile and profile.audio_format else settings.AUDIO_EXTRACT_MODE)
+            await log_callback(f"Starting extraction phase (queue-based, {effective_audio_fmt})...")
             
             safe_title = tools._sanitize_title(playlist.title)
             playlist_folder = os.path.join(download_service.base_path, safe_title)
@@ -792,7 +797,8 @@ class JobManager:
                                 audio_folder,
                                 ffmpeg_path,
                                 len(extracted_videos) + len(active_tasks) + 1,
-                                total_videos
+                                total_videos,
+                                effective_audio_fmt
                             )
                             active_tasks.add(future)
                             

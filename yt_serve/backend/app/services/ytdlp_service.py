@@ -164,7 +164,8 @@ class DownloadService:
         self,
         playlist_title: str,
         progress_callback: Optional[Callable] = None,
-        log_callback: Optional[Callable] = None
+        log_callback: Optional[Callable] = None,
+        extract_mode: Optional[str] = None
     ):
         """
         Extract audio from existing videos
@@ -173,6 +174,7 @@ class DownloadService:
             playlist_title: Playlist title
             progress_callback: Async function(total, current) for progress updates
             log_callback: Async function(message) for log messages
+            extract_mode: Audio extraction mode override (copy, opus, mp3_best, etc.)
         """
         if not tools:
             raise RuntimeError("yt_playlist_audio_tools not available")
@@ -212,8 +214,7 @@ class DownloadService:
         try:
             await loop.run_in_executor(
                 None,
-                tools.extract_audio_for_existing_playlist,
-                playlist_title
+                lambda: tools.extract_audio_for_existing_playlist(playlist_title, extract_mode=extract_mode)
             )
         finally:
             # Clean up callbacks to prevent interference with other operations

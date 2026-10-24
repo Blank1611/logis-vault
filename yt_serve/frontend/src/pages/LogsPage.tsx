@@ -221,19 +221,19 @@ export const LogsPage: React.FC<LogsPageProps> = ({
   return (
     <div className="space-y-5">
       {/* Primary Navigation Tabs */}
-      <div className="flex border-b border-gray-200 dark:border-gray-700 gap-3">
+      <div className="glass-nav-capsule p-1.5 rounded-2xl flex flex-wrap gap-1.5 border border-white/10 shadow-lg">
         <button
           onClick={() => setActiveTab('queue')}
-          className={`pb-3 px-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-all ${
+          className={`px-4 py-2 rounded-xl font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer ${
             activeTab === 'queue'
-              ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400'
-              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              ? 'glass-nav-pill-active shadow-md'
+              : 'glass-nav-pill-inactive'
           }`}
         >
-          <ListOrdered className="w-4 h-4" />
-          Download Queue & History
+          <ListOrdered className="w-4 h-4 text-cyan-400" />
+          <span>Download Queue & History</span>
           {runningJobs.length > 0 && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-bold animate-pulse">
+            <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold animate-pulse">
               {runningJobs.length} Active
             </span>
           )}
@@ -241,38 +241,38 @@ export const LogsPage: React.FC<LogsPageProps> = ({
 
         <button
           onClick={() => setActiveTab('jobs')}
-          className={`pb-3 px-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-all ${
+          className={`px-4 py-2 rounded-xl font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer ${
             activeTab === 'jobs'
-              ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400'
-              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              ? 'glass-nav-pill-active shadow-md'
+              : 'glass-nav-pill-inactive'
           }`}
         >
-          <Terminal className="w-4 h-4" />
-          Job Execution Logs
+          <Terminal className="w-4 h-4 text-cyan-400" />
+          <span>Job Execution Logs</span>
         </button>
 
         <button
           onClick={() => setActiveTab('system')}
-          className={`pb-3 px-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-all ${
+          className={`px-4 py-2 rounded-xl font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer ${
             activeTab === 'system'
-              ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400'
-              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              ? 'glass-nav-pill-active shadow-md'
+              : 'glass-nav-pill-inactive'
           }`}
         >
-          <Server className="w-4 h-4" />
-          Live System & Observability
-          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-normal">
-            Server & App
+          <Server className="w-4 h-4 text-cyan-400" />
+          <span>Live System Observability</span>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-semibold">
+            Server
           </span>
         </button>
       </div>
 
       {/* When Queue Tab is Active: Render Queue Table */}
       {activeTab === 'queue' ? (
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-200 dark:border-gray-700 overflow-hidden">
-          <div className="p-5 border-b border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gray-50/50 dark:bg-gray-800/50">
+        <div className="glass-panel rounded-2xl shadow-xl border border-white/10 overflow-hidden">
+          <div className="p-5 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950/40">
             <div>
-              <h3 className="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
                 <ListOrdered className="w-5 h-5 text-indigo-500" />
                 Active Download Queue & Historical Jobs
               </h3>

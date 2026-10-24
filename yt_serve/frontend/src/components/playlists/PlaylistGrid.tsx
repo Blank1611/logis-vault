@@ -38,9 +38,17 @@ export const PlaylistGrid: React.FC<PlaylistGridProps> = ({
   }
 
   const sortedPlaylists = [...playlists].sort((a, b) => {
-    const aPending = Math.max(0, a.playlist_count - a.local_count)
-    const bPending = Math.max(0, b.playlist_count - b.local_count)
-    return bPending - aPending
+    const aAvailable = Math.max(0, a.playlist_count - (a.unavailable_count || 0))
+    const bAvailable = Math.max(0, b.playlist_count - (b.unavailable_count || 0))
+    const aPending = Math.max(0, aAvailable - a.local_count)
+    const bPending = Math.max(0, bAvailable - b.local_count)
+
+    // Primary: descending by missing/pending count (highest pending at very top)
+    if (bPending !== aPending) {
+      return bPending - aPending
+    }
+    // Secondary: tie-break alphabetically by title
+    return a.title.localeCompare(b.title)
   })
 
   return (

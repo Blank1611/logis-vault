@@ -21,17 +21,62 @@ class TestQualityProfilesContract(unittest.TestCase):
         self.db.close()
 
     def test_seeded_builtin_profiles(self):
-        """Verify standard built-in profiles are auto-seeded on database initialization"""
+        """Verify standard built-in profiles are auto-seeded on database initialization with copy audio format"""
         profiles = QualityProfileRepository.get_all(self.db)
         profile_ids = {p.id for p in profiles}
         expected_ids = {"ultra_4k", "qhd_1440p", "standard_1080p", "standard_720p", "fast_mixtape_360p", "audio_only"}
         self.assertTrue(expected_ids.issubset(profile_ids), f"Missing built-in profiles: {expected_ids - profile_ids}")
 
-        # Check fast_mixtape_360p cipher strategy
+        # Check fast_mixtape_360p cipher strategy and copy format
         fast_prof = QualityProfileRepository.get_by_id("fast_mixtape_360p", self.db)
         self.assertIsNotNone(fast_prof)
         self.assertEqual(fast_prof.cipher_strategy, "direct_format18")
         self.assertEqual(fast_prof.max_resolution, 360)
+        self.assertEqual(fast_prof.audio_format, "copy")
+
+        std_1080 = QualityProfileRepository.get_by_id("standard_1080p", self.db)
+        self.assertEqual(std_1080.audio_format, "copy")
+
+    def test_surrogate_key_and_name_uniqueness(self):
+        """Verify profile creation without id generates a surrogate key and rejects duplicate names"""
+        # Create without id
+        res = self.client.post("/api/profiles", json={
+            "name": "Surrogate Test Profile",
+            "max_resolution": 1080,
+            "audio_format": "copy"
+        })
+        self.assertEqual(res.status_code, 201)
+        created = res.json()
+        self.assertTrue(created["id"].startswith("prof_"), f"Expected prof_ prefix, got {created['id']}")
+        self.assertEqual(created["name"], "Surrogate Test Profile")
+        generated_id = created["id"]
+
+        # Duplicate name should fail
+        res_dup = self.client.post("/api/profiles", json={
+            "name": "Surrogate Test Profile",
+            "max_resolution": 720
+        })
+        self.assertEqual(res_dup.status_code, 400)
+
+        # Cleanup
+        del_res = self.client.delete(f"/api/profiles/{generated_id}")
+        self.assertEqual(del_res.status_code, 204)
+
+    def test_list_quality_profiles_endpoint(self):
+        """Verify GET /api/profiles returns 200 OK and serializes all built-in profiles"""
+        res = self.client.get("/api/profiles")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIsInstance(data, list)
+        self.assertGreaterEqual(len(data), 6)
+        ids = {p["id"] for p in data}
+        expected = {"ultra_4k", "qhd_1440p", "standard_1080p", "standard_720p", "fast_mixtape_360p", "audio_only"}
+        self.assertTrue(expected.issubset(ids), f"Missing profiles from endpoint: {expected - ids}")
+        # Verify schema serialization of first item
+        first = data[0]
+        self.assertIn("name", first)
+        self.assertIn("max_resolution", first)
+        self.assertIn("is_builtin", first)
 
     def test_profile_crud_endpoints(self):
         """Test creating, fetching, updating, and deleting a custom profile"""

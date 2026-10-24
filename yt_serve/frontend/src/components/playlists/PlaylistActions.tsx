@@ -1,7 +1,7 @@
 import React from 'react'
 import type { Playlist, Job } from '../../services/types'
 import { Button } from '../ui/Button'
-import { PlayCircle, Download, Music, RefreshCw, Trash2, Edit3 } from 'lucide-react'
+import { PlayCircle, Download, Music, RefreshCw, Trash2 } from 'lucide-react'
 import { useConfirm } from '../../context/ConfirmContext'
 
 export interface PlaylistActionsProps {
@@ -35,7 +35,7 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
   onRefresh,
   onDelete,
   onOpenFolder: _onOpenFolder = () => {},
-  onEditExclusions,
+  onEditExclusions: _onEditExclusions,
 }) => {
   const confirm = useConfirm()
   const isCaughtUp = playlist.local_count >= playlist.playlist_count && playlist.playlist_count > 0
@@ -67,14 +67,12 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
   const isCurrentScanning = isScanning && currentScanningPlaylist === playlist.title
 
   return (
-    <div className={`flex items-center gap-2 ${compact ? 'flex-wrap' : 'w-full'}`}>
-      <Button
-        variant="primary"
-        size={compact ? 'sm' : 'md'}
+    <div className={`flex items-center gap-1.5 ${compact ? 'flex-wrap' : 'w-full'}`}>
+      {/* 1. Download & Extract (Blue) */}
+      <button
+        type="button"
         onClick={() => onStartJob('both')}
         disabled={isCaughtUp || isScanning}
-        icon={<PlayCircle className="w-4 h-4" />}
-        className={compact ? '' : 'flex-[2]'}
         title={
           isScanning
             ? 'Daily scheduled scan is currently in progress. Please wait for it to complete.'
@@ -82,55 +80,69 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
             ? 'All available videos already downloaded'
             : 'Download and extract all missing tracks'
         }
+        className={`flex items-center justify-center gap-1.5 font-bold rounded-lg transition-all text-xs text-white ${
+          compact ? 'px-3 py-1.5' : 'flex-[2.5] py-2 px-3'
+        } ${
+          isCaughtUp || isScanning
+            ? 'bg-gray-700/60 text-gray-400 cursor-not-allowed border border-white/5 opacity-40'
+            : 'bg-blue-600 hover:bg-blue-500 shadow-md shadow-blue-600/30 active:scale-95'
+        }`}
       >
-        {compact ? 'Download & Extract' : 'Download'}
-      </Button>
+        <PlayCircle className="w-4 h-4 shrink-0" />
+        <span className="truncate">Download & Extract</span>
+      </button>
 
-      {compact && (
-        <Button
-          variant="success"
-          size="sm"
-          onClick={() => onStartJob('download')}
-          disabled={isCaughtUp || isScanning}
-          icon={<Download className="w-4 h-4" />}
-          title={
-            isScanning
-              ? 'Daily scheduled scan is currently in progress. Please wait for it to complete.'
-              : 'Download videos only without extraction'
-          }
-        >
-          Download Only
-        </Button>
-      )}
-
-      <Button
-        variant="secondary"
-        size={compact ? 'sm' : 'md'}
-        onClick={() => onStartJob('extract')}
-        disabled={isScanning}
-        icon={<Music className="w-4 h-4 text-purple-600 dark:text-purple-400" />}
+      {/* 2. Download Only (Green) */}
+      <button
+        type="button"
+        onClick={() => onStartJob('download')}
+        disabled={isCaughtUp || isScanning}
         title={
           isScanning
             ? 'Daily scheduled scan is currently in progress. Please wait for it to complete.'
-            : 'Extract Audio Only'
+            : isCaughtUp
+            ? 'All available videos already downloaded'
+            : 'Download videos only without audio extraction'
         }
-        className={compact ? '' : 'px-3'}
+        className={`flex items-center justify-center font-bold rounded-lg transition-all text-xs text-white ${
+          compact ? 'px-3 py-1.5 gap-1.5' : 'p-2'
+        } ${
+          isCaughtUp || isScanning
+            ? 'bg-gray-700/60 text-gray-400 cursor-not-allowed border border-white/5 opacity-40'
+            : 'bg-emerald-600 hover:bg-emerald-500 shadow-md shadow-emerald-600/30 active:scale-95'
+        }`}
       >
-        {compact ? 'Extract' : ''}
-      </Button>
+        <Download className="w-4 h-4 shrink-0" />
+        {compact && <span>Download Only</span>}
+      </button>
 
-      <Button
-        variant="secondary"
-        size={compact ? 'sm' : 'md'}
+      {/* 3. Extract Audio (Magenta / Purple) - Remains enabled even when caught up! */}
+      <button
+        type="button"
+        onClick={() => onStartJob('extract')}
+        disabled={isScanning}
+        title={
+          isScanning
+            ? 'Daily scheduled scan is currently in progress. Please wait for it to complete.'
+            : 'Extract Audio Only (Direct stream copy or transcode)'
+        }
+        className={`flex items-center justify-center font-bold rounded-lg transition-all text-xs text-white ${
+          compact ? 'px-3 py-1.5 gap-1.5' : 'p-2'
+        } ${
+          isScanning
+            ? 'bg-gray-700/60 text-gray-400 cursor-not-allowed opacity-40'
+            : 'bg-fuchsia-600 hover:bg-fuchsia-500 shadow-md shadow-fuchsia-600/30 active:scale-95'
+        }`}
+      >
+        <Music className="w-4 h-4 shrink-0" />
+        {compact && <span>Extract</span>}
+      </button>
+
+      {/* 4. Refresh Metadata (Slate / Gray) */}
+      <button
+        type="button"
         onClick={onRefresh}
         disabled={isRefreshing || isScanning}
-        icon={
-          <RefreshCw
-            className={`w-4 h-4 ${
-              isRefreshing || isCurrentScanning ? 'animate-spin text-blue-500' : ''
-            }`}
-          />
-        }
         title={
           isScanning
             ? 'Daily background auto-scan is currently in progress. Please wait for it to complete.'
@@ -138,35 +150,30 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
             ? 'Refreshing playlist metadata...'
             : 'Refresh playlist metadata and check for new tracks'
         }
-        className={compact ? '' : 'px-3'}
+        className={`flex items-center justify-center font-bold rounded-lg transition-all text-xs text-white ${
+          compact ? 'px-3 py-1.5 gap-1.5' : 'p-2'
+        } ${
+          isRefreshing || isScanning
+            ? 'bg-gray-700/60 text-gray-400 cursor-not-allowed opacity-40'
+            : 'bg-slate-700 hover:bg-slate-600 active:scale-95'
+        }`}
       >
-        {compact ? 'Refresh' : ''}
-      </Button>
+        <RefreshCw
+          className={`w-4 h-4 shrink-0 ${
+            isRefreshing || isCurrentScanning ? 'animate-spin text-blue-400' : ''
+          }`}
+        />
+        {compact && <span>Refresh</span>}
+      </button>
 
-      {onEditExclusions && (
-        <Button
-          variant="secondary"
-          size={compact ? 'sm' : 'md'}
-          onClick={onEditExclusions}
-          icon={<Edit3 className="w-4 h-4 text-amber-600 dark:text-amber-400" />}
-          title={
-            playlist.excluded_ids?.length
-              ? `Manage exclusions (${playlist.excluded_ids.length} currently excluded)`
-              : 'Manage video exclusions'
-          }
-          className={compact ? '' : 'px-3'}
-        >
-          {compact ? `Exclusions ${playlist.excluded_ids?.length ? `(${playlist.excluded_ids.length})` : ''}` : ''}
-        </Button>
-      )}
-
-      <Button
-        variant="ghost"
-        size={compact ? 'sm' : 'md'}
+      {/* 5. Delete / Remove Playlist (Red) */}
+      <button
+        type="button"
         onClick={async () => {
           const ok = await confirm({
             title: `Remove "${playlist.title}"`,
-            message: 'Remove this playlist entry from the database?\n\nDownloaded files and folders on disk will remain 100% intact.',
+            message:
+              'Remove this playlist entry from the database?\n\nDownloaded files and folders on disk will remain 100% intact.',
             confirmText: 'Remove Playlist',
             isDestructive: true,
           })
@@ -174,12 +181,14 @@ export const PlaylistActions: React.FC<PlaylistActionsProps> = ({
             onDelete()
           }
         }}
-        icon={<Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400" />}
         title="Remove playlist entry (files stay intact)"
-        className="px-3 hover:bg-rose-50 dark:hover:bg-rose-900/30"
+        className={`flex items-center justify-center font-bold rounded-lg transition-all text-xs text-white bg-rose-700 hover:bg-rose-600 active:scale-95 ${
+          compact ? 'px-3 py-1.5 gap-1.5' : 'p-2'
+        }`}
       >
-        {compact ? 'Remove' : ''}
-      </Button>
+        <Trash2 className="w-4 h-4 shrink-0" />
+        {compact && <span>Remove</span>}
+      </button>
     </div>
   )
 }

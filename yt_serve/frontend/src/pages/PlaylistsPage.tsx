@@ -59,20 +59,21 @@ export const PlaylistsPage: React.FC<PlaylistsPageProps> = ({
 
       {/* Playlist View & Management Toolbar */}
       {!isLoading && playlists.length > 0 && (
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-6 bg-white dark:bg-gray-800/60 p-3 rounded-xl border border-gray-200/80 dark:border-gray-700/80 shadow-xs">
-          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-6 glass-panel p-3.5 rounded-2xl border border-white/10 shadow-lg">
+          <div className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
             <span>{playlists.length} {playlists.length === 1 ? 'Playlist' : 'Playlists'} Total</span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             {/* Track Index Button */}
             {onOpenReorganize && (
               <button
                 onClick={onOpenReorganize}
-                className="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 transition-colors flex items-center gap-1.5 text-xs font-semibold text-gray-700 dark:text-gray-200 shadow-2xs"
+                className="px-3.5 py-1.5 rounded-xl bg-slate-900/70 hover:bg-slate-800/90 border border-white/10 hover:border-cyan-500/40 text-slate-200 hover:text-cyan-300 transition-all flex items-center gap-1.5 text-xs font-semibold shadow-xs backdrop-blur-md cursor-pointer"
                 title="Track Index & Inter-Playlist Reorganization Manager"
               >
-                <Layers className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                <Layers className="w-3.5 h-3.5 text-cyan-400" />
                 <span>Track Index</span>
               </button>
             )}
@@ -81,23 +82,23 @@ export const PlaylistsPage: React.FC<PlaylistsPageProps> = ({
             {onOpenDeduplicate && (
               <button
                 onClick={onOpenDeduplicate}
-                className="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 transition-colors flex items-center gap-1.5 text-xs font-semibold text-gray-700 dark:text-gray-200 shadow-2xs"
+                className="px-3.5 py-1.5 rounded-xl bg-slate-900/70 hover:bg-slate-800/90 border border-white/10 hover:border-purple-500/40 text-slate-200 hover:text-purple-300 transition-all flex items-center gap-1.5 text-xs font-semibold shadow-xs backdrop-blur-md cursor-pointer"
                 title="Retroactive Library Deduplication & Hardlink Space Reclaimer"
               >
-                <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
                 <span>Deduplicate</span>
               </button>
             )}
 
             {/* View Mode Toggle (Grid / List) */}
             {onViewModeChange && (
-              <div className="flex gap-1 p-1 rounded-lg bg-gray-100 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600">
+              <div className="flex gap-1 p-1 rounded-xl bg-slate-900/80 border border-white/10">
                 <button
                   onClick={() => onViewModeChange('grid')}
-                  className={`p-1.5 rounded transition-colors ${
+                  className={`p-1.5 rounded-lg transition-all ${
                     viewMode === 'grid'
-                      ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-400 shadow-2xs'
-                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-xs'
+                      : 'text-slate-400 hover:text-white'
                   }`}
                   title="Grid View"
                 >
@@ -105,10 +106,10 @@ export const PlaylistsPage: React.FC<PlaylistsPageProps> = ({
                 </button>
                 <button
                   onClick={() => onViewModeChange('list')}
-                  className={`p-1.5 rounded transition-colors ${
+                  className={`p-1.5 rounded-lg transition-all ${
                     viewMode === 'list'
-                      ? 'bg-white dark:bg-gray-600 text-blue-600 dark:text-blue-400 shadow-2xs'
-                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-xs'
+                      : 'text-slate-400 hover:text-white'
                   }`}
                   title="List View"
                 >

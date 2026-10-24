@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { configApi, type Config } from '../services/api'
+import { configApi, profilesApi, type Config } from '../services/api'
 import { useToast } from '../context/ToastContext'
 import { useConfirm } from '../context/ConfirmContext'
 import { FieldHeader, AudioModeCard } from '../components/ui/FormField'
@@ -8,13 +8,14 @@ import { IntervalPicker } from '../components/ui/IntervalPicker'
 import { TimePicker } from '../components/ui/TimePicker'
 import { UnmanagedFoldersManager } from '../components/settings/UnmanagedFoldersManager'
 import { Button } from '../components/ui/Button'
+import { QualityProfilesManager } from '../components/settings/QualityProfilesManager'
 import {
   HardDrive, Music, Key, Clock, GitBranch, Settings2, ArrowLeft,
   Save, RotateCcw, Loader2, CheckCircle2, AlertCircle, Shield,
-  Upload, Trash2, Cpu, RefreshCw, ChevronDown, ChevronUp, Check, X, Globe
+  Upload, Trash2, Cpu, RefreshCw, ChevronDown, ChevronUp, Check, X, Globe, Sliders
 } from 'lucide-react'
 
-export type SettingsTab = 'storage' | 'audio' | 'auth' | 'scheduler' | 'git' | 'network'
+export type SettingsTab = 'storage' | 'profiles' | 'audio' | 'auth' | 'scheduler' | 'git' | 'network'
 
 export interface SettingsPageProps {
   onBack: () => void
@@ -69,6 +70,16 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
       const res = await configApi.getYtdlpVersion()
       return res.data
     }
+  })
+
+  // Prefetch quality profiles concurrently with system settings
+  const { data: profiles = [] } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: async () => {
+      const res = await profilesApi.getAll()
+      return res.data
+    },
+    staleTime: 5 * 60 * 1000,
   })
 
   // Mutations
@@ -232,6 +243,7 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
 
   const tabs: Array<{ id: SettingsTab; label: string; icon: React.ElementType }> = [
     { id: 'storage', label: 'Storage & Folders', icon: HardDrive },
+    { id: 'profiles', label: 'Quality Profiles', icon: Sliders },
     { id: 'audio', label: 'Audio Extraction', icon: Music },
     { id: 'auth', label: 'Cookies & Auth', icon: Key },
     { id: 'scheduler', label: 'Scheduler & Discovery', icon: Clock },
@@ -251,16 +263,16 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col pb-24">
+    <div className="min-h-screen bg-transparent text-gray-100 flex flex-col pb-24">
       {/* Top Header Bar */}
-      <header className="sticky top-0 z-40 bg-gray-900/90 backdrop-blur-md border-b border-gray-800 px-6 py-4 flex items-center justify-between">
+      <header className="sticky top-0 z-40 bg-slate-950/80 backdrop-blur-md border-b border-white/10 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Button
             type="button"
             variant="secondary"
             size="sm"
             onClick={onBack}
-            className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700"
+            className="flex items-center gap-2 bg-slate-800/80 hover:bg-slate-700 text-gray-200 border border-white/10 rounded-xl"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Back to Playlists</span>
@@ -268,7 +280,7 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
 
           <div>
             <h1 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-              <Settings2 className="w-5 h-5 text-blue-500" />
+              <Settings2 className="w-5 h-5 text-blue-400" />
               <span>System Settings</span>
             </h1>
             <p className="text-xs text-gray-400">
@@ -279,7 +291,7 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
 
         <div className="flex items-center gap-3">
           {isDirty && (
-            <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-950/60 text-amber-400 border border-amber-800/80 animate-pulse">
+            <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-950/70 text-amber-400 border border-amber-500/40 animate-pulse">
               Unsaved Changes
             </span>
           )}
@@ -289,10 +301,11 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
             size="sm"
             onClick={handleReset}
             disabled={!isDirty || updateConfig.isPending}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${isDirty
-                ? 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200'
-                : 'opacity-40 cursor-not-allowed bg-gray-100 dark:bg-gray-800 text-gray-400'
-              }`}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+              isDirty
+                ? 'bg-slate-800 hover:bg-slate-700 text-gray-200 border border-white/10'
+                : 'opacity-40 cursor-not-allowed bg-slate-900 text-gray-400 border border-transparent'
+            }`}
           >
             <RotateCcw className="w-3.5 h-3.5" />
             <span>Reset</span>
@@ -303,7 +316,7 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
             size="sm"
             onClick={handleSubmit}
             disabled={updateConfig.isPending}
-            className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
+            className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 shadow-md shadow-blue-600/30 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95"
           >
             {updateConfig.isPending ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -318,7 +331,7 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
       {/* Main Layout: Sidebar Tabs + Content Pane */}
       <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 md:grid-cols-4 gap-6">
         {/* Navigation Sidebar */}
-        <nav className="md:col-span-1 space-y-1">
+        <nav className="md:col-span-1 space-y-1.5">
           {tabs.map((tab) => {
             const Icon = tab.icon
             const isActive = activeTab === tab.id
@@ -327,19 +340,20 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${isActive
-                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-900 border border-transparent'
-                  }`}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
+                  isActive
+                    ? 'bg-blue-600/25 text-white border border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.25)]'
+                    : 'text-gray-400 hover:text-white hover:bg-white/5 border border-transparent'
+                }`}
               >
-                <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-gray-400'}`} />
+                <Icon className={`w-4 h-4 ${isActive ? 'text-blue-400' : 'text-gray-400'}`} />
                 <span>{tab.label}</span>
               </button>
             )
           })}
 
           {onOpenDeduplicate && (
-            <div className="pt-4 border-t border-gray-800">
+            <div className="pt-4 border-t border-white/10">
               <button
                 type="button"
                 onClick={onOpenDeduplicate}
@@ -357,7 +371,7 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
           {/* TAB 1: Storage & Folders */}
           {activeTab === 'storage' && (
             <div className="space-y-6 animate-in fade-in duration-200">
-              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl space-y-6">
+              <div className="glass-panel rounded-2xl p-6 shadow-2xl space-y-6">
                 <h3 className="text-lg font-bold text-white flex items-center gap-2 border-b border-gray-800 pb-3">
                   <HardDrive className="w-5 h-5 text-blue-400" />
                   <span>Storage Directories</span>
@@ -491,9 +505,16 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
             </div>
           )}
 
+          {/* TAB: Quality Profiles */}
+          {activeTab === 'profiles' && (
+            <div className="animate-in fade-in duration-200">
+              <QualityProfilesManager initialProfiles={profiles} />
+            </div>
+          )}
+
           {/* TAB 2: Audio Extraction */}
           {activeTab === 'audio' && (
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl space-y-6 animate-in fade-in duration-200">
+            <div className="glass-panel rounded-2xl p-6 shadow-2xl space-y-6 animate-in fade-in duration-200">
               <h3 className="text-lg font-bold text-white flex items-center gap-2 border-b border-gray-800 pb-3">
                 <Music className="w-5 h-5 text-purple-400" />
                 <span>Audio Extraction Settings</span>
@@ -504,20 +525,42 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
                 <FieldHeader
                   label="Audio Extraction Format"
                   recommended="Recommended: Direct Stream Copy"
-                  infoText="Direct Stream Copy extracts YouTube's native audio (.m4a AAC or .opus) instantaneously without transcoding or quality loss."
+                  infoText="Global Default & Fallback: Serves as the audio container format for ad-hoc video conversions and playlists without a specific profile preference. Direct Stream Copy extracts YouTube's native audio (.m4a AAC or .opus) instantaneously without transcoding or quality loss."
                   id="audio_extract_mode"
                 />
-                <select
-                  id="audio_extract_mode"
-                  value={formData.audio_extract_mode || 'copy'}
-                  onChange={(e) => handleFieldChange('audio_extract_mode', e.target.value)}
-                  className="w-full px-4 py-2.5 bg-gray-950 border border-gray-700 rounded-xl text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="copy">Direct Stream Copy (Fastest, Lossless original)</option>
-                  <option value="mp3_best">MP3 Best Quality (VBR ~250–320 kbps)</option>
-                  <option value="mp3_high">MP3 High Quality (VBR ~190–250 kbps)</option>
-                  <option value="opus">Opus Audio (~160 kbps)</option>
-                </select>
+
+                {/* Interactive Mode Cards matching Mockup */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+                  {[
+                    { id: 'copy', title: 'Direct Stream Copy', desc: 'Fastest & lossless. Retains YouTube AAC or Opus directly.' },
+                    { id: 'mp3_best', title: 'MP3 Best (320k)', desc: 'VBR ~250–320 kbps MP3 for maximum device compatibility.' },
+                    { id: 'mp3_high', title: 'MP3 High (192k)', desc: 'VBR ~190–250 kbps MP3 for lightweight audio storage.' },
+                    { id: 'opus', title: 'Opus Audio (160k)', desc: 'High-fidelity Opus stream for modern audiophile setups.' },
+                  ].map((card) => {
+                    const isSelected = (formData.audio_extract_mode || 'copy') === card.id
+                    return (
+                      <div
+                        key={card.id}
+                        onClick={() => handleFieldChange('audio_extract_mode', card.id)}
+                        className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+                          isSelected
+                            ? 'bg-cyan-500/15 border-cyan-400/70 shadow-lg shadow-cyan-500/20'
+                            : 'bg-slate-900/60 border-white/10 hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1 mb-1.5">
+                          <span className={`text-xs font-bold ${isSelected ? 'text-cyan-300' : 'text-white'}`}>
+                            {card.title}
+                          </span>
+                          {isSelected && <Check className="w-3.5 h-3.5 text-cyan-400" />}
+                        </div>
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          {card.desc}
+                        </p>
+                      </div>
+                    )
+                  })}
+                </div>
 
                 <AudioModeCard mode={formData.audio_extract_mode || 'copy'} />
               </div>
@@ -568,7 +611,7 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
 
           {/* TAB 3: Cookies & Auth */}
           {activeTab === 'auth' && (
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl space-y-6 animate-in fade-in duration-200">
+            <div className="glass-panel rounded-2xl p-6 shadow-2xl space-y-6 animate-in fade-in duration-200">
               <h3 className="text-lg font-bold text-white flex items-center gap-2 border-b border-gray-800 pb-3">
                 <Key className="w-5 h-5 text-amber-400" />
                 <span>Cookies & Authentication</span>
@@ -798,7 +841,7 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
 
           {/* TAB 4: Scheduler & Discovery */}
           {activeTab === 'scheduler' && (
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl space-y-6 animate-in fade-in duration-200">
+            <div className="glass-panel rounded-2xl p-6 shadow-2xl space-y-6 animate-in fade-in duration-200">
               <h3 className="text-lg font-bold text-white flex items-center gap-2 border-b border-gray-800 pb-3">
                 <Clock className="w-5 h-5 text-emerald-400" />
                 <span>Scheduler & Automation</span>
@@ -956,7 +999,7 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
 
           {/* TAB 5: Git Metadata Sync */}
           {activeTab === 'git' && (
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl space-y-6 animate-in fade-in duration-200">
+            <div className="glass-panel rounded-2xl p-6 shadow-2xl space-y-6 animate-in fade-in duration-200">
               {/* Header with Master Toggle */}
               <div className="flex items-center justify-between border-b border-gray-800 pb-3">
                 <div className="flex items-center gap-2">
@@ -1206,7 +1249,7 @@ export function SettingsPage({ onBack, onOpenDeduplicate, initialTab = 'storage'
 
           {/* TAB 6: Network & Engine */}
           {activeTab === 'network' && (
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl space-y-6 animate-in fade-in duration-200">
+            <div className="glass-panel rounded-2xl p-6 shadow-2xl space-y-6 animate-in fade-in duration-200">
               <h3 className="text-lg font-bold text-white flex items-center gap-2 border-b border-gray-800 pb-3">
                 <Settings2 className="w-5 h-5 text-cyan-400" />
                 <span>Engine & Network Throttling</span>

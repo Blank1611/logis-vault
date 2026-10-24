@@ -5,7 +5,7 @@ Exposes CRUD endpoints for managing download quality profiles.
 from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.models.database import get_db
@@ -17,20 +17,20 @@ router = APIRouter()
 class QualityProfileBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Display name of profile")
     description: Optional[str] = Field(None, max_length=255, description="Brief description")
-    max_resolution: int = Field(1080, ge=144, le=4320, description="Max vertical video resolution (e.g. 360, 720, 1080, 2160)")
-    audio_format: str = Field("mp3_320", description="Extracted audio format and bitrate (e.g. mp3_320, opus_160, flac)")
+    max_resolution: int = Field(1080, ge=0, le=4320, description="Max vertical video resolution (0 for audio only, or 360, 720, 1080, 2160)")
+    audio_format: str = Field("copy", description="Extracted audio format (e.g. copy, mp3_320, opus, flac)")
     cipher_strategy: str = Field("web_decipher", description="Cipher decryption strategy: 'web_decipher' or 'direct_format18'")
     is_audio_only: bool = Field(False, description="Whether this profile only archives audio tracks")
 
 
 class QualityProfileCreate(QualityProfileBase):
-    id: str = Field(..., min_length=2, max_length=50, pattern=r"^[a-zA-Z0-9_\-]+$", description="Unique slug ID")
+    id: Optional[str] = Field(None, max_length=50, pattern=r"^[a-zA-Z0-9_\-]+$", description="Optional unique ID; auto-generated as prof_<hex> if omitted")
 
 
 class QualityProfileUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=255)
-    max_resolution: Optional[int] = Field(None, ge=144, le=4320)
+    max_resolution: Optional[int] = Field(None, ge=0, le=4320)
     audio_format: Optional[str] = None
     cipher_strategy: Optional[str] = None
     is_audio_only: Optional[bool] = None
@@ -42,8 +42,7 @@ class QualityProfileResponse(QualityProfileBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 @router.get("", response_model=List[QualityProfileResponse])

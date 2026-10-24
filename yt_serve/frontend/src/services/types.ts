@@ -11,6 +11,22 @@ export interface QualityProfile {
   updated_at?: string
 }
 
+export function formatProfileOptionLabel(p: QualityProfile): string {
+  const audio = (p.audio_format || 'copy').toLowerCase()
+  let audioLabel = 'Direct Copy'
+  if (audio === 'opus') audioLabel = 'Opus'
+  else if (audio === 'mp3_best' || audio === 'mp3_320') audioLabel = 'MP3 320k'
+  else if (audio === 'mp3_high' || audio === 'mp3_192') audioLabel = 'MP3 192k'
+  else if (audio === 'flac') audioLabel = 'FLAC'
+  else if (audio === 'm4a') audioLabel = 'M4A'
+  else if (audio !== 'copy') audioLabel = audio.toUpperCase()
+
+  if (p.is_audio_only || p.max_resolution <= 0) {
+    return `${p.name} (Audio Only • ${audioLabel})`
+  }
+  return `${p.name} (${p.max_resolution}p • ${audioLabel})`
+}
+
 export interface Playlist {
   id: number
   url: string

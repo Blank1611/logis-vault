@@ -60,13 +60,13 @@ export const Modal: React.FC<ModalProps> = ({
     : `${maxWidthClasses[maxWidth]} w-full max-h-[90vh]`
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-4 transition-all animate-fadeIn">
+    <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md flex items-center justify-center z-50 p-3 sm:p-4 transition-all animate-fadeIn">
       <div 
-        className={`bg-white dark:bg-gray-800 rounded-xl shadow-2xl ${sizeClasses} overflow-hidden flex flex-col border border-gray-100 dark:border-gray-700 transition-all duration-150`}
+        className={`bg-white dark:bg-slate-900/95 dark:backdrop-blur-2xl rounded-2xl shadow-2xl ${sizeClasses} overflow-hidden flex flex-col border border-gray-200 dark:border-white/10 transition-all duration-150`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="p-5 sm:p-6 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center flex-shrink-0">
+        <div className="p-5 sm:p-6 border-b border-gray-200 dark:border-white/10 flex justify-between items-center flex-shrink-0 bg-gray-50/50 dark:bg-slate-950/40">
           <div>
             <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
               {title}
@@ -84,7 +84,7 @@ export const Modal: React.FC<ModalProps> = ({
             {resizable && (
               <button
                 onClick={() => setIsMaximized(!isMaximized)}
-                className="hidden sm:flex p-1.5 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                className="hidden sm:flex p-1.5 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-colors"
                 title={isMaximized ? 'Restore window size' : 'Maximize window'}
               >
                 {isMaximized ? (
@@ -97,7 +97,7 @@ export const Modal: React.FC<ModalProps> = ({
 
             <button
               onClick={onClose}
-              className="p-1.5 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              className="p-1.5 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-colors"
               title="Close modal"
             >
               <X className="w-5 h-5" />
@@ -112,7 +112,7 @@ export const Modal: React.FC<ModalProps> = ({
 
         {/* Footer */}
         {footer && (
-          <div className="p-4 sm:p-6 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80 flex-shrink-0">
+          <div className="p-4 sm:p-6 border-t border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-slate-950/60 flex-shrink-0">
             {footer}
           </div>
         )}

@@ -16,7 +16,7 @@ function AppContent() {
   const { toast } = useToast()
   const [activeTab, setActiveTab] = useState<TabType>('playlists')
   const [showSettings, setShowSettings] = useState(false)
-  const [settingsTab, setSettingsTab] = useState<'storage' | 'audio' | 'auth' | 'scheduler' | 'git' | 'network'>('storage')
+  const [settingsTab, setSettingsTab] = useState<'storage' | 'profiles' | 'audio' | 'auth' | 'scheduler' | 'git' | 'network'>('storage')
   const [showReorganize, setShowReorganize] = useState(false)
   const [showDeduplicate, setShowDeduplicate] = useState(false)
   const [showInitialSetup, setShowInitialSetup] = useState(false)
@@ -276,7 +276,17 @@ function AppContent() {
   const runningJobsCount = jobs.filter(j => j.status === 'running' || j.status === 'pending').length
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
+    <div className="min-h-screen bg-slate-950/20 text-slate-100 relative selection:bg-cyan-500/30 overflow-x-hidden">
+      {/* Fixed Ambient Aurora Lighting Mesh */}
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden" aria-hidden="true">
+        {/* Top-left electric cyan orb */}
+        <div className="absolute -top-32 -left-32 w-[550px] h-[550px] rounded-full bg-cyan-500/18 blur-[128px] animate-pulse" />
+        {/* Center-right vivid indigo orb */}
+        <div className="absolute top-1/4 -right-40 w-[650px] h-[650px] rounded-full bg-indigo-600/16 blur-[140px]" />
+        {/* Bottom-left electric purple orb */}
+        <div className="absolute -bottom-32 left-1/4 w-[600px] h-[600px] rounded-full bg-purple-600/14 blur-[130px]" />
+      </div>
+
       {showSettings ? (
         <SettingsPage
           initialTab={settingsTab}

@@ -75,7 +75,7 @@ class Playlist(Base):
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String, unique=True, index=True, nullable=False)
     title = Column(String, nullable=False)
-    quality_profile_id = Column(String, ForeignKey("quality_profiles.id"), default="standard_1080p", nullable=False)
+    quality_profile_id = Column(String, ForeignKey("quality_profiles.id"), default="standard_1080p", nullable=False, index=True)
     local_count = Column(Integer, default=0)
     playlist_count = Column(Integer, default=0)
     unavailable_count = Column(Integer, default=0)
@@ -288,32 +288,38 @@ def _auto_migrate_sqlite_columns(target_engine=None):
                     conn.execute(text(f"ALTER TABLE tracks ADD COLUMN {col_name} {col_type}"))
                     conn.commit()
 
-            # 4. Seed default built-in quality profiles if quality_profiles table is empty
-            profile_count = conn.execute(text("SELECT COUNT(*) FROM quality_profiles")).scalar()
-            if profile_count == 0:
-                default_profiles = [
-                    ("ultra_4k", "Ultra 4K", "4K Ultra HD resolution with highest available audio quality", 2160, "mp3_320", "web_decipher", 0, 1),
-                    ("qhd_1440p", "Quad HD 1440p", "2K Quad HD resolution with highest available audio quality", 1440, "mp3_320", "web_decipher", 0, 1),
-                    ("standard_1080p", "Standard HD 1080p", "1080p Full HD resolution with highest available audio quality", 1080, "mp3_320", "web_decipher", 0, 1),
-                    ("standard_720p", "Standard HD 720p", "720p HD resolution with high quality audio and balanced file sizes", 720, "mp3_320", "web_decipher", 0, 1),
-                    ("fast_mixtape_360p", "Fast / Mixtape 360p (Challenge-Free)", "360p progressive stream, zero JS challenge deciphering, ideal for long background mixtapes", 360, "mp3_320", "direct_format18", 0, 1),
-                    ("audio_only", "Audio Only Vault", "Direct audio stream extraction, no video file stored on disk", 0, "mp3_320", "web_decipher", 1, 1),
-                ]
-                now_str = datetime.utcnow().isoformat()
-                for p in default_profiles:
-                    conn.execute(text(
-                        "INSERT INTO quality_profiles (id, name, description, max_resolution, audio_format, cipher_strategy, is_audio_only, is_builtin, created_at, updated_at) "
-                        "VALUES (:id, :name, :description, :max_res, :audio_fmt, :cipher, :is_audio, :is_builtin, :created_at, :updated_at)"
-                    ), {
-                        "id": p[0], "name": p[1], "description": p[2], "max_res": p[3],
-                        "audio_fmt": p[4], "cipher": p[5], "is_audio": p[6], "is_builtin": p[7],
-                        "created_at": now_str, "updated_at": now_str
-                    })
-                conn.commit()
-            else:
-                # Ensure fast_mixtape_360p has cipher_strategy set to direct_format18
-                conn.execute(text("UPDATE quality_profiles SET cipher_strategy = 'direct_format18' WHERE id = 'fast_mixtape_360p' AND cipher_strategy = 'bypass_challenge'"))
-                conn.commit()
+            # 4. Idempotently upsert default built-in quality profiles
+            default_profiles = [
+                ("ultra_4k", "Ultra 4K", "4K Ultra HD resolution with highest available audio quality", 2160, "copy", "web_decipher", 0, 1),
+                ("qhd_1440p", "Quad HD 1440p", "2K Quad HD resolution with highest available audio quality", 1440, "copy", "web_decipher", 0, 1),
+                ("standard_1080p", "Standard HD 1080p", "1080p Full HD resolution with highest available audio quality", 1080, "copy", "web_decipher", 0, 1),
+                ("standard_720p", "Standard HD 720p", "720p HD resolution with high quality audio and balanced file sizes", 720, "copy", "web_decipher", 0, 1),
+                ("fast_mixtape_360p", "Fast / Mixtape 360p (Challenge-Free)", "360p progressive stream, zero JS challenge deciphering, ideal for long background mixtapes", 360, "copy", "direct_format18", 0, 1),
+                ("audio_only", "Audio Only Vault", "Direct audio stream extraction, no video file stored on disk", 0, "copy", "web_decipher", 1, 1),
+            ]
+            now_str = datetime.utcnow().isoformat()
+            for p in default_profiles:
+                conn.execute(text("""
+                    INSERT INTO quality_profiles (id, name, description, max_resolution, audio_format, cipher_strategy, is_audio_only, is_builtin, created_at, updated_at)
+                    VALUES (:id, :name, :description, :max_res, :audio_fmt, :cipher, :is_audio, :is_builtin, :created_at, :updated_at)
+                    ON CONFLICT(id) DO UPDATE SET
+                        audio_format = excluded.audio_format,
+                        name = excluded.name,
+                        description = excluded.description,
+                        max_resolution = excluded.max_resolution,
+                        cipher_strategy = excluded.cipher_strategy
+                    WHERE quality_profiles.is_builtin = 1
+                """), {
+                    "id": p[0], "name": p[1], "description": p[2], "max_res": p[3],
+                    "audio_fmt": p[4], "cipher": p[5], "is_audio": p[6], "is_builtin": p[7],
+                    "created_at": now_str, "updated_at": now_str
+                })
+            conn.commit()
+
+            # 5. Ensure performance indexes exist
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_quality_profiles_name ON quality_profiles(name)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_playlists_quality_profile_id ON playlists(quality_profile_id)"))
+            conn.commit()
     except Exception as e:
         print(f"[DB] Auto-migration check note: {e}")
 
