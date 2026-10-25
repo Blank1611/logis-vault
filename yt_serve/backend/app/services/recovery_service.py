@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.database import Job, Playlist
+from app.repositories import JobRepository, PlaylistRepository
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +23,10 @@ class RecoveryService:
         """
         logger.info("[RECOVERY] Checking for interrupted jobs...")
         try:
-            interrupted_jobs = db.query(Job).filter(Job.status == "running").all()
+            interrupted_jobs = JobRepository.get_interrupted(db=db)
             if interrupted_jobs:
                 logger.warning(f"[RECOVERY] Found {len(interrupted_jobs)} interrupted job(s):")
-                playlists_map = {p.id: p for p in db.query(Playlist).all()}
+                playlists_map = {p.id: p for p in PlaylistRepository.get_all(db=db)}
                 for job in interrupted_jobs:
                     playlist = playlists_map.get(job.playlist_id)
                     title = playlist.title if playlist else f"Playlist #{job.playlist_id}"
@@ -124,34 +125,21 @@ class RecoveryService:
         where valid playlist metadata was never generated.
         GUARANTEE: Purely removes database rows; NEVER deletes or touches physical files/folders on disk.
         """
-        from app.models.database import Track
         purged_count = 0
         try:
             excluded = settings.get_excluded_directories()
-            candidates = db.query(Playlist).filter(
-                (Playlist.url.like("%list=test_custom%")) |
-                (Playlist.url.like("%list=_adhoc_downloads%"))
-            ).all()
-
-            # Also check any playlist whose URL was generated from folder name without playlist_info.json
-            all_pls = db.query(Playlist).all()
-            for p in all_pls:
-                if p in candidates:
-                    continue
-                # If folder title is in excluded dirs or url is list={p.title}
-                if p.title.lower() in excluded or p.url.endswith(f"list={p.title}"):
-                    folder = os.path.join(settings.BASE_DOWNLOAD_PATH, p.title)
-                    info_json = os.path.join(folder, "playlist_info.json")
-                    if not os.path.isfile(info_json):
-                        candidates.append(p)
+            candidates = PlaylistRepository.get_phantom_candidates(
+                excluded_dirs=excluded,
+                base_download_path=settings.BASE_DOWNLOAD_PATH,
+                db=db
+            )
 
             for pl in candidates:
                 logger.info(f"[RECOVERY] Safely purging phantom database playlist #{pl.id} '{pl.title}' ({pl.url}) - files on disk are preserved.")
-                db.delete(pl)
+                PlaylistRepository.delete(pl.id, db=db)
                 purged_count += 1
 
             if purged_count > 0:
-                db.commit()
                 logger.info(f"[RECOVERY] ✓ Safely purged {purged_count} phantom playlist record(s) from database.")
         except Exception as e:
             logger.warning(f"[RECOVERY] Note during phantom playlist cleanup: {e}")

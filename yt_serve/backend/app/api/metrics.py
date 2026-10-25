@@ -7,7 +7,8 @@ from sqlalchemy import func
 from typing import Optional
 import os
 
-from app.models.database import SessionLocal, Playlist, Job
+from app.models.database import SessionLocal
+from app.repositories import PlaylistRepository, JobRepository
 from app.core.config import settings
 from app.api.config import _parse_cookie_file_status
 
@@ -20,17 +21,18 @@ def generate_prometheus_metrics() -> str:
     db = SessionLocal()
     try:
         # 1. Playlist and Video Statistics
-        playlists = db.query(Playlist).all()
+        playlists = PlaylistRepository.get_all(db=db)
         total_playlists = len(playlists)
         local_total = sum(p.local_count or 0 for p in playlists)
         remote_total = sum(p.playlist_count or 0 for p in playlists)
         pending_total = sum(max(0, (p.playlist_count or 0) - (p.local_count or 0)) for p in playlists)
         
         # 2. Active Jobs
-        active_jobs = db.query(Job).filter(Job.status.in_(["running", "pending"])).count()
+        active_jobs = JobRepository.count_active(db=db)
         
         # 3. Job execution statistics by type and status
-        job_stats = db.query(Job.job_type, Job.status, func.count(Job.id)).group_by(Job.job_type, Job.status).all()
+        job_stats = JobRepository.get_stats_by_type_and_status(db=db)
+
         
         # 4. Cookie Status & Days Remaining
         cookie_status = _parse_cookie_file_status(settings.COOKIES_FILE)

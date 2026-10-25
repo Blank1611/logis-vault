@@ -11,7 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.models.database import get_db, Job
+from app.models.database import get_db
+from app.repositories import JobRepository
 from app.services.job_manager import job_manager
 
 router = APIRouter()
@@ -28,7 +29,7 @@ async def job_event_generator(request: Request, job_id: int, db: Session) -> Asy
     last_ping_time = asyncio.get_event_loop().time()
 
     # Initial state push
-    initial_job = db.query(Job).filter(Job.id == job_id).first()
+    initial_job = JobRepository.get_by_id(job_id, db=db)
     if not initial_job:
         yield f"event: error\ndata: {json.dumps({'error': f'Job {job_id} not found'})}\n\n"
         return
@@ -59,7 +60,7 @@ async def job_event_generator(request: Request, job_id: int, db: Session) -> Asy
 
             # Poll latest job status
             db.expire_all()
-            job = db.query(Job).filter(Job.id == job_id).first()
+            job = JobRepository.get_by_id(job_id, db=db)
             if not job:
                 break
 
@@ -122,7 +123,7 @@ async def stream_job_events(job_id: int, request: Request, db: Session = Depends
     """
     Stream live dual-tier progress telemetry and logs for a job via Server-Sent Events (SSE).
     """
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = JobRepository.get_by_id(job_id, db=db)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 

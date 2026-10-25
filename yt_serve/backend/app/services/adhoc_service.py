@@ -428,13 +428,7 @@ def execute_adhoc_download(
 
     JobRepository.update_status(job_id, status="running", db=db)
     if db and vid:
-        try:
-            job_record = db.query(Job).filter(Job.id == job_id).first()
-            if job_record:
-                job_record.current_video_id = vid
-                db.commit()
-        except Exception:
-            pass
+        JobRepository.update_stream_progress(job_id=job_id, video_id=vid, db=db)
 
     # Check for zero-network audio-only fast-path if video is already on disk
     if extract_mode == "audio_only" and vid:
@@ -468,13 +462,7 @@ def execute_adhoc_download(
                 )
                 JobRepository.update_status(job_id=job_id, status="completed", completed_items=1, failed_items=0, db=db)
                 if db and os.path.isfile(audio_file):
-                    try:
-                        job_record = db.query(Job).filter(Job.id == job_id).first()
-                        if job_record:
-                            job_record.current_video_title = os.path.basename(audio_file)
-                            db.commit()
-                    except Exception:
-                        pass
+                    JobRepository.update_stream_progress(job_id=job_id, title=os.path.basename(audio_file), db=db)
                 write_log(f"✓ Extracted and indexed local audio: {os.path.basename(audio_file)}", "SUCCESS")
                 return {
                     "status": "success",
@@ -649,13 +637,7 @@ def execute_adhoc_download(
             )
             final_out = primary_audio if extract_mode == "audio_only" else (primary_video or primary_audio)
             if db and final_out and os.path.isfile(final_out):
-                try:
-                    job_record = db.query(Job).filter(Job.id == job_id).first()
-                    if job_record:
-                        job_record.current_video_title = os.path.basename(final_out)
-                        db.commit()
-                except Exception:
-                    pass
+                JobRepository.update_stream_progress(job_id=job_id, title=os.path.basename(final_out), db=db)
 
             write_log(f"✓ Successfully processed and indexed: {title} ({vid})", "SUCCESS")
             return {

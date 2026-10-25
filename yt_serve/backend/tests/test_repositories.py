@@ -153,6 +153,34 @@ class TestRepositories(unittest.TestCase):
         # Search tracks
         tracks = TrackRepository.get_all_tracks(search="Repository", db=self.db)
         self.assertEqual(len(tracks), 1)
+        self.assertEqual(TrackRepository.count_tracks(search="Repository", db=self.db), 1)
+
+        # Get playlist tracks
+        pl_tracks = TrackRepository.get_playlist_tracks(pl.id, db=self.db)
+        self.assertEqual(len(pl_tracks), 1)
+        self.assertEqual(pl_tracks[0][0].video_id, "repoVid123")
+
+        # Get tracks by playlist id
+        tracks_by_pl = TrackRepository.get_tracks_by_playlist_id(pl.id, db=self.db)
+        self.assertEqual(len(tracks_by_pl), 1)
+        self.assertEqual(tracks_by_pl[0].video_id, "repoVid123")
+
+        # Test multi-playlist tracks (associate with second playlist)
+        pl2 = PlaylistRepository.create(
+            url="https://youtube.com/playlist?list=PL_TEST_REPO_2",
+            title="Repo PL 2",
+            db=self.db
+        )
+        TrackRepository.index_or_update_track(
+            video_id="repoVid123",
+            title="Repository Track",
+            filepath="/tmp/track.mp4",
+            playlist_id=pl2.id,
+            db=self.db
+        )
+        multi = TrackRepository.get_multi_playlist_tracks(db=self.db)
+        self.assertEqual(len(multi), 1)
+        self.assertEqual(multi[0].video_id, "repoVid123")
 
         # Record move history
         hist = TrackRepository.record_move_history(
@@ -167,6 +195,7 @@ class TestRepositories(unittest.TestCase):
         self.assertEqual(hist.status, "auto_moved")
         all_hist = TrackRepository.get_move_history(db=self.db)
         self.assertEqual(len(all_hist), 1)
+        self.assertEqual(TrackRepository.count_move_history(db=self.db), 1)
 
     def test_job_repository(self):
         # Create job
@@ -178,6 +207,12 @@ class TestRepositories(unittest.TestCase):
         )
         self.assertEqual(job.status, "pending")
         self.assertIsNotNone(job.id)
+
+        # Active jobs count and query
+        self.assertEqual(JobRepository.count_active(db=self.db), 1)
+        active_job = JobRepository.get_active_job_for_playlist(1, db=self.db)
+        self.assertIsNotNone(active_job)
+        self.assertEqual(active_job.id, job.id)
 
         # Update stream progress
         JobRepository.update_stream_progress(
@@ -193,10 +228,30 @@ class TestRepositories(unittest.TestCase):
         self.assertEqual(fetched.current_video_title, "In Flight Song")
         self.assertEqual(fetched.current_video_speed, 4.5)
 
+        # Update progress
+        JobRepository.update_progress(
+            job_id=job.id,
+            download_total=50,
+            download_completed=25,
+            download_status="running",
+            db=self.db
+        )
+        in_prog = JobRepository.get_by_id(job.id, db=self.db)
+        self.assertEqual(in_prog.download_completed, 25)
+
+        # Stats by type and status
+        stats = JobRepository.get_stats_by_type_and_status(db=self.db)
+        self.assertTrue(any(s[0] == "download" for s in stats))
+
         # Update status
         JobRepository.update_status(job_id=job.id, status="completed", completed_items=50, db=self.db)
         completed_job = JobRepository.get_by_id(job.id, db=self.db)
         self.assertEqual(completed_job.status, "completed")
+        self.assertEqual(JobRepository.count_active(db=self.db), 0)
+
+        # Delete job
+        self.assertTrue(JobRepository.delete(job.id, db=self.db))
+        self.assertIsNone(JobRepository.get_by_id(job.id, db=self.db))
 
     def test_system_setting_repository(self):
         # Set setting

@@ -130,12 +130,13 @@ async def run_daily_metadata_refresh():
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"\n[SCHEDULER] Starting scheduled daily playlist metadata scan at {now_str}...")
 
-    from app.models.database import SessionLocal, Playlist
+    from app.models.database import SessionLocal
+    from app.repositories import PlaylistRepository
     from app.services.ytdlp_service import DownloadService
 
     db = SessionLocal()
     try:
-        playlists_list = db.query(Playlist).all()
+        playlists_list = PlaylistRepository.get_all(db=db)
         if not playlists_list:
             print("[SCHEDULER] No playlists found to scan.")
             _SCHEDULER_STATE["is_scanning"] = False

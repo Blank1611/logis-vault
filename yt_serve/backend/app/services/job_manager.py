@@ -178,11 +178,11 @@ class JobManager:
         
         db = SessionLocal()
         try:
-            job = db.query(Job).filter(Job.id == job_id).first()
+            job = JobRepository.get_by_id(job_id, db=db)
             if not job:
                 raise ValueError(f"Job {job_id} not found")
             
-            playlist = db.query(Playlist).filter(Playlist.id == job.playlist_id).first()
+            playlist = PlaylistRepository.get_by_id(job.playlist_id, db=db)
             if not playlist:
                 raise ValueError(f"Playlist {job.playlist_id} not found for job {job_id}")
             
@@ -356,14 +356,11 @@ class JobManager:
         db = SessionLocal()
         
         try:
-            playlist_obj = db.query(Playlist).filter(Playlist.id == playlist.id).first()
+            playlist_obj = PlaylistRepository.get_by_id(playlist.id, db=db)
             if not playlist_obj:
                 raise Exception(f"Playlist {playlist.id} not found")
             
-            job = db.query(Job).filter(Job.id == job_id).first()
-            job.status = "running"
-            job.started_at = datetime.utcnow()
-            db.commit()
+            job = JobRepository.update_status(job_id=job_id, status="running", db=db)
             
             if log_callback:
                 await log_callback(job_id, f"Starting {job_type} for playlist: {playlist.title}")
@@ -372,13 +369,14 @@ class JobManager:
                 if (cancel_token and cancel_token.is_cancelled) or self.cancel_flags.get(job_id):
                     raise asyncio.CancelledError("Job cancelled")
                 
-                job = db.query(Job).filter(Job.id == job_id).first()
-                if job:
-                    job.download_total = total
-                    job.download_completed = current
-                    job.download_batch_info = batch_info
-                    job.download_status = "running"
-                    db.commit()
+                JobRepository.update_progress(
+                    job_id=job_id,
+                    download_total=total,
+                    download_completed=current,
+                    download_batch_info=batch_info,
+                    download_status="running",
+                    db=db
+                )
                 
                 if progress_callback:
                     await progress_callback(job_id, None, current, total)
@@ -387,12 +385,13 @@ class JobManager:
                 if (cancel_token and cancel_token.is_cancelled) or self.cancel_flags.get(job_id):
                     raise asyncio.CancelledError("Job cancelled")
                 
-                job = db.query(Job).filter(Job.id == job_id).first()
-                if job:
-                    job.extract_total = total
-                    job.extract_completed = current
-                    job.extract_status = "running"
-                    db.commit()
+                JobRepository.update_progress(
+                    job_id=job_id,
+                    extract_total=total,
+                    extract_completed=current,
+                    extract_status="running",
+                    db=db
+                )
                 
                 if progress_callback:
                     await progress_callback(job_id, None, current, total)
@@ -401,15 +400,16 @@ class JobManager:
                 if (cancel_token and cancel_token.is_cancelled) or self.cancel_flags.get(job_id):
                     return
                 
-                job = db.query(Job).filter(Job.id == job_id).first()
-                if job:
-                    job.current_video_id = vid
-                    job.current_video_title = title
-                    job.current_video_bytes_downloaded = bytes_done
-                    job.current_video_bytes_total = bytes_total
-                    job.current_video_speed = speed
-                    job.current_video_eta = eta
-                    db.commit()
+                JobRepository.update_stream_progress(
+                    job_id=job_id,
+                    video_id=vid,
+                    title=title,
+                    bytes_downloaded=bytes_done,
+                    bytes_total=bytes_total,
+                    speed=speed,
+                    eta=eta,
+                    db=db
+                )
                 
                 from app.api.websocket import broadcast_event
                 await broadcast_event("job_progress", {
@@ -538,24 +538,18 @@ class JobManager:
             except Exception as e:
                 await log_wrapper(f"Error refreshing final stats: {str(e)}")
             
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if job and job.status != "cancelled":
-                job.status = "completed"
-                job.completed_at = datetime.utcnow()
-                db.commit()
+            JobRepository.update_status(job_id=job_id, status="completed", db=db)
             
             await log_wrapper("Job completed successfully")
             
         except asyncio.CancelledError:
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if job:
-                job.status = "cancelled"
-                if job.download_status == "running":
-                    job.download_status = "cancelled"
-                if job.extract_status == "running":
-                    job.extract_status = "cancelled"
-                job.completed_at = datetime.utcnow()
-                db.commit()
+            JobRepository.update_status(
+                job_id=job_id,
+                status="cancelled",
+                download_status="cancelled",
+                extract_status="cancelled",
+                db=db
+            )
             
             if log_callback:
                 await log_callback(job_id, "Job cancelled by user")
@@ -567,12 +561,12 @@ class JobManager:
             })
         
         except Exception as e:
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if job:
-                job.status = "failed"
-                job.error = str(e)
-                job.completed_at = datetime.utcnow()
-                db.commit()
+            JobRepository.update_status(
+                job_id=job_id,
+                status="failed",
+                error=str(e),
+                db=db
+            )
             
             if log_callback:
                 await log_callback(job_id, f"Job failed: {str(e)}")
@@ -614,10 +608,7 @@ class JobManager:
             
             await log_callback("Waiting for download slot in queue...")
             async with self._get_download_semaphore():
-                job = db.query(Job).filter(Job.id == job_id).first()
-                if job:
-                    job.download_status = "running"
-                    db.commit()
+                JobRepository.update_status(job_id=job_id, download_status="running", db=db)
                 
                 await log_callback("Starting download phase...")
                 
@@ -658,28 +649,23 @@ class JobManager:
             except Exception as e:
                 await log_callback(f"Warning: Could not refresh stats: {str(e)}")
             
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if job and job.download_status != "cancelled":
-                job.download_status = "completed"
-                job.download_failed = len(failed_ids)
-                db.commit()
+            JobRepository.update_progress(
+                job_id=job_id,
+                download_status="completed",
+                download_failed=len(failed_ids),
+                db=db
+            )
             
             await log_callback(f"Download phase completed. Failed: {len(failed_ids)}")
             
         except Exception as e:
             if isinstance(e, asyncio.CancelledError) or (cancel_token and cancel_token.is_cancelled):
-                job = db.query(Job).filter(Job.id == job_id).first()
-                if job:
-                    job.download_status = "cancelled"
-                    db.commit()
+                JobRepository.update_status(job_id=job_id, download_status="cancelled", db=db)
                 if job_id in self.extraction_queues:
                     await self.extraction_queues[job_id].put(None)
                 raise
                 
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if job:
-                job.download_status = "failed"
-                db.commit()
+            JobRepository.update_status(job_id=job_id, download_status="failed", db=db)
             
             # Signal extraction to stop
             if job_id in self.extraction_queues:
@@ -706,10 +692,7 @@ class JobManager:
             if job_id not in self.extraction_queues:
                 self.extraction_queues[job_id] = asyncio.Queue()
             
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if job:
-                job.extract_status = "running"
-                db.commit()
+            JobRepository.update_status(job_id=job_id, extract_status="running", db=db)
             
             profile = getattr(playlist, "quality_profile", None)
             override_fmt = self.job_formats.get(job_id)
@@ -766,12 +749,13 @@ class JobManager:
                                 await log_callback(f"✗ Failed: {os.path.basename(vid_path)}")
                             
                             completed = len(extracted_videos)
-                            job = db.query(Job).filter(Job.id == job_id).first()
-                            if job:
-                                job.extract_total = total_videos
-                                job.extract_completed = completed
-                                job.extract_failed = len(failed_videos)
-                                db.commit()
+                            JobRepository.update_progress(
+                                job_id=job_id,
+                                extract_total=total_videos,
+                                extract_completed=completed,
+                                extract_failed=len(failed_videos),
+                                db=db
+                            )
                             
                             if progress_callback:
                                 await progress_callback(total_videos, completed)
@@ -841,12 +825,13 @@ class JobManager:
                             else:
                                 failed_videos.add(vid_path)
                         
-                        job = db.query(Job).filter(Job.id == job_id).first()
-                        if job:
-                            job.extract_total = total_videos
-                            job.extract_completed = len(extracted_videos)
-                            job.extract_failed = len(failed_videos)
-                            db.commit()
+                        JobRepository.update_progress(
+                            job_id=job_id,
+                            extract_total=total_videos,
+                            extract_completed=len(extracted_videos),
+                            extract_failed=len(failed_videos),
+                            db=db
+                        )
                         
                         if progress_callback:
                             await progress_callback(total_videos, len(extracted_videos))
@@ -861,33 +846,21 @@ class JobManager:
                 executor.shutdown(wait=False)
             
             if (cancel_token and cancel_token.is_cancelled) or self.cancel_flags.get(job_id):
-                job = db.query(Job).filter(Job.id == job_id).first()
-                if job:
-                    job.extract_status = "cancelled"
-                    db.commit()
+                JobRepository.update_status(job_id=job_id, extract_status="cancelled", db=db)
                 return
 
             playlist.last_extract = datetime.utcnow()
             
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if job and job.extract_status != "cancelled":
-                job.extract_status = "completed"
-                db.commit()
+            JobRepository.update_status(job_id=job_id, extract_status="completed", db=db)
             
             await log_callback("Extraction phase completed")
             
         except Exception as e:
             if isinstance(e, asyncio.CancelledError) or (cancel_token and cancel_token.is_cancelled):
-                job = db.query(Job).filter(Job.id == job_id).first()
-                if job:
-                    job.extract_status = "cancelled"
-                    db.commit()
+                JobRepository.update_status(job_id=job_id, extract_status="cancelled", db=db)
                 raise
                 
-            job = db.query(Job).filter(Job.id == job_id).first()
-            if job:
-                job.extract_status = "failed"
-                db.commit()
+            JobRepository.update_status(job_id=job_id, extract_status="failed", db=db)
             await log_callback(f"Extraction phase failed: {str(e)}")
             raise
         
@@ -946,10 +919,7 @@ class JobManager:
                 if task and not task.done():
                     task.cancel()
                 
-                job = db.query(Job).filter(Job.id == job_id).first()
-                if job and job.status == 'running':
-                    job.error = 'Interrupted by server shutdown'
-                    db.commit()
+                JobRepository.update_status(job_id=job_id, error="Interrupted by server shutdown", db=db)
         except Exception as e:
             print(f"[JobManager] Error during shutdown: {e}")
         finally:

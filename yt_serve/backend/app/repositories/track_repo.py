@@ -246,9 +246,61 @@ class TrackRepository:
             return history
 
     @staticmethod
-    def get_move_history(limit: int = 50, db: Optional[Session] = None) -> List[MovedTrackHistory]:
-        """Fetch recent track move history audit logs"""
+    def get_playlist_tracks(
+        playlist_id: int,
+        db: Optional[Session] = None
+    ) -> List[Any]:
+        """Fetch all (Track, PlaylistTrack) pairs for a playlist ordered by position ASC"""
+        with get_db_context(db) as session:
+            return (
+                session.query(Track, PlaylistTrack)
+                .join(PlaylistTrack, Track.video_id == PlaylistTrack.track_id)
+                .filter(PlaylistTrack.playlist_id == playlist_id)
+                .order_by(PlaylistTrack.position.asc())
+                .all()
+            )
+
+    @staticmethod
+    def get_tracks_by_playlist_id(
+        playlist_id: int,
+        db: Optional[Session] = None
+    ) -> List[Track]:
+        """Fetch Track entities for a playlist"""
+        with get_db_context(db) as session:
+            return (
+                session.query(Track)
+                .join(PlaylistTrack, Track.video_id == PlaylistTrack.track_id)
+                .filter(PlaylistTrack.playlist_id == playlist_id)
+                .all()
+            )
+
+    @staticmethod
+    def get_multi_playlist_tracks(db: Optional[Session] = None) -> List[Track]:
+        """Fetch tracks that belong to 2 or more playlists"""
+        with get_db_context(db) as session:
+            subq = (
+                session.query(PlaylistTrack.track_id)
+                .group_by(PlaylistTrack.track_id)
+                .having(func.count(PlaylistTrack.playlist_id) >= 2)
+                .scalar_subquery()
+            )
+            return session.query(Track).filter(Track.video_id.in_(subq)).all()
+
+    @staticmethod
+    def get_move_history(
+        limit: int = 50,
+        offset: int = 0,
+        db: Optional[Session] = None
+    ) -> List[MovedTrackHistory]:
+        """Fetch paginated track move history audit logs, newest first"""
         with get_db_context(db) as session:
             return session.query(MovedTrackHistory).order_by(
                 MovedTrackHistory.moved_at.desc()
-            ).limit(limit).all()
+            ).offset(offset).limit(limit).all()
+
+    @staticmethod
+    def count_move_history(db: Optional[Session] = None) -> int:
+        """Count total moved track history records"""
+        with get_db_context(db) as session:
+            return session.query(MovedTrackHistory).count()
+

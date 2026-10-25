@@ -6,9 +6,9 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
 
-from app.models.database import get_db, Track, MovedTrackHistory, Playlist
+from app.models.database import get_db
+from app.repositories import TrackRepository, PlaylistRepository
 from app.core.track_indexer import execute_track_move
 
 router = APIRouter()
@@ -35,13 +35,8 @@ async def list_indexed_tracks(
     """
     List all globally indexed tracks in the library.
     """
-    query = db.query(Track)
-    if search:
-        s = f"%{search}%"
-        query = query.filter((Track.title.ilike(s)) | (Track.video_id.ilike(s)))
-
-    total = query.count()
-    tracks = query.order_by(desc(Track.updated_at)).offset(offset).limit(limit).all()
+    total = TrackRepository.count_tracks(search=search, db=db)
+    tracks = TrackRepository.get_all_tracks(search=search, limit=limit, offset=offset, db=db)
 
     return {
         "total": total,
@@ -69,18 +64,16 @@ async def get_pending_reorganizations(db: Session = Depends(get_db)):
     Analyze playlists to identify tracks that appear to have been moved
     (e.g., removed from one playlist but added to another).
     """
-    playlists = db.query(Playlist).all()
-    # Simple pending reorganization suggestion logic based on multi-playlist coexistence & history
+    playlists = PlaylistRepository.get_all(db=db)
     pending_moves: List[Dict[str, Any]] = []
 
     # Get tracks in multiple playlists that could be reviewed
-    multi_tracks = db.query(Track).all()
+    multi_tracks = TrackRepository.get_multi_playlist_tracks(db=db)
     playlists_map = {p.id: p.title for p in playlists}
 
     for track in multi_tracks:
         pl_ids = list(track.playlists_json or [])
         if len(pl_ids) >= 2:
-            # Multi-playlist coexistence info
             pending_moves.append({
                 "video_id": track.video_id,
                 "title": track.title,
@@ -135,8 +128,8 @@ async def get_reorganization_history(
     """
     Get audit history of moved/reorganized tracks.
     """
-    total = db.query(MovedTrackHistory).count()
-    items = db.query(MovedTrackHistory).order_by(desc(MovedTrackHistory.moved_at)).offset(offset).limit(limit).all()
+    total = TrackRepository.count_move_history(db=db)
+    items = TrackRepository.get_move_history(limit=limit, offset=offset, db=db)
 
     return {
         "total": total,
@@ -155,3 +148,4 @@ async def get_reorganization_history(
             for h in items
         ]
     }
+

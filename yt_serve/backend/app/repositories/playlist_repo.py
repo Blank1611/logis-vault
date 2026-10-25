@@ -189,3 +189,33 @@ class PlaylistRepository:
             session.delete(playlist)
             session.commit()
             return True
+
+    @staticmethod
+    def get_phantom_candidates(
+        excluded_dirs: List[str],
+        base_download_path: str,
+        db: Optional[Session] = None
+    ) -> List[Playlist]:
+        """Find phantom database records without valid on-disk playlist_info.json"""
+        import os
+        candidates = []
+        with get_db_context(db) as session:
+            matched = session.query(Playlist).filter(
+                or_(
+                    Playlist.url.like("%list=test_custom%"),
+                    Playlist.url.like("%list=_adhoc_downloads%")
+                )
+            ).all()
+            candidates.extend(matched)
+
+            all_pls = session.query(Playlist).all()
+            for p in all_pls:
+                if p in candidates:
+                    continue
+                if p.title.lower() in excluded_dirs or p.url.endswith(f"list={p.title}"):
+                    folder = os.path.join(base_download_path, p.title)
+                    info_json = os.path.join(folder, "playlist_info.json")
+                    if not os.path.isfile(info_json):
+                        candidates.append(p)
+        return candidates
+

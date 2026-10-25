@@ -9,8 +9,8 @@ from enum import Enum
 from sqlalchemy.orm import Session
 from datetime import datetime
 
-from app.models.database import get_db, Job, Playlist
-from app.repositories import JobRepository, PlaylistRepository
+from app.models.database import get_db
+from app.repositories import JobRepository, PlaylistRepository, TrackRepository
 from app.services.job_manager import job_manager
 from app.services.ytdlp_service import DownloadService
 from app.api.websocket import manager as ws_manager
@@ -100,15 +100,7 @@ async def list_jobs(
     playlist_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
-    """Get all jobs with optional filters"""
-    query = db.query(Job)
-    
-    if status:
-        query = query.filter(Job.status == status)
-    if playlist_id:
-        query = query.filter(Job.playlist_id == playlist_id)
-    
-    jobs = query.order_by(Job.created_at.desc()).all()
+    jobs = JobRepository.get_all(playlist_id=playlist_id, status=status, db=db)
     
     result = []
     for job in jobs:
@@ -159,15 +151,12 @@ async def create_job(
         )
 
     # Check if playlist exists
-    playlist = db.query(Playlist).filter(Playlist.id == job.playlist_id).first()
+    playlist = PlaylistRepository.get_by_id(job.playlist_id, db=db)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
     # Check if there's already a running job for this playlist
-    existing_job = db.query(Job).filter(
-        Job.playlist_id == job.playlist_id,
-        Job.status.in_(["pending", "running"])
-    ).first()
+    existing_job = JobRepository.get_active_job_for_playlist(job.playlist_id, db=db)
     
     if existing_job:
         raise HTTPException(
@@ -206,7 +195,7 @@ async def create_job(
     )
     
     # Return job
-    db_job = db.query(Job).filter(Job.id == job_id).first()
+    db_job = JobRepository.get_by_id(job_id, db=db)
     
     return JobResponse(
         id=db_job.id,
@@ -240,8 +229,7 @@ async def create_job(
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
 async def get_job(job_id: int, db: Session = Depends(get_db)):
-    """Get job by ID"""
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = JobRepository.get_by_id(job_id, db=db)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
@@ -278,7 +266,7 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
 @router.post("/jobs/{job_id}/cancel")
 async def cancel_job(job_id: int, db: Session = Depends(get_db)):
     """Cancel a running job"""
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = JobRepository.get_by_id(job_id, db=db)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
@@ -300,7 +288,7 @@ async def get_job_logs(
     db: Session = Depends(get_db)
 ):
     """Get job logs from file system"""
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = JobRepository.get_by_id(job_id, db=db)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
@@ -319,7 +307,7 @@ async def download_job_log(
 ):
     """Download raw log file for a job"""
     from fastapi.responses import FileResponse
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = JobRepository.get_by_id(job_id, db=db)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
         
@@ -368,12 +356,11 @@ async def get_interrupted_jobs(db: Session = Depends(get_db)):
     Get all interrupted jobs (jobs with 'running' status).
     Called on app initialization to check for jobs that didn't complete.
     """
-    interrupted_jobs = db.query(Job).filter(Job.status == 'running').all()
+    interrupted_jobs = JobRepository.get_interrupted(db=db)
     
     jobs_info = []
     for job in interrupted_jobs:
-        #playlist = db.query(Playlist).filter(Playlist.id == job.playlist_id).first()
-        playlist = db.query(Playlist).filter(Playlist.id == job.playlist_id).first()
+        playlist = PlaylistRepository.get_by_id(job.playlist_id, db=db)
         playlist_title = playlist.title if playlist else "Unknown Playlist"
         jobs_info.append(InterruptedJobInfo(
             id=job.id,
@@ -492,7 +479,7 @@ async def test_integrity(
     file_to_check = request.file_path
     
     if not file_to_check and request.playlist_id and request.video_id:
-        playlist = db.query(Playlist).filter(Playlist.id == request.playlist_id).first()
+        playlist = PlaylistRepository.get_by_id(request.playlist_id, db=db)
         if not playlist:
             raise HTTPException(status_code=404, detail="Playlist not found")
         safe_title = tools._sanitize_title(playlist.title)
@@ -593,7 +580,7 @@ async def download_adhoc_file(job_id: int, db: Session = Depends(get_db)):
     Direct browser download of completed ad-hoc media (audio or video).
     """
     import os
-    job = db.query(Job).filter(Job.id == job_id).first()
+    job = JobRepository.get_by_id(job_id, db=db)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status != "completed":
@@ -601,8 +588,7 @@ async def download_adhoc_file(job_id: int, db: Session = Depends(get_db)):
     
     file_to_send = None
     if job.current_video_id:
-        from app.models.database import Track
-        track = db.query(Track).filter(Track.video_id == job.current_video_id).first()
+        track = TrackRepository.get_by_video_id(job.current_video_id, db=db)
         if track:
             if "audio" in (job.job_type or "") and track.primary_audio_filepath and os.path.isfile(track.primary_audio_filepath):
                 file_to_send = track.primary_audio_filepath

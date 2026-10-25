@@ -11,7 +11,7 @@ from datetime import datetime
 import os
 import threading
 
-from app.models.database import get_db, Playlist, Track
+from app.models.database import get_db
 from app.repositories import PlaylistRepository, TrackRepository
 from app.services.ytdlp_service import DownloadService
 from app.core.config import settings
@@ -102,7 +102,7 @@ async def refresh_playlist_stats_task(playlist_id: int):
 @router.get("/", response_model=List[PlaylistResponse])
 async def list_playlists(db: Session = Depends(get_db)):
     """Get all playlists"""
-    playlists = db.query(Playlist).all()
+    playlists = PlaylistRepository.get_all(db=db)
     
     # Convert datetime to string for response
     result = []
@@ -252,7 +252,7 @@ async def refresh_playlist(
             detail="Daily scheduled scan is currently running in the background. Please wait for it to complete."
         )
 
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
@@ -276,7 +276,7 @@ async def open_playlist_folder(playlist_id: int, db: Session = Depends(get_db)):
     from app.core import yt_playlist_audio_tools as tools
     from app.utils.system import open_folder_in_explorer
     
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
@@ -307,7 +307,7 @@ async def get_playlist_video_info(playlist_id: int, db: Session = Depends(get_db
     from app.core import yt_playlist_audio_tools as tools
     from app.services.ytdlp_service import ytdlp_service
     
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
@@ -395,20 +395,13 @@ async def get_playlist_tracks(playlist_id: int, db: Session = Depends(get_db)):
     from app.services.ytdlp_service import ytdlp_service
     import os
 
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
-    from app.models.database import PlaylistTrack
     playlist_folder = ytdlp_service.resolve_playlist_folder(playlist.title)
 
-    records = (
-        db.query(Track, PlaylistTrack)
-        .join(PlaylistTrack, Track.video_id == PlaylistTrack.track_id)
-        .filter(PlaylistTrack.playlist_id == playlist_id)
-        .order_by(PlaylistTrack.position.asc())
-        .all()
-    )
+    records = TrackRepository.get_playlist_tracks(playlist_id, db=db)
 
     result = []
     for t, pt in records:
@@ -451,19 +444,11 @@ async def get_playlist_tracks(playlist_id: int, db: Session = Depends(get_db)):
 @router.post("/{playlist_id}/tracks/refresh-resolutions")
 async def refresh_tracks_resolutions(playlist_id: int, db: Session = Depends(get_db)):
     """On-demand probe of YouTube available video resolutions for tracks in this playlist"""
-    from app.models.database import Track, PlaylistTrack
-    from app.services.adhoc_service import probe_video_info
-
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
-    tracks = (
-        db.query(Track)
-        .join(PlaylistTrack, Track.video_id == PlaylistTrack.track_id)
-        .filter(PlaylistTrack.playlist_id == playlist_id)
-        .all()
-    )
+    tracks = TrackRepository.get_tracks_by_playlist_id(playlist_id, db=db)
     probed_count = 0
 
     for t in tracks:
@@ -496,11 +481,11 @@ async def upgrade_track_resolution(
     from app.utils.ytdlp_opts import build_ytdlp_options
     from app.core.track_indexer import probe_local_media_metadata
 
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
-    track = db.query(Track).filter(Track.video_id == video_id).first()
+    track = TrackRepository.get_by_video_id(video_id, db=db)
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 
@@ -598,11 +583,11 @@ async def upgrade_track_audio(
     from app.utils.ytdlp_opts import build_ytdlp_options
     from app.core.track_indexer import probe_local_media_metadata
 
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
-    track = db.query(Track).filter(Track.video_id == video_id).first()
+    track = TrackRepository.get_by_video_id(video_id, db=db)
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 
@@ -697,11 +682,11 @@ async def set_primary_track_version(
     from app.models.database import Track
     from app.services.ytdlp_service import ytdlp_service
 
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    playlist = PlaylistRepository.get_by_id(playlist_id, db=db)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
-    track = db.query(Track).filter(Track.video_id == video_id).first()
+    track = TrackRepository.get_by_video_id(video_id, db=db)
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 
