@@ -4,9 +4,9 @@ Track Data Access Repository
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 
-from app.models.database import Track, MovedTrackHistory, get_db_context
+from app.models.database import Track, PlaylistTrack, MovedTrackHistory, get_db_context
 
 
 class TrackRepository:
@@ -51,6 +51,8 @@ class TrackRepository:
         title: str,
         filepath: str,
         playlist_id: Optional[int] = None,
+        position: Optional[int] = None,
+        is_archived: bool = False,
         audio_filepath: Optional[str] = None,
         artist: Optional[str] = None,
         duration: Optional[int] = None,
@@ -61,7 +63,7 @@ class TrackRepository:
         downloaded_audio_bitrate: Optional[str] = None,
         db: Optional[Session] = None
     ) -> Track:
-        """Create or update a track record in the index with optional media metadata"""
+        """Create or update a track record in the index with optional media metadata and playlist association"""
         with get_db_context(db) as session:
             track = session.query(Track).filter(Track.video_id == video_id).first()
             if track:
@@ -86,18 +88,35 @@ class TrackRepository:
                 if downloaded_audio_bitrate is not None:
                     track.downloaded_audio_bitrate = downloaded_audio_bitrate
 
-                # Update associated playlists
-                current_playlists = list(track.playlists_json or [])
-                if playlist_id is not None and playlist_id not in current_playlists:
-                    current_playlists.append(playlist_id)
-                    track.playlists_json = current_playlists
+                # Update or associate playlist via PlaylistTrack junction table
+                if playlist_id is not None:
+                    assoc = session.query(PlaylistTrack).filter_by(
+                        playlist_id=playlist_id, track_id=video_id
+                    ).first()
+                    if not assoc:
+                        if position is None:
+                            max_pos = session.query(func.max(PlaylistTrack.position)).filter_by(
+                                playlist_id=playlist_id
+                            ).scalar() or 0
+                            position = max_pos + 1
+                        assoc = PlaylistTrack(
+                            playlist_id=playlist_id,
+                            track_id=video_id,
+                            position=position,
+                            is_archived=is_archived
+                        )
+                        session.add(assoc)
+                    else:
+                        if position is not None:
+                            assoc.position = position
+                        if is_archived is not None:
+                            assoc.is_archived = is_archived
 
                 track.updated_at = datetime.utcnow()
                 session.commit()
                 session.refresh(track)
                 return track
             else:
-                playlists = [playlist_id] if playlist_id is not None else []
                 new_track = Track(
                     video_id=video_id,
                     title=title or video_id,
@@ -105,7 +124,6 @@ class TrackRepository:
                     duration=duration,
                     primary_filepath=filepath or "",
                     primary_audio_filepath=audio_filepath,
-                    playlists_json=playlists,
                     is_hardlinked=is_hardlinked,
                     downloaded_resolutions_json=downloaded_resolutions or [],
                     downloaded_fps=downloaded_fps,
@@ -115,6 +133,21 @@ class TrackRepository:
                     updated_at=datetime.utcnow(),
                 )
                 session.add(new_track)
+                session.flush()
+
+                if playlist_id is not None:
+                    if position is None:
+                        max_pos = session.query(func.max(PlaylistTrack.position)).filter_by(
+                            playlist_id=playlist_id
+                        ).scalar() or 0
+                        position = max_pos + 1
+                    session.add(PlaylistTrack(
+                        playlist_id=playlist_id,
+                        track_id=video_id,
+                        position=position,
+                        is_archived=is_archived
+                    ))
+
                 session.commit()
                 session.refresh(new_track)
                 return new_track

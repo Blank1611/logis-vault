@@ -3,7 +3,7 @@ Database models using SQLAlchemy
 """
 from sqlalchemy import create_engine, Column, Integer, BigInteger, String, DateTime, Float, Text, JSON, Boolean, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, relationship
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -84,6 +84,7 @@ class Playlist(Base):
     excluded_ids = Column(JSON, default=list)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    tracks = relationship("PlaylistTrack", backref="playlist", cascade="all, delete-orphan")
 
 class Job(Base):
     """Download/Extract job model"""
@@ -126,6 +127,17 @@ class Job(Base):
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
 
+class PlaylistTrack(Base):
+    """Authoritative junction table mapping Playlists to Tracks with explicit sequence order"""
+    __tablename__ = "playlist_tracks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    playlist_id = Column(Integer, ForeignKey("playlists.id", ondelete="CASCADE"), nullable=False, index=True)
+    track_id = Column(String, ForeignKey("tracks.video_id", ondelete="CASCADE"), nullable=False, index=True)
+    position = Column(Integer, nullable=False, index=True)
+    is_archived = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 class Track(Base):
     """Global index of downloaded tracks for cross-playlist hardlinking and deduplication"""
     __tablename__ = "tracks"
@@ -136,7 +148,7 @@ class Track(Base):
     duration = Column(Integer, nullable=True)
     primary_filepath = Column(String, nullable=False)
     primary_audio_filepath = Column(String, nullable=True)
-    playlists_json = Column(JSON, default=list)  # List of playlist IDs [1, 2, ...]
+    playlists = relationship("PlaylistTrack", backref="track", cascade="all, delete-orphan")
     is_hardlinked = Column(Boolean, default=False)
     downloaded_resolutions_json = Column(JSON, default=list)  # e.g. ["1080p", "720p"]
     downloaded_fps = Column(Integer, nullable=True)
@@ -146,6 +158,15 @@ class Track(Base):
     resolutions_last_checked = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def playlists_json(self) -> List[int]:
+        """Dynamic backward-compatibility helper returning associated playlist IDs"""
+        return [pt.playlist_id for pt in self.playlists] if self.playlists else []
+
+    @playlists_json.setter
+    def playlists_json(self, value):
+        pass
 
     @property
     def primary_resolution(self) -> Optional[str]:

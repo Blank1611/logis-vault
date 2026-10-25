@@ -63,6 +63,8 @@ export interface PlaylistTrack {
   title: string
   artist?: string
   duration?: number
+  position?: number
+  is_archived?: boolean
   primary_filepath?: string
   primary_audio_filepath?: string
   primary_resolution?: string

@@ -696,6 +696,304 @@ def _sanitize_title(title: str) -> str:
     safe_title = "".join(c for c in title if c not in r'\/:*?"<>|').strip()
     return safe_title or "playlist"
 
+
+def is_deleted_or_private_title(title: Optional[str]) -> bool:
+    """Check if video title indicates unavailability, deletion, or privatization"""
+    if not title:
+        return True
+    t = str(title).strip().lower()
+    return t in ("[deleted video]", "[private video]", "deleted video", "private video")
+
+
+def resolve_track_metadata(
+    playlist_folder: str,
+    video_id: str,
+    filename: Optional[str] = None,
+    playlist_title: Optional[str] = None,
+    db: Optional[Any] = None
+) -> Dict[str, Any]:
+    """
+    Resolve track title, artist, album, and date using the Refined 3-Tier Fallback Ladder:
+    - Tier 1: Canonical playlist_info.json (entries -> archived_entries)
+    - Tier 2: SQLite Track table
+    - Tier 3: Filename Regex Heuristic
+    """
+    safe_title = playlist_title or os.path.basename(playlist_folder)
+
+    # Tier 1: Canonical playlist_info.json on disk
+    snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
+    info_path = os.path.join(snapshot_dir, "playlist_info.json")
+    if not os.path.isfile(info_path):
+        info_path = os.path.join(playlist_folder, "playlist_info.json")
+
+    if os.path.isfile(info_path):
+        try:
+            with open(info_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Step 1A: Check active entries
+            for ent in data.get("entries") or []:
+                if isinstance(ent, dict) and ent.get("id") == video_id:
+                    t = ent.get("title")
+                    if not is_deleted_or_private_title(t):
+                        return {
+                            "title": t,
+                            "artist": ent.get("artist") or ent.get("uploader") or ent.get("channel") or "Unknown Artist",
+                            "album": safe_title,
+                            "date": str(ent.get("release_year") or (ent.get("upload_date") or "")[:4] or ""),
+                            "source": "snapshot_active"
+                        }
+            # Step 1B: Check archived_entries
+            for ent in data.get("archived_entries") or []:
+                if isinstance(ent, dict) and ent.get("id") == video_id:
+                    t = ent.get("title")
+                    if not is_deleted_or_private_title(t):
+                        return {
+                            "title": t,
+                            "artist": ent.get("artist") or ent.get("uploader") or ent.get("channel") or "Unknown Artist",
+                            "album": safe_title,
+                            "date": str(ent.get("release_year") or (ent.get("upload_date") or "")[:4] or ""),
+                            "source": "snapshot_archived"
+                        }
+        except Exception:
+            pass
+
+    # Tier 2: SQLite Track Table
+    try:
+        from app.models.database import Track, get_db_context
+        with get_db_context(db) as session:
+            t_row = session.query(Track).filter(Track.video_id == video_id).first()
+            if t_row and t_row.title and not is_deleted_or_private_title(t_row.title) and t_row.title != video_id:
+                return {
+                    "title": t_row.title,
+                    "artist": t_row.artist or "Unknown Artist",
+                    "album": safe_title,
+                    "date": "",
+                    "source": "sqlite_track"
+                }
+    except Exception:
+        pass
+
+    # Tier 3: Filename Regex Heuristic
+    if filename:
+        import re
+        base = os.path.splitext(os.path.basename(filename))[0]
+        cleaned = base
+        if video_id:
+            cleaned = cleaned.replace(f"[{video_id}]", "")
+        cleaned = re.sub(r"\[[a-zA-Z0-9_-]{11}\]", "", cleaned)
+        cleaned = re.sub(r"\s*\[[a-zA-Z0-9_-]+\]\s*$", "", cleaned).strip()
+        if " - " in cleaned:
+            parts = cleaned.split(" - ", 1)
+            artist = parts[0].strip() or "Unknown Artist"
+            title = parts[1].strip() or base
+        else:
+            artist = "Unknown Artist"
+            title = cleaned or base
+
+        return {
+            "title": title,
+            "artist": artist,
+            "album": safe_title,
+            "date": "",
+            "source": "filename_regex"
+        }
+
+    return {
+        "title": video_id,
+        "artist": "Unknown Artist",
+        "album": safe_title,
+        "date": "",
+        "source": "fallback_id"
+    }
+
+
+def build_aligned_playlist_sequence(
+    playlist_folder: str,
+    playlist_title: Optional[str] = None,
+    db: Optional[Any] = None
+) -> List[Dict[str, Any]]:
+    """
+    Construct the true chronological playlist track sequence using Relative Slot Alignment:
+    - Merges active YouTube entries and historical archived_entries.
+    - Slices single and consecutive deleted tracks into relative slots between surviving anchors.
+    - Captures any unlisted local media files on disk.
+    - Assigns continuous 1-based track positions (1..Total).
+    """
+    safe_title = playlist_title or os.path.basename(playlist_folder)
+
+    # 1. Load snapshot playlist_info.json first to discover known IDs
+    snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
+    info_path = os.path.join(snapshot_dir, "playlist_info.json")
+    if not os.path.isfile(info_path):
+        info_path = os.path.join(playlist_folder, "playlist_info.json")
+
+    entries: List[dict] = []
+    archived_entries: List[dict] = []
+    known_ids: Set[str] = set()
+    if os.path.isfile(info_path):
+        try:
+            with open(info_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                entries = data.get("entries") or []
+                archived_entries = data.get("archived_entries") or []
+                for e in entries:
+                    if isinstance(e, dict) and e.get("id"):
+                        known_ids.add(e["id"])
+                for a in archived_entries:
+                    if isinstance(a, dict) and a.get("id"):
+                        known_ids.add(a["id"])
+        except Exception as e:
+            print(f"Warning reading {info_path}: {e}")
+
+    # 2. Discover all physical media files in root directory
+    video_exts = (".mp4", ".mkv", ".webm", ".m4v")
+    audio_exts = (".mp3", ".opus", ".m4a", ".flac", ".ogg", ".aac")
+    media_exts = video_exts + audio_exts
+
+    disk_files_by_id: Dict[str, str] = {}
+    orphan_files: List[str] = []
+
+    try:
+        if os.path.isdir(playlist_folder):
+            for fname in os.listdir(playlist_folder):
+                fpath = os.path.join(playlist_folder, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                if not any(fname.lower().endswith(ext) for ext in media_exts):
+                    continue
+                import re
+                vid = None
+                m11 = re.search(r"\[([a-zA-Z0-9_-]{11})\]", fname)
+                if m11:
+                    vid = m11.group(1)
+                else:
+                    for bracket_cand in re.findall(r"\[([a-zA-Z0-9_-]+)\]", fname):
+                        if bracket_cand in known_ids:
+                            vid = bracket_cand
+                            break
+                if vid:
+                    if vid not in disk_files_by_id or any(fname.lower().endswith(ext) for ext in video_exts):
+                        disk_files_by_id[vid] = fpath
+                else:
+                    orphan_files.append(fpath)
+    except Exception as e:
+        print(f"Warning discovering disk files in {playlist_folder}: {e}")
+
+    # 3. Base sequence: Active entries from YouTube
+    active_seq: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+
+    for ent in entries:
+        if not isinstance(ent, dict):
+            continue
+        vid = ent.get("id")
+        if not vid or vid in seen_ids:
+            continue
+        t = ent.get("title")
+        is_del = is_deleted_or_private_title(t)
+        active_seq.append({
+            "video_id": vid,
+            "is_archived": is_del,
+            "entry": ent
+        })
+        seen_ids.add(vid)
+
+    # 4. Relative slot alignment for archived_entries
+    archived_to_insert: List[Dict[str, Any]] = []
+    for a_ent in archived_entries:
+        if not isinstance(a_ent, dict):
+            continue
+        vid = a_ent.get("id")
+        if not vid or vid in seen_ids:
+            continue
+        archived_to_insert.append({
+            "video_id": vid,
+            "is_archived": True,
+            "entry": a_ent,
+            "slot": a_ent.get("historical_slot") or {}
+        })
+        seen_ids.add(vid)
+
+    # Insert archived entries into active_seq using relative slots
+    final_seq: List[Dict[str, Any]] = list(active_seq)
+    unanchored: List[Dict[str, Any]] = []
+
+    for item in archived_to_insert:
+        slot = item.get("slot") or {}
+        prec_id = slot.get("preceding_id")
+        succ_id = slot.get("succeeding_id")
+        inserted = False
+
+        if prec_id:
+            for idx, existing in enumerate(final_seq):
+                if existing["video_id"] == prec_id:
+                    final_seq.insert(idx + 1, item)
+                    inserted = True
+                    break
+        if not inserted and succ_id:
+            for idx, existing in enumerate(final_seq):
+                if existing["video_id"] == succ_id:
+                    final_seq.insert(idx, item)
+                    inserted = True
+                    break
+        if not inserted:
+            unanchored.append(item)
+
+    final_seq.extend(unanchored)
+
+    # 5. Capture local disk media files with IDs neither in entries nor archived
+    for vid, fpath in disk_files_by_id.items():
+        if vid not in seen_ids:
+            final_seq.append({
+                "video_id": vid,
+                "is_archived": True,
+                "entry": {"id": vid, "title": os.path.basename(fpath)},
+                "disk_file": fpath
+            })
+            seen_ids.add(vid)
+
+    # 6. Capture orphan media files (no video ID in filename)
+    for fpath in orphan_files:
+        final_seq.append({
+            "video_id": f"local_{os.path.basename(fpath)}",
+            "is_archived": True,
+            "entry": {"title": os.path.basename(fpath)},
+            "disk_file": fpath
+        })
+
+    # 7. Final pass: Assign continuous 1-based position and resolve rich metadata
+    result: List[Dict[str, Any]] = []
+    for pos, item in enumerate(final_seq, start=1):
+        vid = item["video_id"]
+        fpath = disk_files_by_id.get(vid) or item.get("disk_file")
+        fname = os.path.basename(fpath) if fpath else None
+
+        meta = resolve_track_metadata(
+            playlist_folder=playlist_folder,
+            video_id=vid,
+            filename=fname,
+            playlist_title=safe_title,
+            db=db
+        )
+
+        ent = item.get("entry") or {}
+        duration = ent.get("duration") or -1.0
+
+        result.append({
+            "position": pos,
+            "video_id": vid,
+            "is_archived": item["is_archived"],
+            "title": meta["title"],
+            "artist": meta["artist"],
+            "album": meta["album"],
+            "date": meta["date"],
+            "duration": float(duration) if duration else -1.0,
+            "filepath": fpath,
+            "filename": fname
+        })
+
+    return result
+
 def _get_playlist_info(url: str, force_refresh: bool = False) -> dict:
     """Return the full info dict for a playlist/url, caching the result.
 
@@ -800,24 +1098,50 @@ def _save_playlist_info_with_versioning(playlist_folder: str, info: dict, source
             except Exception:
                 pass
 
-        # If file exists, rename it with its creation date
-        if os.path.isfile(info_path):
-            try:
-                # Get file creation time
-                creation_time = os.path.getctime(info_path)
-                date_str = datetime.fromtimestamp(creation_time).strftime("%Y%m%d_%H%M%S")
-                
-                # Rename old file in same directory
-                old_name = os.path.join(snapshot_dir, f"playlist_info_{date_str}.json")
-                os.rename(info_path, old_name)
-                print(f"  Archived old playlist_info.json as: {os.path.basename(old_name)}")
-            except Exception as e:
-                print(f"  Warning: Could not archive old playlist_info.json: {e}")
-        
-        # Save new file
+        # Delta merge: preserve historical entries into archived_entries
+        if old_info:
+            old_entries = old_info.get("entries") or []
+            existing_archived = old_info.get("archived_entries") or []
+            new_entries = info.get("entries") or []
+
+            new_valid_ids = {
+                e.get("id") for e in new_entries 
+                if isinstance(e, dict) and e.get("id") and not is_deleted_or_private_title(e.get("title"))
+            }
+
+            archived_map = {
+                e["id"]: e for e in existing_archived 
+                if isinstance(e, dict) and e.get("id")
+            }
+
+            for i, o_ent in enumerate(old_entries):
+                if not isinstance(o_ent, dict):
+                    continue
+                o_id = o_ent.get("id")
+                o_title = o_ent.get("title")
+                if o_id and not is_deleted_or_private_title(o_title) and o_id not in new_valid_ids:
+                    if o_id not in archived_map:
+                        prec_id = old_entries[i - 1].get("id") if i > 0 and isinstance(old_entries[i - 1], dict) else None
+                        succ_id = old_entries[i + 1].get("id") if i < len(old_entries) - 1 and isinstance(old_entries[i + 1], dict) else None
+                        archived_map[o_id] = {
+                            "id": o_id,
+                            "title": o_title,
+                            "uploader": o_ent.get("uploader") or o_ent.get("channel") or "Unknown Artist",
+                            "duration": o_ent.get("duration"),
+                            "upload_date": o_ent.get("upload_date"),
+                            "historical_slot": {
+                                "preceding_id": prec_id,
+                                "succeeding_id": succ_id
+                            },
+                            "archived_reason": "deleted_or_missing_from_youtube",
+                            "archived_at": datetime.utcnow().isoformat()
+                        }
+            info["archived_entries"] = list(archived_map.values())
+
+        # Save new canonical file (Git version control handles historical snapshots)
         with open(info_path, "w", encoding="utf-8") as f:
             json.dump(info, f, ensure_ascii=False, indent=2)
-        
+
         print(f"  Saved playlist_info.json to: playlist_info_snapshot/")
 
         # Git metadata versioning: stage & commit atomically for this playlist
@@ -1897,27 +2221,21 @@ def extract_audio_for_existing_playlist_folder(playlist_folder: str, audio_folde
     print(f"Extraction mode: {effective_mode}")
     print(f"Parallel workers: {MAX_EXTRACTION_WORKERS}\n")
 
-    # 1. Load playlist snapshot metadata for offline YouTube index and ID3 tags
+    # 1. Load aligned sequence metadata for true chronological order and ID3 tags
     entries_by_id: Dict[str, dict] = {}
-    info_path = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
-    if not os.path.isfile(info_path):
-        info_path = os.path.join(playlist_folder, "playlist_info.json")
-    if os.path.isfile(info_path):
-        try:
-            with open(info_path, "r", encoding="utf-8") as jf:
-                data = json.load(jf)
-                for pos, ent in enumerate(data.get("entries") or [], start=1):
-                    eid = ent.get("id")
-                    if eid:
-                        entries_by_id[eid] = {
-                            "track": pos,
-                            "title": ent.get("title") or "",
-                            "artist": ent.get("artist") or ent.get("uploader") or ent.get("channel") or "",
-                            "album": safe_title,
-                            "date": str(ent.get("release_year") or (ent.get("upload_date") or "")[:4] or "")
-                        }
-        except Exception as je:
-            print(f"  [WARN] Could not parse playlist info snapshot: {je}")
+    try:
+        aligned_tracks = build_aligned_playlist_sequence(playlist_folder, playlist_title=safe_title)
+        total_tracks = len(aligned_tracks)
+        for t in aligned_tracks:
+            entries_by_id[t["video_id"]] = {
+                "track": f"{t['position']}/{total_tracks}",
+                "title": t["title"],
+                "artist": t["artist"],
+                "album": t["album"],
+                "date": t["date"]
+            }
+    except Exception as je:
+        print(f"  [WARN] Could not parse aligned sequence metadata: {je}")
 
     # 2. Discover video and audio candidate files (Smart Source Selection)
     video_exts = (".mp4", ".mkv", ".webm", ".m4v")
@@ -2062,21 +2380,10 @@ def generate_m3u_playlists(playlist_folder: str, audio_folders: Optional[List[st
     """
     Generate both .m3u8 (UTF-8 standard) and .m3u (UTF-8 legacy) playlist files
     for the video root folder and any audio export folders, preserving the exact
-    top-to-bottom YouTube order from playlist_info.json snapshot.
+    chronological order using the Sequence Alignment Engine (including preserved/archived tracks).
     """
     safe_title = os.path.basename(playlist_folder)
-    info_path = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
-    if not os.path.isfile(info_path):
-        info_path = os.path.join(playlist_folder, "playlist_info.json")
-
-    entries: List[dict] = []
-    if os.path.isfile(info_path):
-        try:
-            with open(info_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                entries = data.get("entries") or []
-        except Exception as e:
-            print(f"Warning: could not read {info_path} for m3u generation: {e}")
+    aligned_tracks = build_aligned_playlist_sequence(playlist_folder, playlist_title=safe_title)
 
     def _write_playlist(folder: str, tracks: List[Tuple[float, str, str]]) -> None:
         if not tracks or not os.path.isdir(folder):
@@ -2107,20 +2414,21 @@ def generate_m3u_playlists(playlist_folder: str, audio_folders: Optional[List[st
         root_files = []
 
     video_tracks: List[Tuple[float, str, str]] = []
-    if entries:
-        for entry in entries:
-            vid_id = entry.get("id")
-            if not vid_id:
-                continue
-            matching = [f for f in root_files if f"[{vid_id}]" in f and any(f.lower().endswith(ext) for ext in video_exts)]
-            if matching:
-                dur = float(entry.get("duration") or -1)
-                title = entry.get("title") or matching[0]
-                video_tracks.append((dur, title, matching[0]))
-    else:
-        for f in sorted(root_files):
-            if any(f.lower().endswith(ext) for ext in video_exts):
-                video_tracks.append((-1, os.path.splitext(f)[0], f))
+    for item in aligned_tracks:
+        vid_id = item["video_id"]
+        fname = item.get("filename")
+        matching = [
+            f for f in root_files
+            if (f"[{vid_id}]" in f or (fname and f == fname)) and any(f.lower().endswith(ext) for ext in video_exts)
+        ]
+        if matching:
+            video_tracks.append((item["duration"], item["title"], matching[0]))
+
+    # Fallback to any remaining video files not captured in sequence
+    matched_set = {t[2] for t in video_tracks}
+    for f in sorted(root_files):
+        if f not in matched_set and any(f.lower().endswith(ext) for ext in video_exts):
+            video_tracks.append((-1, os.path.splitext(f)[0], f))
 
     _write_playlist(playlist_folder, video_tracks)
 
@@ -2145,19 +2453,20 @@ def generate_m3u_playlists(playlist_folder: str, audio_folders: Optional[List[st
             a_files = []
 
         audio_tracks: List[Tuple[float, str, str]] = []
-        if entries:
-            for entry in entries:
-                vid_id = entry.get("id")
-                if not vid_id:
-                    continue
-                matching = [f for f in a_files if f"[{vid_id}]" in f and any(f.lower().endswith(ext) for ext in audio_exts)]
-                if matching:
-                    dur = float(entry.get("duration") or -1)
-                    title = entry.get("title") or matching[0]
-                    audio_tracks.append((dur, title, matching[0]))
-        else:
-            for f in sorted(a_files):
-                if any(f.lower().endswith(ext) for ext in audio_exts):
-                    audio_tracks.append((-1, os.path.splitext(f)[0], f))
+        for item in aligned_tracks:
+            vid_id = item["video_id"]
+            fname = item.get("filename")
+            stem = os.path.splitext(fname)[0] if fname else None
+            matching = [
+                f for f in a_files
+                if (f"[{vid_id}]" in f or (stem and os.path.splitext(f)[0] == stem)) and any(f.lower().endswith(ext) for ext in audio_exts)
+            ]
+            if matching:
+                audio_tracks.append((item["duration"], item["title"], matching[0]))
+
+        matched_aud_set = {t[2] for t in audio_tracks}
+        for f in sorted(a_files):
+            if f not in matched_aud_set and any(f.lower().endswith(ext) for ext in audio_exts):
+                audio_tracks.append((-1, os.path.splitext(f)[0], f))
 
         _write_playlist(a_dir, audio_tracks)

@@ -133,16 +133,22 @@ class TestRepositories(unittest.TestCase):
         self.assertIsNone(PlaylistRepository.get_by_id(pl.id, db=self.db))
 
     def test_track_repository(self):
+        # Create playlist
+        pl = PlaylistRepository.create(
+            url="https://youtube.com/playlist?list=PL_TEST_REPO",
+            title="Repo PL",
+            db=self.db
+        )
         # Index track
         track = TrackRepository.index_or_update_track(
             video_id="repoVid123",
             title="Repository Track",
             filepath="/tmp/track.mp4",
-            playlist_id=1,
+            playlist_id=pl.id,
             db=self.db
         )
         self.assertEqual(track.video_id, "repoVid123")
-        self.assertIn(1, track.playlists_json)
+        self.assertIn(pl.id, track.playlists_json)
 
         # Search tracks
         tracks = TrackRepository.get_all_tracks(search="Repository", db=self.db)

@@ -296,7 +296,12 @@ export const TrackInspectionModal: React.FC<TrackInspectionModalProps> = ({ play
                   className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 p-3.5 rounded-xl bg-slate-900/60 hover:bg-slate-900/80 border border-white/10 hover:border-white/20 transition-all shadow-sm"
                 >
                   {/* Left: Thumbnail & Details */}
-                  <div className="flex items-center gap-3.5 flex-1 min-w-0">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    {track.position != null && (
+                      <span className="font-mono text-xs font-bold text-slate-500 w-6 shrink-0 text-right">
+                        #{track.position}
+                      </span>
+                    )}
                     <div className="relative w-20 h-12 rounded-lg overflow-hidden bg-slate-800 shrink-0 border border-white/10 shadow-xs">
                       <img
                         src={`https://i.ytimg.com/vi/${track.video_id}/hqdefault.jpg`}
@@ -316,15 +321,23 @@ export const TrackInspectionModal: React.FC<TrackInspectionModalProps> = ({ play
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-sm font-semibold text-white truncate" title={track.title}>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="text-sm font-semibold text-white truncate max-w-[calc(100%-80px)]" title={track.title}>
                           {track.title}
                         </h4>
+                        {track.is_archived && (
+                          <span 
+                            className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-950/70 text-amber-300 border border-amber-500/40 shrink-0"
+                            title="Preserved offline in local archive"
+                          >
+                            Archived
+                          </span>
+                        )}
                         <a
                           href={`https://www.youtube.com/watch?v=${track.video_id}`}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-slate-400 hover:text-cyan-300"
+                          className="text-slate-400 hover:text-cyan-300 shrink-0"
                           title="Open on YouTube"
                         >
                           <ExternalLink className="w-3 h-3" />

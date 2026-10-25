@@ -147,9 +147,6 @@ class RecoveryService:
 
             for pl in candidates:
                 logger.info(f"[RECOVERY] Safely purging phantom database playlist #{pl.id} '{pl.title}' ({pl.url}) - files on disk are preserved.")
-                for track in db.query(Track).all():
-                    if track.playlists_json and pl.id in track.playlists_json:
-                        track.playlists_json = [pid for pid in track.playlists_json if pid != pl.id]
                 db.delete(pl)
                 purged_count += 1
 

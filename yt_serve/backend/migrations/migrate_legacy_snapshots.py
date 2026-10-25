@@ -211,6 +211,99 @@ def _load_json_safe(path: str) -> Optional[dict]:
         return None
 
 
+def is_deleted_or_private_title(title: Optional[str]) -> bool:
+    """Check if video title indicates unavailability, deletion, or privatization"""
+    if not title:
+        return True
+    t = str(title).strip().lower()
+    return t in ("[deleted video]", "[private video]", "deleted video", "private video")
+
+
+def consolidate_archived_entries(
+    playlist_folder: str,
+    records: List[SnapshotRecord],
+    canonical_target: str,
+    dry_run: bool = False
+) -> Tuple[int, Optional[dict]]:
+    """
+    Scan all historical snapshots for a playlist, track historical entries and their relative slot hints,
+    and populate data["archived_entries"] in canonical_target for any tracks that are missing or
+    marked deleted/private in the latest snapshot.
+    Returns (num_archived_entries, updated_data_dict_or_None).
+    """
+    best_metadata: Dict[str, dict] = {}
+    best_slots: Dict[str, dict] = {}
+
+    # Sort records ascending to traverse from oldest to newest snapshot
+    chronological_records = sorted(records, key=lambda r: (r.timestamp, 1 if r.is_latest else 0))
+
+    for rec in chronological_records:
+        data = _load_json_safe(rec.source_file_path)
+        if not data:
+            continue
+        entries = data.get("entries") or []
+        for i, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                continue
+            vid = entry.get("id")
+            title = entry.get("title")
+            if vid and not is_deleted_or_private_title(title):
+                best_metadata[vid] = entry
+                preceding_id = entries[i - 1].get("id") if i > 0 and isinstance(entries[i - 1], dict) else None
+                succeeding_id = entries[i + 1].get("id") if i < len(entries) - 1 and isinstance(entries[i + 1], dict) else None
+                best_slots[vid] = {
+                    "preceding_id": preceding_id,
+                    "succeeding_id": succeeding_id
+                }
+
+    # Load canonical target or latest snapshot
+    canonical_data = None
+    if os.path.exists(canonical_target):
+        canonical_data = _load_json_safe(canonical_target)
+    if not canonical_data and chronological_records:
+        canonical_data = _load_json_safe(chronological_records[-1].source_file_path)
+    if not canonical_data:
+        canonical_data = {"entries": [], "archived_entries": []}
+
+    active_entries = canonical_data.get("entries") or []
+    active_valid_ids = {
+        e.get("id") for e in active_entries 
+        if isinstance(e, dict) and e.get("id") and not is_deleted_or_private_title(e.get("title"))
+    }
+
+    existing_archived = canonical_data.get("archived_entries") or []
+    archived_map = {
+        e["id"]: e for e in existing_archived 
+        if isinstance(e, dict) and e.get("id")
+    }
+
+    # Find historical entries no longer active/valid
+    new_archives_found = 0
+    for vid, good_entry in best_metadata.items():
+        if vid not in active_valid_ids:
+            if vid not in archived_map:
+                new_archives_found += 1
+                archived_map[vid] = {
+                    "id": vid,
+                    "title": good_entry.get("title") or vid,
+                    "uploader": good_entry.get("uploader") or good_entry.get("channel") or "Unknown Artist",
+                    "duration": good_entry.get("duration"),
+                    "upload_date": good_entry.get("upload_date"),
+                    "historical_slot": best_slots.get(vid, {}),
+                    "archived_reason": "deleted_or_missing_from_latest_snapshot",
+                    "archived_at": datetime.utcnow().isoformat()
+                }
+
+    canonical_data["archived_entries"] = list(archived_map.values())
+
+    if not dry_run and (new_archives_found > 0 or not os.path.exists(canonical_target)):
+        os.makedirs(os.path.dirname(canonical_target), exist_ok=True)
+        with open(canonical_target, "w", encoding="utf-8") as f:
+            json.dump(canonical_data, f, indent=2, ensure_ascii=False)
+
+    return len(canonical_data["archived_entries"]), canonical_data
+
+
 def _format_playlist_delta(
     playlist_title: str,
     old_entries: Optional[List[dict]],
@@ -474,6 +567,19 @@ def run_migration(
                     print(f"  [{idx:03d}/{len(groups):03d}] {ts_str} | [SKIP NO DIFF] {len(deltas)} playlist(s) unchanged")
 
         print("\n" + "=" * 70)
+        # Simulate archived entries consolidation
+        records_by_folder: Dict[str, List[SnapshotRecord]] = {}
+        for r in records:
+            records_by_folder.setdefault(r.playlist_folder, []).append(r)
+
+        print("\n--- [DRY RUN] Projected Archived Entries Consolidation ---")
+        for folder, pl_records in records_by_folder.items():
+            pl_title = pl_records[0].playlist_title
+            canonical_target = pl_records[0].target_file_path
+            count, _ = consolidate_archived_entries(folder, pl_records, canonical_target, dry_run=True)
+            print(f"  Playlist '{pl_title}': would preserve {count} total archived_entries in playlist_info.json")
+
+        print("\n" + "=" * 70)
         print(f"[DRY RUN SUMMARY] Would create {sim_committed} commits (grouped from {len(records)} snapshots).")
         print(f"[DRY RUN SUMMARY] {sim_skipped} identical/no-op groups skipped.")
         print(f"[DRY RUN SUMMARY] Would clean up {len(legacy_files)} legacy files if --cleanup-legacy was passed.")
@@ -583,6 +689,41 @@ def run_migration(
         if rec.is_latest and os.path.exists(rec.source_file_path):
             if os.path.abspath(rec.source_file_path) != os.path.abspath(rec.target_file_path):
                 shutil.copy2(rec.source_file_path, rec.target_file_path)
+
+    # 6.5 Consolidate archived_entries across historical snapshots
+    print("4b. Consolidating archived_entries in canonical playlist_info.json files...")
+    records_by_folder: Dict[str, List[SnapshotRecord]] = {}
+    for r in records:
+        records_by_folder.setdefault(r.playlist_folder, []).append(r)
+
+    archived_commit_needed = False
+    for folder, pl_records in records_by_folder.items():
+        pl_title = pl_records[0].playlist_title
+        canonical_target = pl_records[0].target_file_path
+        count, _ = consolidate_archived_entries(folder, pl_records, canonical_target, dry_run=False)
+        print(f"  Playlist '{pl_title}': consolidated {count} archived_entries")
+        rel_target = os.path.relpath(canonical_target, base_path).replace("\\", "/")
+        _run_git_cmd(["add", rel_target], cwd=base_path)
+        archived_commit_needed = True
+
+    if archived_commit_needed:
+        diff_code, _, _ = _run_git_cmd(["diff", "--cached", "--quiet"], cwd=base_path)
+        if diff_code != 0:
+            now_ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            c_env = {
+                "GIT_AUTHOR_DATE": now_ts,
+                "GIT_COMMITTER_DATE": now_ts,
+                "GIT_AUTHOR_NAME": author_name,
+                "GIT_AUTHOR_EMAIL": author_email,
+                "GIT_COMMITTER_NAME": author_name,
+                "GIT_COMMITTER_EMAIL": author_email,
+            }
+            _run_git_cmd(
+                ["commit", "-m", "[Legacy Snapshot] Consolidate historical archived_entries into playlist_info.json"],
+                cwd=base_path,
+                env_vars=c_env
+            )
+            print("  Committed consolidated archived_entries into Git repository.")
 
     # 7. Optional Legacy File Cleanup
     if cleanup_legacy:

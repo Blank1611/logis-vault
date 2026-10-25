@@ -306,7 +306,12 @@ def ingest_discovered_library(
                 playlist_id = new_playlist.id
                 imported_count += 1
 
-            # Index tracks from video files
+            # Build aligned sequence for true chronological order, metadata, and position
+            from app.core.yt_playlist_audio_tools import build_aligned_playlist_sequence
+            aligned_tracks = build_aligned_playlist_sequence(folder_path, playlist_title=title, db=session)
+            aligned_map = {t["video_id"]: t for t in aligned_tracks}
+
+            # Map audio files
             audio_map = {}
             for afile in item.get("audio_files", []):
                 vid = extract_video_id_from_filename(os.path.basename(afile))
@@ -314,18 +319,43 @@ def ingest_discovered_library(
                     audio_map[vid] = afile
 
             indexed_ids = set()
+
+            # First index tracks from the aligned sequence that exist on disk
+            for t in aligned_tracks:
+                vid = t["video_id"]
+                fpath = t.get("filepath")
+                if not fpath or not os.path.exists(fpath):
+                    matching_v = [vf for vf in item.get("video_files", []) if f"[{vid}]" in vf]
+                    matching_a = [af for af in item.get("audio_files", []) if f"[{vid}]" in af]
+                    fpath = matching_v[0] if matching_v else (matching_a[0] if matching_a else None)
+
+                if fpath and os.path.exists(fpath):
+                    audio_file = audio_map.get(vid)
+                    dur = int(t["duration"]) if t.get("duration") and t["duration"] > 0 else None
+                    index_track(
+                        video_id=vid,
+                        title=t["title"],
+                        artist=t.get("artist"),
+                        duration=dur,
+                        filepath=fpath,
+                        playlist_id=playlist_id,
+                        position=t["position"],
+                        is_archived=t.get("is_archived", False),
+                        audio_filepath=audio_file,
+                        db=session
+                    )
+                    indexed_ids.add(vid)
+                    tracks_indexed_count += 1
+
+            # Fallback for any video files not in aligned sequence
             for vfile in item.get("video_files", []):
                 fname = os.path.basename(vfile)
                 vid = extract_video_id_from_filename(fname)
-                if not vid:
+                if not vid or vid in indexed_ids:
                     continue
 
                 song_title = os.path.splitext(fname)[0]
-                # Strip [video_id] from title
-                song_title = re.sub(r'\[[a-zA-Z0-9_-]{11}\]', '', song_title).strip()
-                if not song_title:
-                    song_title = fname
-
+                song_title = re.sub(r'\[[a-zA-Z0-9_-]{11}\]', '', song_title).strip() or fname
                 audio_file = audio_map.get(vid)
                 index_track(
                     video_id=vid,
@@ -338,7 +368,7 @@ def ingest_discovered_library(
                 indexed_ids.add(vid)
                 tracks_indexed_count += 1
 
-            # Also index any audio-only files not already covered
+            # Fallback for any audio-only files not already covered
             for afile in item.get("audio_files", []):
                 fname = os.path.basename(afile)
                 vid = extract_video_id_from_filename(fname)
@@ -346,10 +376,7 @@ def ingest_discovered_library(
                     continue
 
                 song_title = os.path.splitext(fname)[0]
-                song_title = re.sub(r'\[[a-zA-Z0-9_-]{11}\]', '', song_title).strip()
-                if not song_title:
-                    song_title = fname
-
+                song_title = re.sub(r'\[[a-zA-Z0-9_-]{11}\]', '', song_title).strip() or fname
                 index_track(
                     video_id=vid,
                     title=song_title,

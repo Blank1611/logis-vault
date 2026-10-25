@@ -9,8 +9,9 @@ import logging
 from typing import Optional, Dict, List, Any
 from datetime import datetime
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
-from app.models.database import Track, MovedTrackHistory, Playlist, get_db_context
+from app.models.database import Track, PlaylistTrack, MovedTrackHistory, Playlist, get_db_context
 from app.repositories import TrackRepository, PlaylistRepository
 from app.core.logging_engine import get_logger
 
@@ -143,6 +144,8 @@ def index_track(
     title: str,
     filepath: str,
     playlist_id: int,
+    position: Optional[int] = None,
+    is_archived: bool = False,
     audio_filepath: Optional[str] = None,
     artist: Optional[str] = None,
     duration: Optional[int] = None,
@@ -150,16 +153,32 @@ def index_track(
     db: Optional[Session] = None
 ) -> Track:
     """
-    Register or update a track in the global SQLite tracks index.
+    Register or update a track in the global SQLite tracks index and associate with playlist.
     """
     with get_db_context(db) as session:
         track = session.query(Track).filter(Track.video_id == video_id).first()
         meta = probe_local_media_metadata(filepath, audio_filepath)
         if track:
-            current_playlists = list(track.playlists_json or [])
-            if playlist_id not in current_playlists:
-                current_playlists.append(playlist_id)
-                track.playlists_json = current_playlists
+            assoc = session.query(PlaylistTrack).filter_by(
+                playlist_id=playlist_id, track_id=video_id
+            ).first()
+            if not assoc:
+                if position is None:
+                    max_pos = session.query(func.max(PlaylistTrack.position)).filter_by(
+                        playlist_id=playlist_id
+                    ).scalar() or 0
+                    position = max_pos + 1
+                session.add(PlaylistTrack(
+                    playlist_id=playlist_id,
+                    track_id=video_id,
+                    position=position,
+                    is_archived=is_archived
+                ))
+            else:
+                if position is not None:
+                    assoc.position = position
+                if is_archived is not None:
+                    assoc.is_archived = is_archived
 
             if not os.path.exists(track.primary_filepath) and os.path.exists(filepath):
                 track.primary_filepath = filepath
@@ -191,7 +210,6 @@ def index_track(
                 duration=duration,
                 primary_filepath=filepath,
                 primary_audio_filepath=audio_filepath,
-                playlists_json=[playlist_id],
                 is_hardlinked=is_hardlinked,
                 downloaded_resolutions_json=initial_resolutions,
                 downloaded_fps=meta["fps"],
@@ -201,6 +219,20 @@ def index_track(
                 updated_at=datetime.utcnow()
             )
             session.add(new_track)
+            session.flush()
+
+            if position is None:
+                max_pos = session.query(func.max(PlaylistTrack.position)).filter_by(
+                    playlist_id=playlist_id
+                ).scalar() or 0
+                position = max_pos + 1
+            session.add(PlaylistTrack(
+                playlist_id=playlist_id,
+                track_id=video_id,
+                position=position,
+                is_archived=is_archived
+            ))
+
             session.flush()
             session.refresh(new_track)
             return new_track
@@ -311,14 +343,24 @@ def execute_track_move(
         track = session.query(Track).filter(Track.video_id == video_id).first()
         title = track.title if track else video_id
 
-        # Update Track playlists_json
+        # Update Track association via PlaylistTrack
         if track:
-            current_playlists = list(track.playlists_json or [])
-            if from_playlist_id in current_playlists:
-                current_playlists.remove(from_playlist_id)
-            if to_playlist_id not in current_playlists:
-                current_playlists.append(to_playlist_id)
-            track.playlists_json = current_playlists
+            session.query(PlaylistTrack).filter_by(
+                playlist_id=from_playlist_id, track_id=video_id
+            ).delete()
+            to_assoc = session.query(PlaylistTrack).filter_by(
+                playlist_id=to_playlist_id, track_id=video_id
+            ).first()
+            if not to_assoc:
+                max_pos = session.query(func.max(PlaylistTrack.position)).filter_by(
+                    playlist_id=to_playlist_id
+                ).scalar() or 0
+                session.add(PlaylistTrack(
+                    playlist_id=to_playlist_id,
+                    track_id=video_id,
+                    position=max_pos + 1,
+                    is_archived=False
+                ))
             track.updated_at = datetime.utcnow()
 
         # Physical file relocation / hardlinks

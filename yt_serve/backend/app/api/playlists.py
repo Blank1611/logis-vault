@@ -399,43 +399,51 @@ async def get_playlist_tracks(playlist_id: int, db: Session = Depends(get_db)):
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
-    tracks = db.query(Track).all()
+    from app.models.database import PlaylistTrack
     playlist_folder = ytdlp_service.resolve_playlist_folder(playlist.title)
 
+    records = (
+        db.query(Track, PlaylistTrack)
+        .join(PlaylistTrack, Track.video_id == PlaylistTrack.track_id)
+        .filter(PlaylistTrack.playlist_id == playlist_id)
+        .order_by(PlaylistTrack.position.asc())
+        .all()
+    )
+
     result = []
-    for t in tracks:
-        pl_ids = list(t.playlists_json or [])
-        if playlist_id in pl_ids:
-            disk_versions = _find_track_versions(playlist_folder, t.video_id)
-            v_size = os.path.getsize(t.primary_filepath) if (t.primary_filepath and os.path.isfile(t.primary_filepath)) else 0
-            a_size = os.path.getsize(t.primary_audio_filepath) if (t.primary_audio_filepath and os.path.isfile(t.primary_audio_filepath)) else 0
+    for t, pt in records:
+        disk_versions = _find_track_versions(playlist_folder, t.video_id)
+        v_size = os.path.getsize(t.primary_filepath) if (t.primary_filepath and os.path.isfile(t.primary_filepath)) else 0
+        a_size = os.path.getsize(t.primary_audio_filepath) if (t.primary_audio_filepath and os.path.isfile(t.primary_audio_filepath)) else 0
 
-            # Merge known resolutions
-            known_resolutions = list(t.downloaded_resolutions_json or [])
-            for dv in disk_versions:
-                if dv["resolution"] != "unknown" and dv["resolution"] not in known_resolutions:
-                    known_resolutions.append(dv["resolution"])
+        # Merge known resolutions
+        known_resolutions = list(t.downloaded_resolutions_json or [])
+        for dv in disk_versions:
+            if dv["resolution"] != "unknown" and dv["resolution"] not in known_resolutions:
+                known_resolutions.append(dv["resolution"])
 
-            result.append({
-                "video_id": t.video_id,
-                "title": t.title,
-                "artist": t.artist,
-                "duration": t.duration,
-                "primary_filepath": t.primary_filepath,
-                "primary_audio_filepath": t.primary_audio_filepath,
-                "primary_resolution": t.primary_resolution,
-                "downloaded_resolutions": known_resolutions,
-                "downloaded_fps": t.downloaded_fps,
-                "downloaded_audio_codec": t.downloaded_audio_codec,
-                "downloaded_audio_bitrate": t.downloaded_audio_bitrate,
-                "available_resolutions": t.available_resolutions_json or [],
-                "highest_available_resolution": t.highest_available_resolution,
-                "resolutions_last_checked": t.resolutions_last_checked.isoformat() if t.resolutions_last_checked else None,
-                "video_size_bytes": v_size,
-                "audio_size_bytes": a_size,
-                "is_hardlinked": t.is_hardlinked,
-                "disk_versions": disk_versions,
-            })
+        result.append({
+            "video_id": t.video_id,
+            "title": t.title,
+            "artist": t.artist,
+            "duration": t.duration,
+            "position": pt.position,
+            "is_archived": pt.is_archived,
+            "primary_filepath": t.primary_filepath,
+            "primary_audio_filepath": t.primary_audio_filepath,
+            "primary_resolution": t.primary_resolution,
+            "downloaded_resolutions": known_resolutions,
+            "downloaded_fps": t.downloaded_fps,
+            "downloaded_audio_codec": t.downloaded_audio_codec,
+            "downloaded_audio_bitrate": t.downloaded_audio_bitrate,
+            "available_resolutions": t.available_resolutions_json or [],
+            "highest_available_resolution": t.highest_available_resolution,
+            "resolutions_last_checked": t.resolutions_last_checked.isoformat() if t.resolutions_last_checked else None,
+            "video_size_bytes": v_size,
+            "audio_size_bytes": a_size,
+            "is_hardlinked": t.is_hardlinked,
+            "disk_versions": disk_versions,
+        })
 
     return result
 
@@ -443,26 +451,29 @@ async def get_playlist_tracks(playlist_id: int, db: Session = Depends(get_db)):
 @router.post("/{playlist_id}/tracks/refresh-resolutions")
 async def refresh_tracks_resolutions(playlist_id: int, db: Session = Depends(get_db)):
     """On-demand probe of YouTube available video resolutions for tracks in this playlist"""
-    from app.models.database import Track
+    from app.models.database import Track, PlaylistTrack
     from app.services.adhoc_service import probe_video_info
 
     playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
-    tracks = db.query(Track).all()
+    tracks = (
+        db.query(Track)
+        .join(PlaylistTrack, Track.video_id == PlaylistTrack.track_id)
+        .filter(PlaylistTrack.playlist_id == playlist_id)
+        .all()
+    )
     probed_count = 0
 
     for t in tracks:
-        pl_ids = list(t.playlists_json or [])
-        if playlist_id in pl_ids:
-            try:
-                info = probe_video_info(f"https://www.youtube.com/watch?v={t.video_id}")
-                if info.get("status") == "success" and info.get("available_resolutions"):
-                    TrackRepository.set_available_resolutions(t.video_id, info["available_resolutions"], db=db)
-                    probed_count += 1
-            except Exception as e:
-                logger.warning(f"Failed to refresh resolutions for {t.video_id}: {e}")
+        try:
+            info = probe_video_info(f"https://www.youtube.com/watch?v={t.video_id}")
+            if info.get("status") == "success" and info.get("available_resolutions"):
+                TrackRepository.set_available_resolutions(t.video_id, info["available_resolutions"], db=db)
+                probed_count += 1
+        except Exception as e:
+            logger.warning(f"Failed to refresh resolutions for {t.video_id}: {e}")
 
     return {"message": f"Refreshed available resolutions for {probed_count} tracks", "playlist_id": playlist_id}
 
