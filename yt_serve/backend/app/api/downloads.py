@@ -1,13 +1,17 @@
 """
 Download management API endpoints
 """
-from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import FileResponse
+import os
+import mimetypes
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from typing import List, Optional
 from pydantic import BaseModel
 from enum import Enum
 from sqlalchemy.orm import Session
 from datetime import datetime
+
+from app.api.filesystem import resolve_safe_path
 
 from app.models.database import get_db
 from app.repositories import JobRepository, PlaylistRepository, TrackRepository
@@ -631,5 +635,155 @@ async def download_adhoc_file(job_id: int, db: Session = Depends(get_db)):
         filename=filename,
         media_type="application/octet-stream"
     )
+
+
+class AdhocPromoteRequest(BaseModel):
+    source_directory: str
+    filepaths: List[str]
+    playlist_title: str
+
+
+@router.get("/adhoc/directories")
+async def get_adhoc_directories(
+    include_unmanaged: bool = Query(True, description="Include discovered unmanaged folders as Tier 3 suggestions"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get tracked ad-hoc directories with stats, tiering, and optional unmanaged library folders.
+    """
+    from app.services.adhoc_service import get_tracked_directories
+    return get_tracked_directories(include_unmanaged=include_unmanaged, db=db)
+
+
+@router.delete("/adhoc/directories")
+async def untrack_adhoc_directory(path: str = Query(...), db: Session = Depends(get_db)):
+    """
+    Remove a directory from the tracked MRU list.
+    """
+    from app.services.adhoc_service import untrack_adhoc_directory
+    success = untrack_adhoc_directory(path, db=db)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot untrack default ad-hoc directory.")
+    return {"status": "success", "message": f"Directory '{path}' untracked."}
+
+
+@router.get("/adhoc/items")
+async def get_adhoc_items(
+    directory: Optional[str] = Query(None),
+    media_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Unified multi-directory ad-hoc media items.
+    Aggregates and reconciles files across all tracked folders.
+    """
+    from app.services.adhoc_service import get_all_adhoc_media_items
+    return get_all_adhoc_media_items(
+        directory_filter=directory,
+        media_type_filter=media_type,
+        search=search,
+        db=db
+    )
+
+
+@router.delete("/adhoc/items")
+async def delete_adhoc_item(filepath: str = Query(...), db: Session = Depends(get_db)):
+    """
+    Delete an ad-hoc file from disk and clean adhoc_info.json and archive.txt.
+    """
+    from app.services.adhoc_service import delete_adhoc_media_item
+    safe_file = resolve_safe_path(filepath)
+    success = delete_adhoc_media_item(safe_file, db=db)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete file.")
+    return {"status": "success", "message": f"File '{os.path.basename(safe_file)}' deleted."}
+
+
+@router.get("/adhoc/stream")
+async def stream_adhoc_media(filepath: str = Query(...), request: Request = None):
+    """
+    HTTP Range (206 Partial Content) audio/video stream for in-browser playback.
+    """
+    safe_file = resolve_safe_path(filepath)
+    if not os.path.isfile(safe_file):
+        raise HTTPException(status_code=404, detail="Media file not found.")
+
+    file_size = os.path.getsize(safe_file)
+    content_type, _ = mimetypes.guess_type(safe_file)
+    if not content_type:
+        ext = os.path.splitext(safe_file)[1].lower()
+        if ext in (".mp4", ".m4v"):
+            content_type = "video/mp4"
+        elif ext in (".webm",):
+            content_type = "video/webm"
+        elif ext in (".mkv",):
+            content_type = "video/x-matroska"
+        elif ext in (".mp3",):
+            content_type = "audio/mpeg"
+        elif ext in (".opus",):
+            content_type = "audio/opus"
+        elif ext in (".m4a",):
+            content_type = "audio/mp4"
+        elif ext in (".flac",):
+            content_type = "audio/flac"
+        else:
+            content_type = "application/octet-stream"
+
+    range_header = request.headers.get("range") if request else None
+    if not range_header:
+        return FileResponse(
+            safe_file,
+            media_type=content_type,
+            headers={"Accept-Ranges": "bytes", "Content-Length": str(file_size)}
+        )
+
+    try:
+        range_val = range_header.strip().replace("bytes=", "")
+        parts = range_val.split("-")
+        start = int(parts[0]) if parts[0] else 0
+        end = int(parts[1]) if len(parts) > 1 and parts[1] else file_size - 1
+        if end >= file_size:
+            end = file_size - 1
+        chunk_size = end - start + 1
+    except Exception:
+        raise HTTPException(status_code=416, detail="Requested Range Not Satisfiable")
+
+    def iter_file():
+        with open(safe_file, "rb") as f:
+            f.seek(start)
+            remaining = chunk_size
+            while remaining > 0:
+                read_bytes = min(64 * 1024, remaining)
+                data = f.read(read_bytes)
+                if not data:
+                    break
+                remaining -= len(data)
+                yield data
+
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{file_size}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(chunk_size),
+        "Content-Type": content_type,
+    }
+    return StreamingResponse(iter_file(), status_code=206, headers=headers)
+
+
+@router.post("/adhoc/promote-to-playlist")
+async def promote_to_playlist(payload: AdhocPromoteRequest, db: Session = Depends(get_db)):
+    """
+    Promote selected ad-hoc media files into a managed Playlist in SQLite.
+    """
+    from app.services.adhoc_service import promote_adhoc_to_playlist
+    safe_dir = resolve_safe_path(payload.source_directory)
+    res = promote_adhoc_to_playlist(
+        source_directory=safe_dir,
+        filepaths=payload.filepaths,
+        playlist_title=payload.playlist_title,
+        db=db
+    )
+    return res
+
 
 

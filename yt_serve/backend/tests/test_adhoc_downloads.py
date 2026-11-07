@@ -143,10 +143,18 @@ class TestAdhocDownloads(unittest.TestCase):
         self.assertEqual(updated_job.status, "completed")
         self.assertEqual(updated_job.completed_items, 1)
 
-        # Verify Track index registration
+        # Verify metadata persisted to adhoc_info.json on disk
+        info_json_path = os.path.join(target_dir, "adhoc_info.json")
+        self.assertTrue(os.path.isfile(info_json_path))
+        with open(info_json_path, "r", encoding="utf-8") as f:
+            entries = json.load(f)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["id"], "adhocExec123")
+        self.assertEqual(entries[0]["title"], "Adhoc Executed Song")
+
+        # Verify Track table is decoupled (no phantom track rows created)
         indexed_track = TrackRepository.get_by_video_id("adhocExec123", db=self.db)
-        self.assertIsNotNone(indexed_track)
-        self.assertEqual(indexed_track.title, "Adhoc Executed Song")
+        self.assertIsNone(indexed_track)
 
     def test_find_existing_local_video(self):
         target_dir = self.temp_dir.name

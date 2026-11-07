@@ -62,6 +62,15 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
     except Exception as fs_err:
         logger.debug(f"Could not load folder_status records: {fs_err}")
 
+    known_adhoc_paths = set(settings.get_known_adhoc_paths())
+    try:
+        from app.services.adhoc_service import get_tracked_directories
+        for td in get_tracked_directories():
+            if td.get("path"):
+                known_adhoc_paths.add(os.path.abspath(td["path"]))
+    except Exception as td_err:
+        logger.debug(f"Could not load tracked adhoc directories: {td_err}")
+
     try:
         entries = sorted(os.listdir(target_path))
     except Exception as e:
@@ -83,9 +92,47 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
         if not os.path.isdir(folder_path):
             continue
 
-        # Skip internal system, temp, or explicitly excluded folders
+        # Layer 1: Skip internal system, temp, or explicitly user-excluded folders
         entry_lower = entry.lower()
         if entry.startswith('.') or entry_lower in excluded_dirs or entry in excluded_dirs:
+            continue
+
+        # Layer 2: Check if this is a dedicated Ad-hoc Storage directory
+        norm_folder_path = os.path.abspath(folder_path)
+        is_adhoc = (
+            norm_folder_path in known_adhoc_paths
+            or entry_lower == "_adhoc_downloads"
+            or (settings.ADHOC_DOWNLOAD_PATH and entry_lower == os.path.basename(settings.ADHOC_DOWNLOAD_PATH).lower())
+            or os.path.isfile(os.path.join(folder_path, "adhoc_info.json"))
+        )
+
+        if is_adhoc:
+            default_adhoc = os.path.abspath(settings.get_adhoc_download_path())
+            adhoc_type = "system_default" if (norm_folder_path == default_adhoc or entry_lower == "_adhoc_downloads") else "config_custom"
+
+            video_files = []
+            for ext in ("*.mp4", "*.mkv", "*.webm", "*.m4v"):
+                for vfile in glob.glob(os.path.join(folder_path, ext)):
+                    if not vfile.endswith('.part'):
+                        video_files.append(vfile)
+
+            audio_files = []
+            for ext in ("*.mp3", "*.m4a", "*.opus", "*.flac", "*.wav"):
+                for afile in glob.glob(os.path.join(folder_path, ext)):
+                    audio_files.append(afile)
+                for afile in glob.glob(os.path.join(folder_path, "**", ext), recursive=True):
+                    if afile not in audio_files:
+                        audio_files.append(afile)
+
+            unmanaged_folders.append({
+                "folder_name": entry,
+                "folder_path": folder_path,
+                "video_count": len(video_files),
+                "audio_count": len(audio_files),
+                "total_files": len(video_files) + len(audio_files),
+                "is_adhoc": True,
+                "adhoc_type": adhoc_type,
+            })
             continue
 
         playlist_title = entry
@@ -211,6 +258,8 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
                 "video_count": len(video_files),
                 "audio_count": len(audio_files),
                 "total_files": len(video_files) + len(audio_files),
+                "is_adhoc": False,
+                "adhoc_type": None,
             })
 
     return {
@@ -248,6 +297,9 @@ def ingest_discovered_library(
         tracks_indexed_count = 0
 
         for item in discovered_items:
+            if item.get("is_adhoc"):
+                logger.warning(f"[Auto-Discovery] Strictly bypassing ad-hoc directory from playlist ingestion: {item.get('folder_name')}")
+                continue
             title = item.get("title") or item.get("folder_name")
             url = item.get("url")
             folder_name = item.get("folder_name", "")

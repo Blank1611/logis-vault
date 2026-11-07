@@ -264,19 +264,27 @@ class Settings(BaseSettings):
         return os.path.abspath(os.path.join(self.BASE_DOWNLOAD_PATH, "_adhoc_downloads"))
 
     def get_excluded_directories(self) -> List[str]:
-        """Return list of lowercase directory names to strictly exclude from auto-discovery"""
+        """Return list of lowercase directory names to strictly exclude from filesystem traversal (Layer 1)"""
         excluded = {
-            "temp", "logs", "scratch", "node_modules", ".git", ".cache", "lost+found",
-            "_adhoc_downloads"
+            "temp", "logs", "scratch", "node_modules", ".git", ".cache", "lost+found"
         }
-        if self.ADHOC_DOWNLOAD_PATH:
-            excluded.add(os.path.basename(self.ADHOC_DOWNLOAD_PATH).lower())
         if self.EXCLUDED_DIRS:
             for item in self.EXCLUDED_DIRS.split(","):
                 cleaned = item.strip().lower()
                 if cleaned:
                     excluded.add(cleaned)
         return list(excluded)
+
+    def get_known_adhoc_paths(self) -> List[str]:
+        """Return normalized absolute paths of default and configured ad-hoc download directories"""
+        paths = set()
+        default_std = os.path.abspath(os.path.join(self.BASE_DOWNLOAD_PATH, "_adhoc_downloads"))
+        paths.add(default_std)
+        if self.ADHOC_DOWNLOAD_PATH:
+            paths.add(os.path.abspath(self.ADHOC_DOWNLOAD_PATH))
+        active_adhoc = os.path.abspath(self.get_adhoc_download_path())
+        paths.add(active_adhoc)
+        return list(paths)
 
     class Config:
         env_file = str(ENV_FILE) if ENV_FILE.is_file() else None

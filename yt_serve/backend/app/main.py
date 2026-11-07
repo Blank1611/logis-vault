@@ -9,7 +9,7 @@ from pathlib import Path
 import os
 import traceback
 
-from app.api import playlists, downloads, config, websocket, metrics, sse, logs, tracks, housekeeping, profiles
+from app.api import playlists, downloads, config, websocket, metrics, sse, logs, tracks, housekeeping, profiles, filesystem
 from app.core.config import settings
 from app.core.logging_engine import setup_logging, get_logger
 
@@ -43,6 +43,10 @@ async def startup_event():
         # Step 1: Startup crash recovery (interrupted jobs, git locks & metadata, temp files)
         from app.services.recovery_service import RecoveryService
         await RecoveryService.run_startup_recovery(db)
+        
+        # Step 1b: Reconcile tracked ad-hoc directories and metadata on disk
+        from app.services.adhoc_service import run_startup_adhoc_reconciliation
+        run_startup_adhoc_reconciliation(db=db)
         
         # Two-Stage Startup Lifecycle
         from app.api.config import _check_needs_setup
@@ -147,6 +151,7 @@ app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
 app.include_router(sse.router, prefix="/api", tags=["sse"])
 app.include_router(websocket.router, prefix="/ws", tags=["websocket"])
 app.include_router(metrics.router, tags=["metrics"])
+app.include_router(filesystem.router, prefix="/api/filesystem", tags=["filesystem"])
 
 @app.get("/api/health")
 @app.get("/health")

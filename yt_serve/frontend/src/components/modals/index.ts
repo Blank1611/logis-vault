@@ -5,5 +5,6 @@ export * from './InitialSetupModal'
 export * from './ReorganizeModal'
 export * from './DeduplicateModal'
 export * from './TrackInspectionModal'
+export * from './DirectoryPickerModal'
 export * from '../InterruptedJobsDialog'
 

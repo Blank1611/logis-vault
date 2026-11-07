@@ -5,6 +5,7 @@ customizable destination path, metadata tracking, and automatic SQLite Track Ind
 """
 
 import os
+import re
 import json
 import time
 import logging
@@ -16,7 +17,7 @@ import yt_dlp
 from app.core.config import settings
 from app.core.logging_engine import get_logger
 from app.utils.ytdlp_opts import build_ytdlp_options
-from app.repositories import JobRepository, TrackRepository
+from app.repositories import JobRepository, TrackRepository, SystemSettingRepository
 from app.models.database import get_db_context, Job
 
 logger = get_logger("app.services.adhoc")
@@ -209,15 +210,28 @@ def probe_video_info(url: str) -> Dict[str, Any]:
         }
 
 
-def _update_adhoc_metadata(target_dir: str, video_info: Dict[str, Any], filepath: str, audio_filepath: Optional[str] = None):
+MEDIA_EXTENSIONS = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".mp3", ".m4a", ".opus", ".flac", ".wav", ".aac"}
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".avi", ".mov"}
+AUDIO_EXTENSIONS = {".mp3", ".m4a", ".opus", ".flac", ".wav", ".aac"}
+TRACKED_DIRS_KEY = "tracked_adhoc_directories"
+
+
+def _update_adhoc_metadata(
+    target_dir: str,
+    video_info: Dict[str, Any],
+    filepath: str,
+    audio_filepath: Optional[str] = None,
+    media_meta: Optional[Dict[str, Any]] = None,
+    media_type: str = "video"
+):
     """
     Append or update video entry in adhoc_info.json and archive.txt in target directory.
+    Stores rich metadata directly on disk in adhoc_info.json without SQLite Track table pollution.
     """
     os.makedirs(target_dir, exist_ok=True)
     json_path = os.path.join(target_dir, "adhoc_info.json")
     archive_path = os.path.join(target_dir, "archive.txt")
 
-    # Update archive.txt
     vid = video_info.get("id") or video_info.get("video_id")
     if vid:
         try:
@@ -226,7 +240,6 @@ def _update_adhoc_metadata(target_dir: str, video_info: Dict[str, Any], filepath
         except Exception as e:
             logger.warning(f"[Adhoc] Could not update archive.txt: {e}")
 
-    # Update adhoc_info.json
     try:
         entries = []
         if os.path.isfile(json_path):
@@ -235,28 +248,679 @@ def _update_adhoc_metadata(target_dir: str, video_info: Dict[str, Any], filepath
                 if not isinstance(entries, list):
                     entries = []
 
-        # Find existing entry or append
-        existing_idx = next((i for i, item in enumerate(entries) if item.get("id") == vid), None)
-        entry = {
-            "id": vid,
-            "title": video_info.get("title"),
-            "uploader": video_info.get("uploader"),
-            "duration": video_info.get("duration"),
-            "filepath": filepath,
-            "audio_filepath": audio_filepath,
-            "downloaded_at": datetime.utcnow().isoformat() + "Z"
-        }
+        primary_file = filepath or audio_filepath or ""
+        file_size = os.path.getsize(primary_file) if (primary_file and os.path.isfile(primary_file)) else 0
+        file_ext = os.path.splitext(primary_file)[1].lstrip(".").lower() if primary_file else "mp4"
 
-        if existing_idx is not None:
-            entries[existing_idx] = entry
-        else:
-            entries.append(entry)
+        meta = media_meta or {}
+        res = meta.get("resolution")
+        res_str = f"{res}p" if res else (f"{meta.get('height')}p" if meta.get("height") else "")
+        fps = meta.get("fps")
+        acodec = meta.get("audio_codec")
+        abitrate = meta.get("audio_bitrate")
+
+        thumbnail = video_info.get("thumbnail")
+        if not thumbnail and video_info.get("thumbnails"):
+            thumbnail = video_info["thumbnails"][-1].get("url")
+
+        title = video_info.get("title") or os.path.splitext(os.path.basename(filepath or audio_filepath or ""))[0]
+        now_iso = datetime.utcnow().isoformat() + "Z"
+
+        files_to_track = []
+        if filepath and os.path.isfile(filepath):
+            f_ext = os.path.splitext(filepath)[1].lstrip(".").lower()
+            files_to_track.append({
+                "id": vid,
+                "title": title,
+                "uploader": video_info.get("uploader") or video_info.get("channel") or "Unknown",
+                "duration": video_info.get("duration") or 0,
+                "filepath": filepath,
+                "audio_filepath": None,
+                "format": f_ext,
+                "resolution": res_str,
+                "fps": fps,
+                "audio_codec": None,
+                "audio_bitrate": None,
+                "thumbnail": thumbnail,
+                "size_bytes": os.path.getsize(filepath),
+                "media_type": "video",
+                "downloaded_at": now_iso
+            })
+
+        if audio_filepath and os.path.isfile(audio_filepath):
+            a_ext = os.path.splitext(audio_filepath)[1].lstrip(".").lower()
+            files_to_track.append({
+                "id": vid,
+                "title": title,
+                "uploader": video_info.get("uploader") or video_info.get("channel") or "Unknown",
+                "duration": video_info.get("duration") or 0,
+                "filepath": "",
+                "audio_filepath": audio_filepath,
+                "format": a_ext,
+                "resolution": "",
+                "fps": None,
+                "audio_codec": acodec,
+                "audio_bitrate": abitrate,
+                "thumbnail": thumbnail,
+                "size_bytes": os.path.getsize(audio_filepath),
+                "media_type": "audio",
+                "downloaded_at": now_iso
+            })
+
+        # Fallback if neither file checked out as isfile yet (in-progress)
+        if not files_to_track:
+            primary = filepath or audio_filepath or ""
+            f_ext = os.path.splitext(primary)[1].lstrip(".").lower() if primary else "mp4"
+            files_to_track.append({
+                "id": vid,
+                "title": title,
+                "uploader": video_info.get("uploader") or video_info.get("channel") or "Unknown",
+                "duration": video_info.get("duration") or 0,
+                "filepath": filepath,
+                "audio_filepath": audio_filepath,
+                "format": f_ext,
+                "resolution": res_str,
+                "fps": fps,
+                "audio_codec": acodec,
+                "audio_bitrate": abitrate,
+                "thumbnail": thumbnail,
+                "size_bytes": 0,
+                "media_type": media_type,
+                "downloaded_at": now_iso
+            })
+
+        for new_item in files_to_track:
+            target_p = new_item.get("filepath") or new_item.get("audio_filepath")
+            idx = next((i for i, it in enumerate(entries) if (it.get("filepath") == target_p or it.get("audio_filepath") == target_p)), None)
+            if idx is not None:
+                entries[idx] = new_item
+            else:
+                entries.append(new_item)
 
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(entries, f, indent=2, ensure_ascii=False)
 
     except Exception as e:
         logger.warning(f"[Adhoc] Could not update adhoc_info.json: {e}")
+
+
+def get_tracked_directories(include_unmanaged: bool = False, db: Optional[Session] = None) -> List[Dict[str, Any]]:
+    """
+    Get tracked ad-hoc directories with stats and tiering.
+    Guarantees default ad-hoc directory is always present as the first entry (tier: 'default').
+    Up to 5 recent directories are marked with tier: 'recent_adhoc'.
+    If include_unmanaged=True, also discovers candidate unmanaged library folders (tier: 'unmanaged')
+    excluding managed playlist folders and Layer 1 noise.
+    """
+    default_path = os.path.abspath(settings.get_adhoc_download_path())
+    raw = SystemSettingRepository.get(TRACKED_DIRS_KEY, default="[]", db=db)
+    try:
+        data = json.loads(raw) if raw else []
+        if not isinstance(data, list):
+            data = []
+    except Exception:
+        data = []
+
+    dir_map = {}
+    for d in data:
+        if isinstance(d, dict) and d.get("path"):
+            norm_p = os.path.abspath(d["path"])
+            dir_map[norm_p] = d
+
+    if default_path not in dir_map:
+        dir_map[default_path] = {
+            "path": default_path,
+            "display_name": os.path.basename(default_path) or "_adhoc_downloads",
+            "is_default": True,
+            "item_count": 0,
+            "total_size_bytes": 0,
+            "last_used_at": datetime.utcnow().isoformat() + "Z"
+        }
+    else:
+        dir_map[default_path]["is_default"] = True
+
+    # Seed all known ad-hoc directories that exist on disk (e.g. system _adhoc_downloads)
+    for known_p in settings.get_known_adhoc_paths():
+        norm_known = os.path.abspath(known_p)
+        if norm_known != default_path and os.path.isdir(norm_known):
+            if norm_known not in dir_map:
+                dir_map[norm_known] = {
+                    "path": norm_known,
+                    "display_name": os.path.basename(norm_known) or "_adhoc_downloads",
+                    "is_default": False,
+                    "item_count": 0,
+                    "total_size_bytes": 0,
+                    "last_used_at": None
+                }
+
+    default_item = dir_map[default_path]
+    default_item["tier"] = "default"
+
+    other_tracked = [item for p, item in dir_map.items() if p != default_path]
+    other_tracked.sort(key=lambda x: x.get("last_used_at") or "", reverse=True)
+
+    # Top 5 most recent
+    top5_recent = other_tracked[:5]
+    for item in top5_recent:
+        item["tier"] = "recent_adhoc"
+        item["is_default"] = False
+
+    older_adhoc = other_tracked[5:]
+    for item in older_adhoc:
+        item["tier"] = "unmanaged"
+        item["is_default"] = False
+
+    result = [default_item] + top5_recent
+
+    # Guarantee all existing known adhoc paths are present in result
+    known_adhoc_norm = {os.path.abspath(kp) for kp in settings.get_known_adhoc_paths() if os.path.isdir(kp)}
+    existing_paths = {os.path.abspath(x["path"]) for x in result}
+    for item in other_tracked:
+        item_path_norm = os.path.abspath(item["path"])
+        if item_path_norm in known_adhoc_norm and item_path_norm not in existing_paths:
+            item["tier"] = "recent_adhoc"
+            result.append(item)
+            existing_paths.add(item_path_norm)
+
+    if include_unmanaged:
+        managed_playlist_paths = set()
+        try:
+            from app.repositories import PlaylistRepository
+            for pl in PlaylistRepository.get_all(db=db):
+                if pl.title:
+                    managed_playlist_paths.add(os.path.abspath(os.path.join(settings.BASE_DOWNLOAD_PATH, pl.title)))
+        except Exception as pl_err:
+            logger.debug(f"Could not load playlists for exclusion: {pl_err}")
+
+        layer1_excluded = set(settings.get_excluded_directories())
+        existing_paths = {os.path.abspath(x["path"]) for x in result}
+
+        unmanaged_list = []
+        for item in older_adhoc:
+            norm_old = os.path.abspath(item["path"])
+            if norm_old not in existing_paths and norm_old not in managed_playlist_paths:
+                unmanaged_list.append(item)
+                existing_paths.add(norm_old)
+
+        if os.path.isdir(settings.BASE_DOWNLOAD_PATH):
+            try:
+                for entry in sorted(os.listdir(settings.BASE_DOWNLOAD_PATH)):
+                    full_p = os.path.join(settings.BASE_DOWNLOAD_PATH, entry)
+                    if not os.path.isdir(full_p):
+                        continue
+                    entry_lower = entry.lower()
+                    if entry.startswith('.') or entry_lower in layer1_excluded:
+                        continue
+                    norm_p = os.path.abspath(full_p)
+                    if norm_p in managed_playlist_paths or norm_p in existing_paths:
+                        continue
+
+                    # Count files if adhoc_info.json or media files exist
+                    item_count = 0
+                    info_path = os.path.join(full_p, "adhoc_info.json")
+                    if os.path.isfile(info_path):
+                        try:
+                            with open(info_path, "r", encoding="utf-8") as f:
+                                jdata = json.load(f)
+                                if isinstance(jdata, list):
+                                    item_count = len(jdata)
+                        except Exception:
+                            pass
+                    if item_count == 0:
+                        try:
+                            item_count = len([f for f in os.listdir(full_p) if not f.startswith('.')])
+                        except Exception:
+                            item_count = 0
+
+                    unmanaged_list.append({
+                        "path": norm_p,
+                        "display_name": entry,
+                        "is_default": False,
+                        "tier": "unmanaged",
+                        "item_count": item_count,
+                        "total_size_bytes": 0,
+                        "last_used_at": None
+                    })
+                    existing_paths.add(norm_p)
+            except Exception as scan_err:
+                logger.warning(f"Error scanning base path for unmanaged folders: {scan_err}")
+
+        unmanaged_list.sort(key=lambda x: x.get("display_name", "").lower())
+        result.extend(unmanaged_list)
+    else:
+        result.extend(older_adhoc)
+
+    return result
+
+
+def track_adhoc_directory(dir_path: str, db: Optional[Session] = None) -> None:
+    """
+    Add or touch directory in tracked ad-hoc MRU list.
+    """
+    norm_path = os.path.abspath(dir_path)
+    default_path = os.path.abspath(settings.get_adhoc_download_path())
+    tracked = get_tracked_directories(db=db)
+
+    found = False
+    for item in tracked:
+        if os.path.abspath(item["path"]) == norm_path:
+            item["last_used_at"] = datetime.utcnow().isoformat() + "Z"
+            found = True
+            break
+
+    if not found:
+        tracked.append({
+            "path": norm_path,
+            "display_name": os.path.basename(norm_path) or norm_path,
+            "is_default": (norm_path == default_path),
+            "item_count": 0,
+            "total_size_bytes": 0,
+            "last_used_at": datetime.utcnow().isoformat() + "Z"
+        })
+
+    SystemSettingRepository.set(TRACKED_DIRS_KEY, json.dumps(tracked), db=db)
+
+
+def untrack_adhoc_directory(dir_path: str, db: Optional[Session] = None) -> bool:
+    """
+    Remove a directory from the tracked MRU list.
+    Cannot untrack the default ad-hoc directory.
+    """
+    norm_path = os.path.abspath(dir_path)
+    default_path = os.path.abspath(settings.get_adhoc_download_path())
+    if norm_path == default_path:
+        return False
+
+    tracked = get_tracked_directories(db=db)
+    updated = [d for d in tracked if os.path.abspath(d["path"]) != norm_path]
+    SystemSettingRepository.set(TRACKED_DIRS_KEY, json.dumps(updated), db=db)
+    return True
+
+
+def reconcile_and_scan_directory(dir_path: str) -> Dict[str, Any]:
+    """
+    Scans an ad-hoc directory, reconciles adhoc_info.json and archive.txt against physical disk files.
+    - Missing files are pruned from adhoc_info.json (self-healing for rm / mv).
+    - Unindexed physical files on disk are auto-discovered and cataloged.
+    - archive.txt is cleaned of missing video IDs so re-downloads are unblocked.
+    """
+    clean_dir = os.path.abspath(dir_path)
+    if not os.path.isdir(clean_dir):
+        return {
+            "path": clean_dir,
+            "item_count": 0,
+            "total_size_bytes": 0,
+            "items": []
+        }
+
+    json_path = os.path.join(clean_dir, "adhoc_info.json")
+    archive_path = os.path.join(clean_dir, "archive.txt")
+
+    entries = []
+    if os.path.isfile(json_path):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, list):
+                    entries = loaded
+        except Exception as e:
+            logger.warning(f"[Adhoc] Error reading {json_path}: {e}")
+            entries = []
+
+    # Map physical media files in directory
+    physical_files = {}
+    try:
+        with os.scandir(clean_dir) as it:
+            for entry in it:
+                if entry.is_file():
+                    ext = os.path.splitext(entry.name)[1].lower()
+                    if ext in MEDIA_EXTENSIONS:
+                        real_p = os.path.realpath(entry.path)
+                        physical_files[real_p] = entry
+    except Exception as e:
+        logger.warning(f"[Adhoc] Error scanning directory {clean_dir}: {e}")
+
+    # Reconcile existing entries against physical files
+    valid_entries = []
+    claimed_physical_paths = set()
+    present_vids = set()
+    entries_changed = False
+
+    for item in entries:
+        fp = item.get("filepath")
+        afp = item.get("audio_filepath")
+        fp_real = os.path.realpath(fp) if fp else None
+        afp_real = os.path.realpath(afp) if afp else None
+
+        has_fp = fp_real and os.path.isfile(fp_real)
+        has_afp = afp_real and os.path.isfile(afp_real)
+
+        # Check if entry collapsed both video and audio into a single object
+        if has_fp and has_afp and fp_real != afp_real:
+            # Emit dedicated video entry
+            video_item = dict(item)
+            video_ext = os.path.splitext(fp_real)[1].lstrip(".").lower()
+            video_item["filepath"] = fp_real
+            video_item["audio_filepath"] = None
+            video_item["format"] = video_ext
+            video_item["media_type"] = "video"
+            try:
+                video_item["size_bytes"] = os.path.getsize(fp_real)
+            except Exception:
+                pass
+            valid_entries.append(video_item)
+            if fp_real in physical_files:
+                claimed_physical_paths.add(fp_real)
+
+            # Emit dedicated audio entry
+            audio_item = dict(item)
+            audio_ext = os.path.splitext(afp_real)[1].lstrip(".").lower()
+            audio_item["filepath"] = ""
+            audio_item["audio_filepath"] = afp_real
+            audio_item["format"] = audio_ext
+            audio_item["media_type"] = "audio"
+            audio_item["resolution"] = ""
+            try:
+                audio_item["size_bytes"] = os.path.getsize(afp_real)
+            except Exception:
+                pass
+            valid_entries.append(audio_item)
+            if afp_real in physical_files:
+                claimed_physical_paths.add(afp_real)
+
+            entries_changed = True
+            if item.get("id"):
+                present_vids.add(item["id"])
+            continue
+
+        has_file = has_fp or has_afp
+        if has_file:
+            target_p = fp_real if has_fp else afp_real
+            try:
+                item["size_bytes"] = os.path.getsize(target_p)
+            except Exception:
+                pass
+
+            # Backfill missing format or media_type
+            f_ext = os.path.splitext(target_p)[1].lstrip(".").lower()
+            is_vid = f_ext in VIDEO_EXTENSIONS
+            if not item.get("format"):
+                item["format"] = f_ext
+                entries_changed = True
+            if not item.get("media_type"):
+                item["media_type"] = "video" if is_vid else "audio"
+                entries_changed = True
+
+            # Ensure correct path assignment
+            if is_vid:
+                item["filepath"] = target_p
+                item["audio_filepath"] = None
+            else:
+                item["audio_filepath"] = target_p
+                item["filepath"] = ""
+
+            valid_entries.append(item)
+            if target_p in physical_files:
+                claimed_physical_paths.add(target_p)
+            if item.get("id"):
+                present_vids.add(item["id"])
+        else:
+            entries_changed = True
+            logger.info(f"[Adhoc Reconciler] Pruned missing file from metadata: {fp or afp}")
+
+    # Discover unindexed physical media files on disk
+    for phys_path, entry in physical_files.items():
+        if phys_path not in claimed_physical_paths:
+            ext = os.path.splitext(entry.name)[1].lower()
+            is_video = ext in VIDEO_EXTENSIONS
+            stat = entry.stat()
+
+            match = re.search(r'\[([a-zA-Z0-9_-]{11})\]', entry.name)
+            vid = match.group(1) if match else f"file_{int(stat.st_mtime)}"
+
+            # Preserve exact disk filename without extension (no bracket stripping)
+            title = os.path.splitext(entry.name)[0].strip() or entry.name
+
+            new_entry = {
+                "id": vid,
+                "title": title,
+                "uploader": "Local Media",
+                "duration": 0,
+                "filepath": phys_path if is_video else "",
+                "audio_filepath": phys_path if not is_video else None,
+                "format": ext.lstrip("."),
+                "resolution": "",
+                "fps": None,
+                "audio_codec": None,
+                "audio_bitrate": None,
+                "thumbnail": "",
+                "size_bytes": stat.st_size,
+                "media_type": "video" if is_video else "audio",
+                "downloaded_at": datetime.fromtimestamp(stat.st_mtime).isoformat() + "Z"
+            }
+            valid_entries.append(new_entry)
+            present_vids.add(vid)
+            entries_changed = True
+            logger.info(f"[Adhoc Reconciler] Discovered unindexed physical file: {entry.name}")
+
+    if entries_changed or len(valid_entries) != len(entries):
+        try:
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(valid_entries, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"[Adhoc] Error updating {json_path}: {e}")
+
+    # Reconcile archive.txt: only keep lines for video IDs that actually exist on disk
+    if os.path.isfile(archive_path):
+        try:
+            with open(archive_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            new_lines = []
+            for line in lines:
+                parts = line.strip().split()
+                if len(parts) >= 2 and parts[0] == "youtube":
+                    line_vid = parts[1]
+                    if line_vid in present_vids:
+                        new_lines.append(line)
+                else:
+                    new_lines.append(line)
+            if len(new_lines) != len(lines):
+                with open(archive_path, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+                logger.info(f"[Adhoc Reconciler] Cleaned {len(lines) - len(new_lines)} deleted IDs from {archive_path}")
+        except Exception as e:
+            logger.warning(f"[Adhoc] Error reconciling {archive_path}: {e}")
+
+    total_size = sum(item.get("size_bytes", 0) for item in valid_entries)
+    return {
+        "path": clean_dir,
+        "item_count": len(valid_entries),
+        "total_size_bytes": total_size,
+        "items": valid_entries
+    }
+
+
+def get_all_adhoc_media_items(
+    directory_filter: Optional[str] = None,
+    media_type_filter: Optional[str] = None,
+    search: Optional[str] = None,
+    db: Optional[Session] = None
+) -> Dict[str, Any]:
+    """
+    Reconciles all tracked directories and aggregates media items into a unified table.
+    Filters by directory, media type (video/audio), and search term.
+    """
+    tracked = get_tracked_directories(db=db)
+    all_items = []
+    dir_names = []
+    updated_tracked = []
+
+    for t in tracked:
+        dpath = t["path"]
+        scan_res = reconcile_and_scan_directory(dpath)
+        items = scan_res.get("items", [])
+        cnt = len(items)
+        sz = scan_res.get("total_size_bytes", 0)
+
+        t["item_count"] = cnt
+        t["total_size_bytes"] = sz
+        updated_tracked.append(t)
+
+        dname = t.get("display_name") or os.path.basename(dpath)
+        dir_names.append(dname)
+
+        for it in items:
+            it_copy = dict(it)
+            it_copy["directory"] = dpath
+            it_copy["directory_display"] = dname
+            # Provide safe streaming/preview filename
+            target_file = it_copy.get("filepath") or it_copy.get("audio_filepath") or ""
+            it_copy["filename"] = os.path.basename(target_file)
+            all_items.append(it_copy)
+
+    SystemSettingRepository.set(TRACKED_DIRS_KEY, json.dumps(updated_tracked), db=db)
+
+    filtered = all_items
+    if directory_filter and directory_filter.strip() and directory_filter.lower() != "all":
+        df = directory_filter.strip().lower()
+        filtered = [
+            it for it in filtered
+            if it.get("directory_display", "").lower() == df or it.get("directory", "").lower() == df
+        ]
+
+    if media_type_filter and media_type_filter.strip() and media_type_filter.lower() != "all":
+        mf = media_type_filter.strip().lower()
+        filtered = [it for it in filtered if it.get("media_type", "").lower() == mf]
+
+    if search and search.strip():
+        q = search.strip().lower()
+        filtered = [
+            it for it in filtered
+            if q in (it.get("title") or "").lower()
+            or q in (it.get("id") or "").lower()
+            or q in (it.get("uploader") or "").lower()
+            or q in (it.get("filename") or "").lower()
+        ]
+
+    filtered.sort(key=lambda x: x.get("downloaded_at") or "", reverse=True)
+
+    return {
+        "total_items": len(filtered),
+        "total_size_bytes": sum(it.get("size_bytes", 0) for it in filtered),
+        "directories": list(dict.fromkeys(dir_names)),
+        "items": filtered
+    }
+
+
+def delete_adhoc_media_item(filepath: str, db: Optional[Session] = None) -> bool:
+    """
+    Deletes physical media file from disk and prunes its metadata from adhoc_info.json and archive.txt.
+    """
+    clean_path = os.path.abspath(filepath)
+    parent_dir = os.path.dirname(clean_path)
+    base_name, _ = os.path.splitext(clean_path)
+
+    if os.path.isfile(clean_path):
+        try:
+            os.remove(clean_path)
+        except Exception as e:
+            logger.error(f"[Adhoc] Error removing file {clean_path}: {e}")
+            return False
+
+    # Check companion audio/video
+    for ext in (".mp3", ".opus", ".m4a", ".flac", ".mp4", ".mkv", ".webm"):
+        companion = f"{base_name}{ext}"
+        if companion != clean_path and os.path.isfile(companion):
+            try:
+                os.remove(companion)
+            except Exception:
+                pass
+
+    if os.path.isdir(parent_dir):
+        reconcile_and_scan_directory(parent_dir)
+    return True
+
+
+def promote_adhoc_to_playlist(
+    source_directory: str,
+    filepaths: List[str],
+    playlist_title: str,
+    db: Session
+) -> Dict[str, Any]:
+    """
+    Converts ad-hoc staged files into a permanent Playlist with Track and PlaylistTrack entries in SQLite.
+    """
+    from app.repositories import PlaylistRepository, TrackRepository
+    from app.models.database import Playlist
+    from app.core.track_indexer import probe_local_media_metadata
+
+    clean_dir = os.path.abspath(source_directory)
+    pl = db.query(Playlist).filter(Playlist.title == playlist_title).first()
+    if not pl:
+        pl = PlaylistRepository.create(
+            url=f"local://adhoc/{os.path.basename(clean_dir)}",
+            title=playlist_title,
+            db=db
+        )
+
+    tracks_added = 0
+    for fp in filepaths:
+        real_fp = os.path.abspath(fp)
+        if not os.path.isfile(real_fp):
+            continue
+
+        base_name = os.path.splitext(os.path.basename(real_fp))[0]
+        match = re.search(r'\[([a-zA-Z0-9_-]{11})\]', base_name)
+        vid = match.group(1) if match else f"local_{int(time.time()*1000)}_{tracks_added}"
+
+        is_audio = real_fp.endswith(('.mp3', '.opus', '.m4a', '.flac'))
+        media_meta = probe_local_media_metadata(None if is_audio else real_fp, real_fp if is_audio else None)
+
+        track = TrackRepository.index_or_update_track(
+            video_id=vid,
+            title=base_name,
+            filepath="" if is_audio else real_fp,
+            audio_filepath=real_fp if is_audio else None,
+            downloaded_resolutions=[f"{media_meta.get('resolution')}p"] if media_meta.get('resolution') else [],
+            downloaded_fps=media_meta.get("fps"),
+            downloaded_audio_codec=media_meta.get("audio_codec"),
+            downloaded_audio_bitrate=media_meta.get("audio_bitrate"),
+            playlist_id=pl.id,
+            db=db
+        )
+        if track:
+            tracks_added += 1
+
+    return {
+        "status": "success",
+        "playlist_id": pl.id,
+        "playlist_title": pl.title,
+        "tracks_added": tracks_added
+    }
+
+
+def run_startup_adhoc_reconciliation(db: Optional[Session] = None) -> None:
+    """
+    Server startup activity:
+    Scans and reconciles all tracked ad-hoc directories, prunes offline-deleted items from adhoc_info.json,
+    and updates directory MRU statistics.
+    """
+    logger.info("[STARTUP] Reconciling tracked ad-hoc directories and metadata...")
+    try:
+        tracked = get_tracked_directories(db=db)
+        total_media = 0
+        for item in tracked:
+            dpath = item.get("path")
+            if dpath and os.path.isdir(dpath):
+                res = reconcile_and_scan_directory(dpath)
+                cnt = len(res.get("items", []))
+                total_media += cnt
+                item["item_count"] = cnt
+                item["total_size_bytes"] = res.get("total_size_bytes", 0)
+        SystemSettingRepository.set(TRACKED_DIRS_KEY, json.dumps(tracked), db=db)
+        logger.info(f"[STARTUP] ✓ Ad-hoc reconciliation complete: {total_media} media items across {len(tracked)} tracked directories.")
+    except Exception as e:
+        logger.warning(f"[STARTUP] Ad-hoc startup reconciliation note: {e}")
 
 
 def find_existing_local_video(target_dir: str, video_id: str, db: Optional[Session] = None) -> Optional[str]:
@@ -441,29 +1105,21 @@ def execute_adhoc_download(
                 media_meta = probe_local_media_metadata(None, audio_file)
                 base_name = os.path.splitext(os.path.basename(existing_video))[0]
                 
-                # Update adhoc metadata file
+                # Update adhoc metadata file on disk
                 _update_adhoc_metadata(
                     target_dir=target_dir,
                     video_info={"id": vid, "title": base_name, "uploader": "Local Media", "duration": 0},
                     filepath="",
-                    audio_filepath=audio_file
-                )
-                
-                # Register in global Track Index
-                write_log("Indexing audio in central SQLite track index...", "INFO")
-                TrackRepository.index_or_update_track(
-                    video_id=vid,
-                    title=base_name,
-                    filepath="",
                     audio_filepath=audio_file,
-                    downloaded_audio_codec=media_meta.get("audio_codec"),
-                    downloaded_audio_bitrate=media_meta.get("audio_bitrate"),
-                    db=db
+                    media_meta=media_meta,
+                    media_type="audio"
                 )
+                track_adhoc_directory(target_dir, db=db)
+                
                 JobRepository.update_status(job_id=job_id, status="completed", completed_items=1, failed_items=0, db=db)
                 if db and os.path.isfile(audio_file):
                     JobRepository.update_stream_progress(job_id=job_id, title=os.path.basename(audio_file), db=db)
-                write_log(f"✓ Extracted and indexed local audio: {os.path.basename(audio_file)}", "SUCCESS")
+                write_log(f"✓ Extracted and saved ad-hoc audio: {os.path.basename(audio_file)}", "SUCCESS")
                 return {
                     "status": "success",
                     "job_id": job_id,
@@ -594,15 +1250,6 @@ def execute_adhoc_download(
                         metadata=info
                     )
 
-            # Update adhoc metadata file
-            write_log("Updating adhoc metadata index (adhoc_info.json)...")
-            _update_adhoc_metadata(
-                target_dir=target_dir,
-                video_info=info,
-                filepath=primary_video or primary_audio or "",
-                audio_filepath=primary_audio
-            )
-
             # Probe media metadata using local ffprobe
             from app.core.track_indexer import probe_local_media_metadata
             media_meta = probe_local_media_metadata(primary_video or "", primary_audio or "")
@@ -612,21 +1259,17 @@ def execute_adhoc_download(
             elif video_quality and video_quality not in ("best", "0"):
                 res_list.append(f"{video_quality}p")
 
-            # Register in global Track Index
-            write_log("Indexing track in central SQLite track index...")
-            TrackRepository.index_or_update_track(
-                video_id=vid,
-                title=title,
+            # Update adhoc metadata file on disk
+            write_log("Updating adhoc metadata index (adhoc_info.json)...")
+            _update_adhoc_metadata(
+                target_dir=target_dir,
+                video_info=info,
                 filepath=primary_video or primary_audio or "",
                 audio_filepath=primary_audio,
-                artist=artist,
-                duration=duration,
-                downloaded_resolutions=res_list,
-                downloaded_fps=media_meta.get("fps"),
-                downloaded_audio_codec=media_meta.get("audio_codec"),
-                downloaded_audio_bitrate=media_meta.get("audio_bitrate"),
-                db=db
+                media_meta=media_meta,
+                media_type="audio" if extract_mode == "audio_only" else "video"
             )
+            track_adhoc_directory(target_dir, db=db)
 
             JobRepository.update_status(
                 job_id=job_id,
@@ -639,7 +1282,7 @@ def execute_adhoc_download(
             if db and final_out and os.path.isfile(final_out):
                 JobRepository.update_stream_progress(job_id=job_id, title=os.path.basename(final_out), db=db)
 
-            write_log(f"✓ Successfully processed and indexed: {title} ({vid})", "SUCCESS")
+            write_log(f"✓ Successfully processed ad-hoc download: {title} ({vid})", "SUCCESS")
             return {
                 "status": "success",
                 "job_id": job_id,

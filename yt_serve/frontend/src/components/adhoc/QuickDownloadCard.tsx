@@ -1,7 +1,7 @@
-import React, { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import React, { useState, useEffect, useRef } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { 
-  adhocApi, type AdhocProbeResult, type AdhocDownloadParams 
+  adhocApi, type AdhocProbeResult, type AdhocDownloadParams, type TrackedDirectory
 } from '../../services/api'
 import { Button } from '../ui/Button'
 import type { Job } from '../../services/types'
@@ -9,8 +9,10 @@ import { StatusBadge } from '../ui/StatusBadge'
 import { DualTierProgressBar } from '../ui/ProgressBar'
 import { jobsApi } from '../../services/api'
 import { 
-  Download, Search, Film, Music, Layers, CheckCircle2, AlertCircle, Loader2, Sparkles, Folder, Clock, Eye, Terminal, XCircle, ListOrdered
+  Download, Search, Film, Music, Layers, CheckCircle2, AlertCircle, Loader2, Sparkles, Folder, Clock, Eye, Terminal, XCircle, ListOrdered, ChevronDown, Check, Star, History
 } from 'lucide-react'
+import { DirectoryPickerModal } from '../modals/DirectoryPickerModal'
+import { AdhocMediaViewer } from './AdhocMediaViewer'
 
 export interface QuickDownloadCardProps {
   jobs?: Job[]
@@ -29,10 +31,87 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
   const [extractMode, setExtractMode] = useState<'video_only' | 'audio_only' | 'both'>('both')
   const [videoQuality, setVideoQuality] = useState<string>('best')
   const [audioFormat, setAudioFormat] = useState<string>('copy')
-  const [useCustomPath, setUseCustomPath] = useState(false)
-  const [customPath, setCustomPath] = useState('')
+  const [selectedDirectoryPath, setSelectedDirectoryPath] = useState<string>('')
+  const [searchFilterQuery, setSearchFilterQuery] = useState<string>('')
+  const [isComboboxOpen, setIsComboboxOpen] = useState(false)
+  const comboboxRef = useRef<HTMLDivElement>(null)
+  const [isPickerOpen, setIsPickerOpen] = useState(false)
+  const [mediaRefreshTrigger, setMediaRefreshTrigger] = useState(0)
   const [successJobId, setSuccessJobId] = useState<number | null>(null)
   const [cancellingJobId, setCancellingJobId] = useState<number | null>(null)
+
+  // Commit selected directory to model and persistence
+  const handleCommitDirectory = (path: string) => {
+    setSelectedDirectoryPath(path)
+    try {
+      localStorage.setItem('logis_adhoc_dest_path', path)
+    } catch {
+      // ignore
+    }
+    setSearchFilterQuery('')
+    setIsComboboxOpen(false)
+  }
+
+  // Close combobox on outside click and discard transient search filter
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (comboboxRef.current && !comboboxRef.current.contains(e.target as Node)) {
+        setIsComboboxOpen(false)
+        setSearchFilterQuery('')
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Fetch tracked directories
+  const { data: trackedDirectories = [], refetch: refetchDirectories } = useQuery<TrackedDirectory[]>({
+    queryKey: ['adhocDirectories'],
+    queryFn: async () => {
+      const res = await adhocApi.getDirectories()
+      return res.data
+    },
+  })
+
+  // Preselect MRU directory from localStorage or trackedDirectories on initial load
+  useEffect(() => {
+    if (!selectedDirectoryPath && trackedDirectories.length > 0) {
+      try {
+        const savedDir = localStorage.getItem('logis_adhoc_dest_path')
+        if (savedDir && trackedDirectories.some((d) => d.path === savedDir)) {
+          setSelectedDirectoryPath(savedDir)
+          return
+        }
+      } catch {
+        // ignore
+      }
+
+      // Find directory with newest last_used_at timestamp
+      const withUsage = trackedDirectories.filter((d) => Boolean(d.last_used_at))
+      if (withUsage.length > 0) {
+        const sorted = [...withUsage].sort((a, b) => (b.last_used_at || '').localeCompare(a.last_used_at || ''))
+        setSelectedDirectoryPath(sorted[0].path)
+        return
+      }
+
+      // Fallback: Tier 1 default or first entry
+      const def = trackedDirectories.find((d) => d.tier === 'default' || d.is_default) || trackedDirectories[0]
+      if (def) {
+        setSelectedDirectoryPath(def.path)
+      }
+    }
+  }, [trackedDirectories])
+
+  // Watch for completed adhoc jobs to auto-refresh media gallery
+  useEffect(() => {
+    const completedAdhocJob = jobs.find(
+      (j) => (j.id === successJobId || j.job_type?.startsWith('adhoc_')) && j.status === 'completed'
+    )
+    if (completedAdhocJob) {
+      setMediaRefreshTrigger((prev) => prev + 1)
+      refetchDirectories()
+    }
+  }, [jobs, successJobId])
 
   // 1. Probe Mutation
   const probeMutation = useMutation({
@@ -40,6 +119,10 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
     onSuccess: (res) => {
       setProbeResult(res.data)
       setSuccessJobId(null)
+      // Only set destination path if not already committed by user/MRU
+      if (res.data.default_download_path && !selectedDirectoryPath) {
+        setSelectedDirectoryPath(res.data.default_download_path)
+      }
       if (res.data.available_resolutions && res.data.available_resolutions.length > 0) {
         setVideoQuality(String(res.data.available_resolutions[0].height || 'best'))
       }
@@ -53,6 +136,13 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
       setSuccessJobId(res.data.job_id)
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
       queryClient.invalidateQueries({ queryKey: ['tracks'] })
+      if (selectedDirectoryPath) {
+        try {
+          localStorage.setItem('logis_adhoc_dest_path', selectedDirectoryPath)
+        } catch {
+          // ignore
+        }
+      }
       if (onJobStarted) {
         onJobStarted(res.data.job_id)
       }
@@ -92,7 +182,7 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
       video_quality: videoQuality,
       audio_format: audioFormat,
       extract_mode: extractMode,
-      custom_download_path: useCustomPath && customPath.trim() ? customPath.trim() : undefined,
+      custom_download_path: selectedDirectoryPath.trim() ? selectedDirectoryPath.trim() : undefined,
     })
   }
 
@@ -322,37 +412,208 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
               )}
             </div>
 
-            {/* Destination Folder Path */}
+            {/* Destination Folder Path with Smart Combobox & Browse Button */}
             <div className="space-y-2 pt-2 border-t border-gray-200 dark:border-gray-700">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
-                  <Folder className="w-3.5 h-3.5 text-gray-500" />
+                  <Folder className="w-3.5 h-3.5 text-amber-500" />
                   <span>Destination Folder</span>
                 </label>
-                <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useCustomPath}
-                    onChange={(e) => setUseCustomPath(e.target.checked)}
-                    className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <span>Custom Folder</span>
-                </label>
+                <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                  Mounted container storage
+                </span>
               </div>
 
-              {useCustomPath ? (
-                <input
-                  type="text"
-                  placeholder="Enter custom folder path (e.g. D:/QuickDownloads)"
-                  value={customPath}
-                  onChange={(e) => setCustomPath(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono"
-                />
-              ) : (
-                <div className="px-3 py-2 bg-gray-100 dark:bg-gray-800 rounded-lg text-xs text-gray-600 dark:text-gray-400 font-mono truncate">
-                  {probeResult.default_download_path}
+              <div className="flex gap-2">
+                <div ref={comboboxRef} className="relative flex-1">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={isComboboxOpen ? searchFilterQuery : selectedDirectoryPath}
+                      onFocus={() => {
+                        setIsComboboxOpen(true)
+                        setSearchFilterQuery('')
+                      }}
+                      onClick={() => {
+                        if (!isComboboxOpen) {
+                          setIsComboboxOpen(true)
+                          setSearchFilterQuery('')
+                        }
+                      }}
+                      onChange={(e) => {
+                        setSearchFilterQuery(e.target.value)
+                        setIsComboboxOpen(true)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          setIsComboboxOpen(false)
+                          setSearchFilterQuery('')
+                        } else if (e.key === 'Enter') {
+                          const queryNorm = searchFilterQuery.trim().toLowerCase()
+                          const matches = trackedDirectories.filter((d: TrackedDirectory) => {
+                            if (!queryNorm) return true
+                            return (
+                              d.path.toLowerCase().includes(queryNorm) ||
+                              d.display_name.toLowerCase().includes(queryNorm)
+                            )
+                          })
+                          if (matches.length > 0) {
+                            handleCommitDirectory(matches[0].path)
+                          }
+                        }
+                      }}
+                      placeholder={selectedDirectoryPath || "Search or select destination path..."}
+                      className="w-full pl-8 pr-8 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                    />
+                    <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isComboboxOpen) {
+                          setIsComboboxOpen(false)
+                          setSearchFilterQuery('')
+                        } else {
+                          setIsComboboxOpen(true)
+                          setSearchFilterQuery('')
+                        }
+                      }}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 p-0.5 rounded transition-colors"
+                      tabIndex={-1}
+                    >
+                      <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isComboboxOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
+
+                  {/* Dropdown Panel */}
+                  {isComboboxOpen && (
+                    <div className="absolute left-0 right-0 top-full mt-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-2xl max-h-72 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/60 p-1.5 z-50">
+                      {(() => {
+                        const queryNorm = searchFilterQuery.trim().toLowerCase()
+                        const matches = trackedDirectories.filter((d: TrackedDirectory) => {
+                          if (!queryNorm) return true
+                          return (
+                            d.path.toLowerCase().includes(queryNorm) ||
+                            d.display_name.toLowerCase().includes(queryNorm)
+                          )
+                        })
+
+                        const tier1 = matches.filter((d: TrackedDirectory) => d.tier === 'default' || d.is_default)
+                        const tier2 = matches.filter((d: TrackedDirectory) => d.tier === 'recent_adhoc' && !d.is_default)
+                        const tier3 = matches.filter((d: TrackedDirectory) => d.tier === 'unmanaged' && !d.is_default)
+
+                        const renderItem = (d: TrackedDirectory, icon: React.ReactNode, tierBadge?: React.ReactNode) => {
+                          const isSelected = selectedDirectoryPath === d.path
+                          return (
+                            <button
+                              key={d.path}
+                              type="button"
+                              onClick={() => handleCommitDirectory(d.path)}
+                              className={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between text-xs transition-colors ${
+                                isSelected
+                                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-semibold'
+                                  : 'hover:bg-gray-100 dark:hover:bg-gray-700/60 text-gray-800 dark:text-gray-200'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 truncate">
+                                <span className="shrink-0">{icon}</span>
+                                <span className="font-mono text-[11px] truncate">{d.path}</span>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0 pl-2">
+                                {tierBadge}
+                                {d.item_count > 0 && (
+                                  <span className="text-[10px] text-gray-400">
+                                    {d.item_count} files
+                                  </span>
+                                )}
+                                {isSelected && <Check className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0 ml-1" />}
+                              </div>
+                            </button>
+                          )
+                        }
+
+                        if (matches.length === 0) {
+                          return (
+                            <div className="p-3 text-center text-xs text-gray-500 dark:text-gray-400 space-y-1">
+                              <AlertCircle className="w-4 h-4 mx-auto text-amber-500" />
+                              <p className="font-medium text-gray-700 dark:text-gray-300">No matching directories found</p>
+                              <p className="text-[11px] text-gray-400">
+                                New folders can be created using the &quot;Browse...&quot; button.
+                              </p>
+                            </div>
+                          )
+                        }
+
+                        return (
+                          <div className="space-y-2">
+                            {/* Tier 1: Active Default */}
+                            {tier1.length > 0 && (
+                              <div className="space-y-1">
+                                <div className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                                  <Star className="w-3 h-3 fill-amber-400 text-amber-500" />
+                                  <span>Active Default Ad-hoc</span>
+                                </div>
+                                {tier1.map((d) =>
+                                  renderItem(
+                                    d,
+                                    <Folder className="w-3.5 h-3.5 text-amber-500" />,
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 font-semibold">
+                                      Default
+                                    </span>
+                                  )
+                                )}
+                              </div>
+                            )}
+
+                            {/* Tier 2: Recently Used (Top 5) */}
+                            {tier2.length > 0 && (
+                              <div className="space-y-1">
+                                <div className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-cyan-600 dark:text-cyan-400 flex items-center gap-1">
+                                  <History className="w-3 h-3 text-cyan-500" />
+                                  <span>Recently Used Ad-hoc</span>
+                                </div>
+                                {tier2.map((d) =>
+                                  renderItem(
+                                    d,
+                                    <Folder className="w-3.5 h-3.5 text-cyan-500" />,
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-300">
+                                      Recent
+                                    </span>
+                                  )
+                                )}
+                              </div>
+                            )}
+
+                            {/* Tier 3: Unmanaged Library Folders */}
+                            {tier3.length > 0 && (
+                              <div className="space-y-1">
+                                <div className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                                  <Folder className="w-3 h-3 text-gray-400" />
+                                  <span>Available Unmanaged Folders</span>
+                                </div>
+                                {tier3.map((d) =>
+                                  renderItem(
+                                    d,
+                                    <Folder className="w-3.5 h-3.5 text-gray-400" />
+                                  )
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  )}
                 </div>
-              )}
+
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setIsPickerOpen(true)}
+                  icon={<Folder className="w-3.5 h-3.5 text-amber-500" />}
+                >
+                  Browse...
+                </Button>
+              </div>
             </div>
 
             {/* Download Execution Button */}
@@ -511,7 +772,24 @@ export const QuickDownloadCard: React.FC<QuickDownloadCardProps> = ({
             )}
           </div>
         )}
+
+        {/* Unified Ad-Hoc Media Gallery Table */}
+        <AdhocMediaViewer
+          refreshTrigger={mediaRefreshTrigger}
+          onMediaDeleted={() => refetchDirectories()}
+        />
       </div>
+
+      {/* Sandboxed Server Directory Browser Modal */}
+      <DirectoryPickerModal
+        isOpen={isPickerOpen}
+        onClose={() => setIsPickerOpen(false)}
+        excludeManaged={true}
+        onSelect={(path: string) => {
+          handleCommitDirectory(path)
+          refetchDirectories()
+        }}
+      />
     </div>
   )
 }

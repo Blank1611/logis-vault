@@ -792,9 +792,24 @@ async def get_unmanaged_folders(db: Session = Depends(get_db)):
             "folder_name": fs.folder_name,
             "reason": fs.reason or "user_excluded",
             "created_at": fs.created_at.isoformat() if fs.created_at else None,
+            "is_system": False,
         }
         for fs in list_folder_statuses(status="excluded", db=db)
     ]
+
+    # Add config-level environment exclusions (EXCLUDED_DIRS) if not already listed
+    existing_excluded_names = {x["folder_name"].lower() for x in excluded_list}
+    if settings.EXCLUDED_DIRS:
+        for item in settings.EXCLUDED_DIRS.split(","):
+            cleaned = item.strip()
+            if cleaned and cleaned.lower() not in existing_excluded_names:
+                excluded_list.append({
+                    "folder_name": cleaned,
+                    "reason": "config_env",
+                    "created_at": None,
+                    "is_system": True,
+                })
+                existing_excluded_names.add(cleaned.lower())
     
     return {
         "base_path": settings.BASE_DOWNLOAD_PATH,
@@ -807,8 +822,24 @@ async def get_unmanaged_folders(db: Session = Depends(get_db)):
 
 @router.post("/batch-link-unmanaged-folders")
 async def batch_link_folders(payload: BatchLinkRequest, db: Session = Depends(get_db)):
-    """Batch link unmanaged folders to YouTube playlists"""
+    """Batch link unmanaged folders to YouTube playlists (guards against ad-hoc storage directories)"""
     from app.services.onboarding_service import batch_link_unmanaged_folders
+    from app.services.adhoc_service import get_tracked_directories
+
+    known_adhoc_names = {"_adhoc_downloads"}
+    if settings.ADHOC_DOWNLOAD_PATH:
+        known_adhoc_names.add(os.path.basename(settings.ADHOC_DOWNLOAD_PATH).lower())
+    for d in get_tracked_directories(include_unmanaged=False, db=db):
+        if d.get("path"):
+            known_adhoc_names.add(os.path.basename(d["path"]).lower())
+
+    for item in payload.items:
+        if item.folder_name.strip().lower() in known_adhoc_names:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Folder '{item.folder_name}' is a dedicated Ad-hoc Storage directory and cannot be linked as a YouTube playlist."
+            )
+
     raw_items = [item.dict() for item in payload.items]
     return batch_link_unmanaged_folders(items=raw_items, global_rename=payload.global_rename, db=db)
 
@@ -817,16 +848,32 @@ async def batch_link_folders(payload: BatchLinkRequest, db: Session = Depends(ge
 async def batch_exclude_folders(payload: BatchExcludeRequest, db: Session = Depends(get_db)):
     """Add folders to excluded status (persisted in database folder_status table)"""
     from app.models.database import set_folder_status
-    logger.info(f"[Unmanaged Exclude] Received request to exclude folders: {payload.folder_names}")
+    from app.services.adhoc_service import get_tracked_directories
+
+    known_adhoc_names = {"_adhoc_downloads"}
+    if settings.ADHOC_DOWNLOAD_PATH:
+        known_adhoc_names.add(os.path.basename(settings.ADHOC_DOWNLOAD_PATH).lower())
+    for d in get_tracked_directories(include_unmanaged=False, db=db):
+        if d.get("path"):
+            known_adhoc_names.add(os.path.basename(d["path"]).lower())
+
+    filtered_names = [f for f in payload.folder_names if f.strip().lower() not in known_adhoc_names]
+    if not filtered_names and payload.folder_names:
+        raise HTTPException(
+            status_code=400,
+            detail="Dedicated Ad-hoc Storage directories cannot be excluded from library tracking."
+        )
+
+    logger.info(f"[Unmanaged Exclude] Received request to exclude folders: {filtered_names}")
     reason = payload.reason or "user_excluded"
-    for f in payload.folder_names:
+    for f in filtered_names:
         cleaned = f.strip()
         if cleaned:
             set_folder_status(folder_name=cleaned, status="excluded", reason=reason, db=db)
     
     # Also sync in-memory settings.EXCLUDED_DIRS for backwards compatibility
     current_excluded = set(x.strip().lower() for x in (getattr(settings, "EXCLUDED_DIRS", "") or "").split(",") if x.strip())
-    for f in payload.folder_names:
+    for f in filtered_names:
         cleaned = f.strip().lower()
         if cleaned:
             current_excluded.add(cleaned)
@@ -837,10 +884,10 @@ async def batch_exclude_folders(payload: BatchExcludeRequest, db: Session = Depe
     except Exception as env_err:
         logger.debug(f"[Unmanaged Exclude] Note syncing .env: {env_err}")
     
-    logger.info(f"[Unmanaged Exclude] Successfully excluded {len(payload.folder_names)} folder(s).")
+    logger.info(f"[Unmanaged Exclude] Successfully excluded {len(filtered_names)} folder(s).")
     return {
         "success": True,
-        "excluded_folders": payload.folder_names
+        "excluded_folders": filtered_names
     }
 
 

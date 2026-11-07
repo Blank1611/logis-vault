@@ -195,6 +195,8 @@ export interface UnmanagedFolder {
   video_count: number
   audio_count: number
   total_files: number
+  is_adhoc?: boolean
+  adhoc_type?: 'system_default' | 'config_custom' | null
 }
 
 export interface SchedulerStatus {
@@ -277,7 +279,8 @@ export const configApi = {
 export interface ExcludedFolderItem {
   folder_name: string
   reason?: string
-  created_at?: string
+  created_at?: string | null
+  is_system?: boolean
 }
 
 export interface DiscoveredPlaylistItem {
@@ -408,11 +411,113 @@ export interface AdhocStartResult {
   message: string
 }
 
+export interface DirectoryItem {
+  name: string
+  path: string
+  has_children: boolean
+  is_writable: boolean
+}
+
+export interface BrowseResponse {
+  current_path: string
+  parent_path: string | null
+  root_path: string
+  subdirectories: DirectoryItem[]
+}
+
+export interface CreateDirectoryParams {
+  parent_path: string
+  directory_name: string
+}
+
+export interface ValidatePathResponse {
+  valid: boolean
+  exists: boolean
+  is_dir: boolean
+  is_writable: boolean
+  is_inside_mount: boolean
+  resolved_path: string
+  message: string
+}
+
+export const filesystemApi = {
+  browse: (path?: string, excludeManaged?: boolean) =>
+    api.get<BrowseResponse>('/filesystem/browse', {
+      params: {
+        ...(path ? { path } : {}),
+        ...(excludeManaged ? { exclude_managed: true } : {}),
+      },
+    }),
+  createDirectory: (params: CreateDirectoryParams) =>
+    api.post<{ status: string; message: string; path: string }>('/filesystem/create-directory', params),
+  validatePath: (path: string) =>
+    api.get<ValidatePathResponse>('/filesystem/validate-path', { params: { path } }),
+}
+
+export interface TrackedDirectory {
+  path: string
+  display_name: string
+  is_default: boolean
+  tier?: 'default' | 'recent_adhoc' | 'unmanaged'
+  item_count: number
+  total_size_bytes: number
+  last_used_at?: string | null
+}
+
+export interface AdhocMediaItem {
+  id: string
+  title: string
+  uploader: string
+  duration: number
+  filepath: string
+  audio_filepath?: string | null
+  filename: string
+  format: string
+  resolution?: string
+  fps?: number | null
+  audio_codec?: string | null
+  audio_bitrate?: number | string | null
+  thumbnail?: string
+  size_bytes: number
+  media_type: 'video' | 'audio'
+  directory: string
+  directory_display: string
+  downloaded_at: string
+}
+
+export interface AdhocItemsResponse {
+  total_items: number
+  total_size_bytes: number
+  directories: string[]
+  items: AdhocMediaItem[]
+}
+
+export interface AdhocPromoteParams {
+  source_directory: string
+  filepaths: string[]
+  playlist_title: string
+}
+
 export const adhocApi = {
   probe: (url: string) =>
     api.post<AdhocProbeResult>('/downloads/adhoc/probe', { url }),
   start: (params: AdhocDownloadParams) =>
     api.post<AdhocStartResult>('/downloads/adhoc/start', params),
+  getDirectories: () =>
+    api.get<TrackedDirectory[]>('/downloads/adhoc/directories'),
+  untrackDirectory: (path: string) =>
+    api.delete<{ status: string; message: string }>('/downloads/adhoc/directories', { params: { path } }),
+  getItems: (params?: { directory?: string; media_type?: string; search?: string }) =>
+    api.get<AdhocItemsResponse>('/downloads/adhoc/items', { params }),
+  deleteItem: (filepath: string) =>
+    api.delete<{ status: string; message: string }>('/downloads/adhoc/items', { params: { filepath } }),
+  getStreamUrl: (filepath: string) =>
+    `/api/downloads/adhoc/stream?filepath=${encodeURIComponent(filepath)}`,
+  getDownloadUrl: (filepath: string) =>
+    `/api/downloads/adhoc/stream?filepath=${encodeURIComponent(filepath)}`,
+  promoteToPlaylist: (params: AdhocPromoteParams) =>
+    api.post<{ status: string; playlist_id: number; playlist_title: string; tracks_added: number }>('/downloads/adhoc/promote-to-playlist', params),
 }
 
 export default api
+
