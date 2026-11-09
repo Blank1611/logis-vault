@@ -15,6 +15,7 @@ from app.services.adhoc_service import (
     probe_video_info,
     execute_adhoc_download,
     _update_adhoc_metadata,
+    reconcile_and_scan_directory,
     find_existing_local_video,
     extract_audio_from_video
 )
@@ -93,14 +94,15 @@ class TestAdhocDownloads(unittest.TestCase):
             content = f.read()
             self.assertIn("youtube metaVid999", content)
 
-        # Check adhoc_info.json
+        # Verify adhoc_info.json is decommissioned and NOT created
         json_path = os.path.join(target_dir, "adhoc_info.json")
-        self.assertTrue(os.path.isfile(json_path))
-        with open(json_path, "r", encoding="utf-8") as f:
-            entries = json.load(f)
-            self.assertEqual(len(entries), 1)
-            self.assertEqual(entries[0]["id"], "metaVid999")
-            self.assertEqual(entries[0]["title"], "Metadata Song")
+        self.assertFalse(os.path.isfile(json_path))
+
+        # Verify pure filesystem scanning discovers the file directly
+        res = reconcile_and_scan_directory(target_dir)
+        self.assertEqual(res["item_count"], 1)
+        self.assertEqual(res["items"][0]["id"], "metaVid999")
+        self.assertEqual(res["items"][0]["title"], "Metadata Song [metaVid999]")
 
     @patch("yt_dlp.YoutubeDL")
     def test_execute_adhoc_download(self, mock_ydl_class):
@@ -143,14 +145,21 @@ class TestAdhocDownloads(unittest.TestCase):
         self.assertEqual(updated_job.status, "completed")
         self.assertEqual(updated_job.completed_items, 1)
 
-        # Verify metadata persisted to adhoc_info.json on disk
+        # Verify adhoc_info.json is NOT created (pure filesystem architecture)
         info_json_path = os.path.join(target_dir, "adhoc_info.json")
-        self.assertTrue(os.path.isfile(info_json_path))
-        with open(info_json_path, "r", encoding="utf-8") as f:
-            entries = json.load(f)
-        self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0]["id"], "adhocExec123")
-        self.assertEqual(entries[0]["title"], "Adhoc Executed Song")
+        self.assertFalse(os.path.isfile(info_json_path))
+
+        # Verify archive.txt updated
+        archive_path = os.path.join(target_dir, "archive.txt")
+        self.assertTrue(os.path.isfile(archive_path))
+        with open(archive_path, "r", encoding="utf-8") as f:
+            self.assertIn("youtube adhocExec123", f.read())
+
+        # Verify pure filesystem scanning discovers the executed download
+        scan_res = reconcile_and_scan_directory(target_dir)
+        self.assertEqual(scan_res["item_count"], 1)
+        self.assertEqual(scan_res["items"][0]["id"], "adhocExec123")
+        self.assertEqual(scan_res["items"][0]["title"], "Adhoc Executed Song [adhocExec123]")
 
         # Verify Track table is decoupled (no phantom track rows created)
         indexed_track = TrackRepository.get_by_video_id("adhocExec123", db=self.db)

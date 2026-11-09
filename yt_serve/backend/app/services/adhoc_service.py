@@ -225,123 +225,27 @@ def _update_adhoc_metadata(
     media_type: str = "video"
 ):
     """
-    Append or update video entry in adhoc_info.json and archive.txt in target directory.
-    Stores rich metadata directly on disk in adhoc_info.json without SQLite Track table pollution.
+    Append video entry to archive.txt in target directory to prevent re-downloads.
+    Metadata is now discovered dynamically directly from the physical filesystem.
     """
     os.makedirs(target_dir, exist_ok=True)
-    json_path = os.path.join(target_dir, "adhoc_info.json")
     archive_path = os.path.join(target_dir, "archive.txt")
 
     vid = video_info.get("id") or video_info.get("video_id")
     if vid:
         try:
-            with open(archive_path, "a", encoding="utf-8") as f:
-                f.write(f"youtube {vid}\n")
+            existing_vids = set()
+            if os.path.isfile(archive_path):
+                with open(archive_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 2 and parts[0] == "youtube":
+                            existing_vids.add(parts[1])
+            if vid not in existing_vids:
+                with open(archive_path, "a", encoding="utf-8") as f:
+                    f.write(f"youtube {vid}\n")
         except Exception as e:
             logger.warning(f"[Adhoc] Could not update archive.txt: {e}")
-
-    try:
-        entries = []
-        if os.path.isfile(json_path):
-            with open(json_path, "r", encoding="utf-8") as f:
-                entries = json.load(f)
-                if not isinstance(entries, list):
-                    entries = []
-
-        primary_file = filepath or audio_filepath or ""
-        file_size = os.path.getsize(primary_file) if (primary_file and os.path.isfile(primary_file)) else 0
-        file_ext = os.path.splitext(primary_file)[1].lstrip(".").lower() if primary_file else "mp4"
-
-        meta = media_meta or {}
-        res = meta.get("resolution")
-        res_str = f"{res}p" if res else (f"{meta.get('height')}p" if meta.get("height") else "")
-        fps = meta.get("fps")
-        acodec = meta.get("audio_codec")
-        abitrate = meta.get("audio_bitrate")
-
-        thumbnail = video_info.get("thumbnail")
-        if not thumbnail and video_info.get("thumbnails"):
-            thumbnail = video_info["thumbnails"][-1].get("url")
-
-        title = video_info.get("title") or os.path.splitext(os.path.basename(filepath or audio_filepath or ""))[0]
-        now_iso = datetime.utcnow().isoformat() + "Z"
-
-        files_to_track = []
-        if filepath and os.path.isfile(filepath):
-            f_ext = os.path.splitext(filepath)[1].lstrip(".").lower()
-            files_to_track.append({
-                "id": vid,
-                "title": title,
-                "uploader": video_info.get("uploader") or video_info.get("channel") or "Unknown",
-                "duration": video_info.get("duration") or 0,
-                "filepath": filepath,
-                "audio_filepath": None,
-                "format": f_ext,
-                "resolution": res_str,
-                "fps": fps,
-                "audio_codec": None,
-                "audio_bitrate": None,
-                "thumbnail": thumbnail,
-                "size_bytes": os.path.getsize(filepath),
-                "media_type": "video",
-                "downloaded_at": now_iso
-            })
-
-        if audio_filepath and os.path.isfile(audio_filepath):
-            a_ext = os.path.splitext(audio_filepath)[1].lstrip(".").lower()
-            files_to_track.append({
-                "id": vid,
-                "title": title,
-                "uploader": video_info.get("uploader") or video_info.get("channel") or "Unknown",
-                "duration": video_info.get("duration") or 0,
-                "filepath": "",
-                "audio_filepath": audio_filepath,
-                "format": a_ext,
-                "resolution": "",
-                "fps": None,
-                "audio_codec": acodec,
-                "audio_bitrate": abitrate,
-                "thumbnail": thumbnail,
-                "size_bytes": os.path.getsize(audio_filepath),
-                "media_type": "audio",
-                "downloaded_at": now_iso
-            })
-
-        # Fallback if neither file checked out as isfile yet (in-progress)
-        if not files_to_track:
-            primary = filepath or audio_filepath or ""
-            f_ext = os.path.splitext(primary)[1].lstrip(".").lower() if primary else "mp4"
-            files_to_track.append({
-                "id": vid,
-                "title": title,
-                "uploader": video_info.get("uploader") or video_info.get("channel") or "Unknown",
-                "duration": video_info.get("duration") or 0,
-                "filepath": filepath,
-                "audio_filepath": audio_filepath,
-                "format": f_ext,
-                "resolution": res_str,
-                "fps": fps,
-                "audio_codec": acodec,
-                "audio_bitrate": abitrate,
-                "thumbnail": thumbnail,
-                "size_bytes": 0,
-                "media_type": media_type,
-                "downloaded_at": now_iso
-            })
-
-        for new_item in files_to_track:
-            target_p = new_item.get("filepath") or new_item.get("audio_filepath")
-            idx = next((i for i, it in enumerate(entries) if (it.get("filepath") == target_p or it.get("audio_filepath") == target_p)), None)
-            if idx is not None:
-                entries[idx] = new_item
-            else:
-                entries.append(new_item)
-
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(entries, f, indent=2, ensure_ascii=False)
-
-    except Exception as e:
-        logger.warning(f"[Adhoc] Could not update adhoc_info.json: {e}")
 
 
 def get_tracked_directories(include_unmanaged: bool = False, db: Optional[Session] = None) -> List[Dict[str, Any]]:
@@ -455,22 +359,17 @@ def get_tracked_directories(include_unmanaged: bool = False, db: Optional[Sessio
                     if norm_p in managed_playlist_paths or norm_p in existing_paths:
                         continue
 
-                    # Count files if adhoc_info.json or media files exist
+                    # Count physical media files directly
                     item_count = 0
-                    info_path = os.path.join(full_p, "adhoc_info.json")
-                    if os.path.isfile(info_path):
-                        try:
-                            with open(info_path, "r", encoding="utf-8") as f:
-                                jdata = json.load(f)
-                                if isinstance(jdata, list):
-                                    item_count = len(jdata)
-                        except Exception:
-                            pass
-                    if item_count == 0:
-                        try:
-                            item_count = len([f for f in os.listdir(full_p) if not f.startswith('.')])
-                        except Exception:
-                            item_count = 0
+                    try:
+                        with os.scandir(full_p) as sc:
+                            for fe in sc:
+                                if fe.is_file():
+                                    ext = os.path.splitext(fe.name)[1].lower()
+                                    if ext in MEDIA_EXTENSIONS:
+                                        item_count += 1
+                    except Exception:
+                        item_count = 0
 
                     unmanaged_list.append({
                         "path": norm_p,
@@ -539,9 +438,11 @@ def untrack_adhoc_directory(dir_path: str, db: Optional[Session] = None) -> bool
 
 def reconcile_and_scan_directory(dir_path: str) -> Dict[str, Any]:
     """
-    Scans an ad-hoc directory, reconciles adhoc_info.json and archive.txt against physical disk files.
-    - Missing files are pruned from adhoc_info.json (self-healing for rm / mv).
-    - Unindexed physical files on disk are auto-discovered and cataloged.
+    Scans an ad-hoc directory directly from the physical filesystem.
+    Physical disk files are the authoritative source of truth:
+    - 1 physical file on disk = exactly 1 media item.
+    - Title matches the disk filename without extension verbatim (no tag stripping or desync).
+    - Resolution and YouTube ID are inferred from bracket tags if present.
     - archive.txt is cleaned of missing video IDs so re-downloads are unblocked.
     """
     clean_dir = os.path.abspath(dir_path)
@@ -553,22 +454,10 @@ def reconcile_and_scan_directory(dir_path: str) -> Dict[str, Any]:
             "items": []
         }
 
-    json_path = os.path.join(clean_dir, "adhoc_info.json")
     archive_path = os.path.join(clean_dir, "archive.txt")
+    valid_entries = []
+    present_vids = set()
 
-    entries = []
-    if os.path.isfile(json_path):
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-                if isinstance(loaded, list):
-                    entries = loaded
-        except Exception as e:
-            logger.warning(f"[Adhoc] Error reading {json_path}: {e}")
-            entries = []
-
-    # Map physical media files in directory
-    physical_files = {}
     try:
         with os.scandir(clean_dir) as it:
             for entry in it:
@@ -576,139 +465,67 @@ def reconcile_and_scan_directory(dir_path: str) -> Dict[str, Any]:
                     ext = os.path.splitext(entry.name)[1].lower()
                     if ext in MEDIA_EXTENSIONS:
                         real_p = os.path.realpath(entry.path)
-                        physical_files[real_p] = entry
+                        is_video = ext in VIDEO_EXTENSIONS
+                        try:
+                            stat = entry.stat()
+                            size_bytes = stat.st_size
+                            mtime = stat.st_mtime
+                        except Exception:
+                            size_bytes = 0
+                            mtime = time.time()
+
+                        bracket_matches = re.findall(r'\[([a-zA-Z0-9_.-]+)\]', entry.name)
+                        resolution = ""
+                        candidate_vids = []
+                        for b in bracket_matches:
+                            if re.match(r'^\d{3,4}p(?:\d+)?$', b, re.IGNORECASE) or b.upper() in ("4K", "2K", "HD"):
+                                resolution = b
+                            elif 6 <= len(b) <= 16:
+                                candidate_vids.append(b)
+
+                        # Prefer exact 11-character YouTube video ID if present, else fallback to candidate or file_<mtime>
+                        vid = next((c for c in candidate_vids if len(c) == 11), None)
+                        if not vid and candidate_vids:
+                            vid = candidate_vids[0]
+
+                        if not vid:
+                            vid = f"file_{int(mtime)}"
+                        else:
+                            present_vids.add(vid)
+
+                        # Preserve exact disk filename without extension
+                        title = os.path.splitext(entry.name)[0].strip() or entry.name
+
+                        # Check for local companion thumbnail if any
+                        base_no_ext = os.path.splitext(real_p)[0]
+                        thumbnail = ""
+                        for img_ext in (".jpg", ".webp", ".png"):
+                            cand = f"{base_no_ext}{img_ext}"
+                            if os.path.isfile(cand):
+                                thumbnail = cand
+                                break
+
+                        new_entry = {
+                            "id": vid,
+                            "title": title,
+                            "filename": entry.name,
+                            "uploader": "Local Media",
+                            "duration": 0,
+                            "filepath": real_p if is_video else "",
+                            "audio_filepath": real_p if not is_video else None,
+                            "format": ext.lstrip("."),
+                            "resolution": resolution,
+                            "fps": None,
+                            "audio_codec": None,
+                            "audio_bitrate": None,
+                            "thumbnail": thumbnail,
+                            "size_bytes": size_bytes,
+                            "media_type": "video" if is_video else "audio",
+                            "downloaded_at": datetime.fromtimestamp(mtime).isoformat() + "Z"
+                        }
+                        valid_entries.append(new_entry)
     except Exception as e:
         logger.warning(f"[Adhoc] Error scanning directory {clean_dir}: {e}")
-
-    # Reconcile existing entries against physical files
-    valid_entries = []
-    claimed_physical_paths = set()
-    present_vids = set()
-    entries_changed = False
-
-    for item in entries:
-        fp = item.get("filepath")
-        afp = item.get("audio_filepath")
-        fp_real = os.path.realpath(fp) if fp else None
-        afp_real = os.path.realpath(afp) if afp else None
-
-        has_fp = fp_real and os.path.isfile(fp_real)
-        has_afp = afp_real and os.path.isfile(afp_real)
-
-        # Check if entry collapsed both video and audio into a single object
-        if has_fp and has_afp and fp_real != afp_real:
-            # Emit dedicated video entry
-            video_item = dict(item)
-            video_ext = os.path.splitext(fp_real)[1].lstrip(".").lower()
-            video_item["filepath"] = fp_real
-            video_item["audio_filepath"] = None
-            video_item["format"] = video_ext
-            video_item["media_type"] = "video"
-            try:
-                video_item["size_bytes"] = os.path.getsize(fp_real)
-            except Exception:
-                pass
-            valid_entries.append(video_item)
-            if fp_real in physical_files:
-                claimed_physical_paths.add(fp_real)
-
-            # Emit dedicated audio entry
-            audio_item = dict(item)
-            audio_ext = os.path.splitext(afp_real)[1].lstrip(".").lower()
-            audio_item["filepath"] = ""
-            audio_item["audio_filepath"] = afp_real
-            audio_item["format"] = audio_ext
-            audio_item["media_type"] = "audio"
-            audio_item["resolution"] = ""
-            try:
-                audio_item["size_bytes"] = os.path.getsize(afp_real)
-            except Exception:
-                pass
-            valid_entries.append(audio_item)
-            if afp_real in physical_files:
-                claimed_physical_paths.add(afp_real)
-
-            entries_changed = True
-            if item.get("id"):
-                present_vids.add(item["id"])
-            continue
-
-        has_file = has_fp or has_afp
-        if has_file:
-            target_p = fp_real if has_fp else afp_real
-            try:
-                item["size_bytes"] = os.path.getsize(target_p)
-            except Exception:
-                pass
-
-            # Backfill missing format or media_type
-            f_ext = os.path.splitext(target_p)[1].lstrip(".").lower()
-            is_vid = f_ext in VIDEO_EXTENSIONS
-            if not item.get("format"):
-                item["format"] = f_ext
-                entries_changed = True
-            if not item.get("media_type"):
-                item["media_type"] = "video" if is_vid else "audio"
-                entries_changed = True
-
-            # Ensure correct path assignment
-            if is_vid:
-                item["filepath"] = target_p
-                item["audio_filepath"] = None
-            else:
-                item["audio_filepath"] = target_p
-                item["filepath"] = ""
-
-            valid_entries.append(item)
-            if target_p in physical_files:
-                claimed_physical_paths.add(target_p)
-            if item.get("id"):
-                present_vids.add(item["id"])
-        else:
-            entries_changed = True
-            logger.info(f"[Adhoc Reconciler] Pruned missing file from metadata: {fp or afp}")
-
-    # Discover unindexed physical media files on disk
-    for phys_path, entry in physical_files.items():
-        if phys_path not in claimed_physical_paths:
-            ext = os.path.splitext(entry.name)[1].lower()
-            is_video = ext in VIDEO_EXTENSIONS
-            stat = entry.stat()
-
-            match = re.search(r'\[([a-zA-Z0-9_-]{11})\]', entry.name)
-            vid = match.group(1) if match else f"file_{int(stat.st_mtime)}"
-
-            # Preserve exact disk filename without extension (no bracket stripping)
-            title = os.path.splitext(entry.name)[0].strip() or entry.name
-
-            new_entry = {
-                "id": vid,
-                "title": title,
-                "uploader": "Local Media",
-                "duration": 0,
-                "filepath": phys_path if is_video else "",
-                "audio_filepath": phys_path if not is_video else None,
-                "format": ext.lstrip("."),
-                "resolution": "",
-                "fps": None,
-                "audio_codec": None,
-                "audio_bitrate": None,
-                "thumbnail": "",
-                "size_bytes": stat.st_size,
-                "media_type": "video" if is_video else "audio",
-                "downloaded_at": datetime.fromtimestamp(stat.st_mtime).isoformat() + "Z"
-            }
-            valid_entries.append(new_entry)
-            present_vids.add(vid)
-            entries_changed = True
-            logger.info(f"[Adhoc Reconciler] Discovered unindexed physical file: {entry.name}")
-
-    if entries_changed or len(valid_entries) != len(entries):
-        try:
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(valid_entries, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.warning(f"[Adhoc] Error updating {json_path}: {e}")
 
     # Reconcile archive.txt: only keep lines for video IDs that actually exist on disk
     if os.path.isfile(archive_path):
@@ -814,7 +631,7 @@ def get_all_adhoc_media_items(
 
 def delete_adhoc_media_item(filepath: str, db: Optional[Session] = None) -> bool:
     """
-    Deletes physical media file from disk and prunes its metadata from adhoc_info.json and archive.txt.
+    Deletes physical media file and companion thumbnail from disk, then reconciles archive.txt.
     """
     clean_path = os.path.abspath(filepath)
     parent_dir = os.path.dirname(clean_path)
@@ -827,8 +644,8 @@ def delete_adhoc_media_item(filepath: str, db: Optional[Session] = None) -> bool
             logger.error(f"[Adhoc] Error removing file {clean_path}: {e}")
             return False
 
-    # Check companion audio/video
-    for ext in (".mp3", ".opus", ".m4a", ".flac", ".mp4", ".mkv", ".webm"):
+    # Check companion audio/video or thumbnails
+    for ext in (".mp3", ".opus", ".m4a", ".flac", ".mp4", ".mkv", ".webm", ".jpg", ".webp", ".png"):
         companion = f"{base_name}{ext}"
         if companion != clean_path and os.path.isfile(companion):
             try:
@@ -902,7 +719,7 @@ def promote_adhoc_to_playlist(
 def run_startup_adhoc_reconciliation(db: Optional[Session] = None) -> None:
     """
     Server startup activity:
-    Scans and reconciles all tracked ad-hoc directories, prunes offline-deleted items from adhoc_info.json,
+    Scans and reconciles all tracked ad-hoc directories, cleans archive.txt of deleted items,
     and updates directory MRU statistics.
     """
     logger.info("[STARTUP] Reconciling tracked ad-hoc directories and metadata...")
@@ -942,14 +759,12 @@ def find_existing_local_video(target_dir: str, video_id: str, db: Optional[Sessi
 
     # 2. Check central SQLite Track Index
     try:
-        from app.core.track_indexer import check_track_exists_locally
-        track_info = check_track_exists_locally(video_id, db=db)
-        if track_info and track_info.get("primary_filepath"):
-            fp = track_info["primary_filepath"]
-            if os.path.isfile(fp):
-                ext = os.path.splitext(fp)[1].lower()
-                if ext in (".mp4", ".mkv", ".webm"):
-                    return fp
+        from app.repositories import TrackRepository
+        track = TrackRepository.get_by_video_id(video_id, db=db)
+        if track and track.primary_filepath and os.path.isfile(track.primary_filepath):
+            ext = os.path.splitext(track.primary_filepath)[1].lower()
+            if ext in (".mp4", ".mkv", ".webm"):
+                return track.primary_filepath
     except Exception as e:
         logger.warning(f"[Adhoc] Error querying track index for video {video_id}: {e}")
 
@@ -1259,8 +1074,8 @@ def execute_adhoc_download(
             elif video_quality and video_quality not in ("best", "0"):
                 res_list.append(f"{video_quality}p")
 
-            # Update adhoc metadata file on disk
-            write_log("Updating adhoc metadata index (adhoc_info.json)...")
+            # Update adhoc download archive on disk
+            write_log("Updating download archive (archive.txt)...")
             _update_adhoc_metadata(
                 target_dir=target_dir,
                 video_info=info,

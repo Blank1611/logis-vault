@@ -103,7 +103,7 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
             norm_folder_path in known_adhoc_paths
             or entry_lower == "_adhoc_downloads"
             or (settings.ADHOC_DOWNLOAD_PATH and entry_lower == os.path.basename(settings.ADHOC_DOWNLOAD_PATH).lower())
-            or os.path.isfile(os.path.join(folder_path, "adhoc_info.json"))
+            or os.path.isfile(os.path.join(folder_path, "archive.txt"))
         )
 
         if is_adhoc:

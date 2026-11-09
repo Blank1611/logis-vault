@@ -107,13 +107,6 @@ export const AdhocMediaViewer: React.FC<AdhocMediaViewerProps> = ({
     return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
   }
 
-  const formatDuration = (seconds?: number) => {
-    if (!seconds) return '00:00'
-    const m = Math.floor(seconds / 60)
-    const s = Math.floor(seconds % 60)
-    return `${m}:${s < 10 ? '0' : ''}${s}`
-  }
-
   const formatDate = (isoString?: string) => {
     if (!isoString) return ''
     try {
@@ -385,7 +378,7 @@ export const AdhocMediaViewer: React.FC<AdhocMediaViewerProps> = ({
                     onClick={() => handleSort('title')}
                   >
                     <div className="flex items-center gap-1.5">
-                      <span>Title & Channel</span>
+                      <span>File Title</span>
                       {renderSortIcon('title')}
                     </div>
                   </th>
@@ -480,18 +473,16 @@ export const AdhocMediaViewer: React.FC<AdhocMediaViewerProps> = ({
                         </div>
                       </td>
 
-                      {/* Title & Channel */}
+                      {/* File Title */}
                       <td className="py-2.5 px-3">
                         <div className="font-medium text-gray-100 break-words" title={item.title}>
                           {item.title}
                         </div>
-                        <div className="flex items-center gap-2 text-[11px] text-gray-400 mt-0.5">
-                          <span className="truncate">{item.uploader}</span>
-                          {item.duration > 0 && <span>• {formatDuration(item.duration)}</span>}
-                          {item.id && !item.id.startsWith('file_') && (
+                        {item.id && !item.id.startsWith('file_') && (
+                          <div className="flex items-center gap-2 text-[11px] text-gray-400 mt-0.5">
                             <span className="font-mono text-gray-500">[{item.id}]</span>
-                          )}
-                        </div>
+                          </div>
+                        )}
                       </td>
 
                       {/* Directory Column */}
@@ -632,7 +623,7 @@ export const AdhocMediaViewer: React.FC<AdhocMediaViewerProps> = ({
               {itemToDelete.title}
             </div>
             <p className="text-gray-400 text-[11px]">
-              This removes the file from disk and prunes its metadata from <span className="font-mono text-gray-300">adhoc_info.json</span>.
+              This permanently removes the file from disk and unblocks re-downloading in <span className="font-mono text-gray-300">archive.txt</span>.
             </p>
           </div>
         </Modal>

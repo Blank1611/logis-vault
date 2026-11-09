@@ -89,7 +89,7 @@ class TestAdhocManagement(unittest.TestCase):
         self.assertNotIn(os.path.abspath(custom_folder), [d["path"] for d in dirs_final])
 
     def test_self_healing_reconciliation_on_deleted_file(self):
-        """Test that deleted/moved files are pruned from adhoc_info.json and archive.txt"""
+        """Test that deleted/moved files are pruned from scan and archive.txt"""
         target_dir = os.path.join(self.temp_mount.name, "TestDir")
         os.makedirs(target_dir, exist_ok=True)
 
@@ -124,7 +124,7 @@ class TestAdhocManagement(unittest.TestCase):
             self.assertNotIn("vid12345678", content)
 
     def test_unindexed_physical_file_auto_discovery(self):
-        """Test that manually placed or unindexed media files are auto-discovered into adhoc_info.json"""
+        """Test that manually placed or unindexed media files are auto-discovered directly from disk"""
         target_dir = os.path.join(self.temp_mount.name, "ManualDrop")
         os.makedirs(target_dir, exist_ok=True)
 
@@ -168,12 +168,12 @@ class TestAdhocManagement(unittest.TestCase):
         # Filter by directory
         filt_dir = get_all_adhoc_media_items(directory_filter="FolderA", db=self.db)
         self.assertEqual(filt_dir["total_items"], 1)
-        self.assertEqual(filt_dir["items"][0]["title"], "Guitar Solo")
+        self.assertEqual(filt_dir["items"][0]["title"], "Guitar Solo [vidAAAA1111]")
 
         # Filter by media type
         filt_type = get_all_adhoc_media_items(media_type_filter="audio", db=self.db)
         self.assertEqual(filt_type["total_items"], 1)
-        self.assertEqual(filt_type["items"][0]["title"], "Tech Podcast")
+        self.assertEqual(filt_type["items"][0]["title"], "Tech Podcast [vidBBBB2222]")
 
         # Search filter
         filt_search = get_all_adhoc_media_items(search="Guitar", db=self.db)
@@ -424,7 +424,7 @@ class TestAdhocManagement(unittest.TestCase):
         self.assertEqual(item["media_type"], "video")
 
     def test_dual_video_and_audio_file_splitting_and_format_backfill(self):
-        """Test that legacy collapsed entries with both video & audio are split into two distinct items and format is backfilled"""
+        """Test that dual video & audio files on disk are discovered as two distinct items"""
         target_dir = os.path.join(self.temp_mount.name, "DualTest")
         os.makedirs(target_dir, exist_ok=True)
 
@@ -434,21 +434,6 @@ class TestAdhocManagement(unittest.TestCase):
             f.write(b"video data")
         with open(aud_path, "wb") as f:
             f.write(b"audio data")
-
-        # Write legacy collapsed entry lacking format
-        legacy_entry = [{
-            "id": "vid123",
-            "title": "DualSong",
-            "uploader": "Artist",
-            "duration": 180,
-            "filepath": vid_path,
-            "audio_filepath": aud_path,
-            # format missing
-            "resolution": "1080p",
-            "media_type": "audio"
-        }]
-        with open(os.path.join(target_dir, "adhoc_info.json"), "w", encoding="utf-8") as f:
-            json.dump(legacy_entry, f)
 
         res = reconcile_and_scan_directory(target_dir)
         # Should now have 2 items: 1 video and 1 audio

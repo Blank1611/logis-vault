@@ -606,25 +606,34 @@ async def download_adhoc_file(job_id: int, db: Session = Depends(get_db)):
         if os.path.isfile(candidate):
             file_to_send = candidate
 
-    if not file_to_send:
-        adhoc_dir = settings.get_adhoc_download_path()
-        info_json = os.path.join(adhoc_dir, "adhoc_info.json")
-        if os.path.isfile(info_json):
+    if not file_to_send and job.current_video_id:
+        from app.services.adhoc_service import get_tracked_directories, MEDIA_EXTENSIONS
+        candidate_dirs = [settings.get_adhoc_download_path()]
+        try:
+            for td in get_tracked_directories(db=db):
+                p = td.get("path")
+                if p and p not in candidate_dirs and os.path.isdir(p):
+                    candidate_dirs.append(p)
+        except Exception:
+            pass
+
+        target_vid = f"[{job.current_video_id}]"
+        for cdir in candidate_dirs:
+            if not os.path.isdir(cdir):
+                continue
             try:
-                import json
-                with open(info_json, "r", encoding="utf-8") as f:
-                    entries = json.load(f)
-                    for item in entries:
-                        if item.get("id") == job.current_video_id:
-                            if "audio" in (job.job_type or "") and item.get("audio_filepath") and os.path.isfile(item["audio_filepath"]):
-                                file_to_send = item["audio_filepath"]
-                            elif item.get("filepath") and os.path.isfile(item["filepath"]):
-                                file_to_send = item["filepath"]
-                            elif item.get("audio_filepath") and os.path.isfile(item["audio_filepath"]):
-                                file_to_send = item["audio_filepath"]
-                            break
+                for fname in os.listdir(cdir):
+                    if target_vid in fname:
+                        f_ext = os.path.splitext(fname)[1].lower()
+                        if f_ext in MEDIA_EXTENSIONS:
+                            cand_path = os.path.join(cdir, fname)
+                            if os.path.isfile(cand_path):
+                                file_to_send = cand_path
+                                break
             except Exception:
                 pass
+            if file_to_send:
+                break
 
     if not file_to_send or not os.path.isfile(file_to_send):
         raise HTTPException(status_code=404, detail="Downloaded media file not found on server")
@@ -690,7 +699,7 @@ async def get_adhoc_items(
 @router.delete("/adhoc/items")
 async def delete_adhoc_item(filepath: str = Query(...), db: Session = Depends(get_db)):
     """
-    Delete an ad-hoc file from disk and clean adhoc_info.json and archive.txt.
+    Delete an ad-hoc file from disk and clean archive.txt.
     """
     from app.services.adhoc_service import delete_adhoc_media_item
     safe_file = resolve_safe_path(filepath)
