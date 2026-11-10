@@ -168,12 +168,12 @@ class TestAdhocManagement(unittest.TestCase):
         # Filter by directory
         filt_dir = get_all_adhoc_media_items(directory_filter="FolderA", db=self.db)
         self.assertEqual(filt_dir["total_items"], 1)
-        self.assertEqual(filt_dir["items"][0]["title"], "Guitar Solo [vidAAAA1111]")
+        self.assertEqual(filt_dir["items"][0]["title"], "Guitar Solo [vidAAAA1111].mp4")
 
         # Filter by media type
         filt_type = get_all_adhoc_media_items(media_type_filter="audio", db=self.db)
         self.assertEqual(filt_type["total_items"], 1)
-        self.assertEqual(filt_type["items"][0]["title"], "Tech Podcast [vidBBBB2222]")
+        self.assertEqual(filt_type["items"][0]["title"], "Tech Podcast [vidBBBB2222].mp3")
 
         # Search filter
         filt_search = get_all_adhoc_media_items(search="Guitar", db=self.db)
@@ -416,8 +416,8 @@ class TestAdhocManagement(unittest.TestCase):
         res = reconcile_and_scan_directory(target_dir)
         self.assertEqual(res["item_count"], 1)
         item = res["items"][0]
-        # Title should match exact filename without extension, preserving [Offizielles Musikvideo] and [jEuBa23RkH0]
-        expected_title = "Bodo Wartke • Kuckuck und Hai (feat. @Tom.Boettcher ) [Offizielles Musikvideo] [jEuBa23RkH0]"
+        # Title should match exact disk filename verbatim including extension
+        expected_title = "Bodo Wartke • Kuckuck und Hai (feat. @Tom.Boettcher ) [Offizielles Musikvideo] [jEuBa23RkH0].mp4"
         self.assertEqual(item["title"], expected_title)
         self.assertEqual(item["id"], "jEuBa23RkH0")
         self.assertEqual(item["format"], "mp4")

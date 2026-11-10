@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react'
+import React, { createContext, useContext, useEffect } from 'react'
 
 interface ThemeContextType {
   darkMode: boolean
@@ -9,38 +9,26 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined)
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [darkMode, setDarkModeState] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem('darkMode')
-      return saved !== null ? JSON.parse(saved) : true
-    } catch {
-      return true
-    }
-  })
-
   useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-    }
+    // Unconditionally enforce dark mode and migrate any legacy 'false' localStorage
+    document.documentElement.classList.add('dark')
     try {
-      localStorage.setItem('darkMode', JSON.stringify(darkMode))
+      localStorage.setItem('darkMode', 'true')
     } catch (e) {
       console.error('Failed to save darkMode in localStorage', e)
     }
-  }, [darkMode])
+  }, [])
 
   const toggleDarkMode = () => {
-    setDarkModeState(prev => !prev)
+    // Locked in Dark Mode
   }
 
-  const setDarkMode = (val: boolean) => {
-    setDarkModeState(val)
+  const setDarkMode = (_val: boolean) => {
+    // Locked in Dark Mode
   }
 
   return (
-    <ThemeContext.Provider value={{ darkMode, toggleDarkMode, setDarkMode }}>
+    <ThemeContext.Provider value={{ darkMode: true, toggleDarkMode, setDarkMode }}>
       {children}
     </ThemeContext.Provider>
   )

@@ -76,11 +76,9 @@ class TestAudioExport(unittest.TestCase):
         open(a1, "w").close()
         open(a2, "w").close()
 
-        # Write snapshot JSON with top-to-bottom YouTube order
-        snapshot_dir = os.path.join(playlist_dir, "playlist_info_snapshot")
-        os.makedirs(snapshot_dir, exist_ok=True)
-        snapshot_file = os.path.join(snapshot_dir, "playlist_info.json")
-        with open(snapshot_file, "w", encoding="utf-8") as f:
+        # Write root JSON with top-to-bottom YouTube order
+        info_file = os.path.join(playlist_dir, "playlist_info.json")
+        with open(info_file, "w", encoding="utf-8") as f:
             json.dump({
                 "title": "Synthwave",
                 "entries": [

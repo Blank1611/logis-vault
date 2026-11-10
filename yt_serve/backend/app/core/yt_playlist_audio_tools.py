@@ -721,10 +721,7 @@ def resolve_track_metadata(
     safe_title = playlist_title or os.path.basename(playlist_folder)
 
     # Tier 1: Canonical playlist_info.json on disk
-    snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-    info_path = os.path.join(snapshot_dir, "playlist_info.json")
-    if not os.path.isfile(info_path):
-        info_path = os.path.join(playlist_folder, "playlist_info.json")
+    info_path = os.path.join(playlist_folder, "playlist_info.json")
 
     if os.path.isfile(info_path):
         try:
@@ -821,11 +818,8 @@ def build_aligned_playlist_sequence(
     """
     safe_title = playlist_title or os.path.basename(playlist_folder)
 
-    # 1. Load snapshot playlist_info.json first to discover known IDs
-    snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-    info_path = os.path.join(snapshot_dir, "playlist_info.json")
-    if not os.path.isfile(info_path):
-        info_path = os.path.join(playlist_folder, "playlist_info.json")
+    # 1. Load canonical playlist_info.json
+    info_path = os.path.join(playlist_folder, "playlist_info.json")
 
     entries: List[dict] = []
     archived_entries: List[dict] = []
@@ -1026,9 +1020,7 @@ def _is_playlist_info_fresh(playlist_folder: str) -> bool:
     Check if playlist_info.json was created today (same date as current date).
     Returns True if file exists and was created today, False otherwise.
     """
-    snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-    info_path = os.path.join(snapshot_dir, "playlist_info.json")
-    
+    info_path = os.path.join(playlist_folder, "playlist_info.json")
     if not os.path.exists(info_path):
         return False
     
@@ -1049,9 +1041,7 @@ def _load_cached_playlist_info(playlist_folder: str) -> Optional[dict]:
     Load playlist info from cached playlist_info.json file.
     Returns None if file doesn't exist or can't be loaded.
     """
-    snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-    info_path = os.path.join(snapshot_dir, "playlist_info.json")
-    
+    info_path = os.path.join(playlist_folder, "playlist_info.json")
     if not os.path.exists(info_path):
         return None
     
@@ -1076,20 +1066,16 @@ def _get_playlist_file_lock(playlist_folder: str) -> threading.Lock:
 
 def _save_playlist_info_with_versioning(playlist_folder: str, info: dict, source: str = "ondemand"):
     """
-    Save playlist_info.json to the playlist_info_snapshot subdirectory.
-    If file already exists, rename old file with creation date before saving new one.
+    Save playlist_info.json directly to the playlist root directory.
+    If file already exists, preserves historical entries into archived_entries.
     Automatically stages and commits atomic Git versioning if changes are detected.
     Protected with a per-playlist file lock to prevent concurrent write collisions.
     """
     folder_lock = _get_playlist_file_lock(playlist_folder)
     with folder_lock:
-        # Create snapshot subdirectory
-        snapshot_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-        os.makedirs(snapshot_dir, exist_ok=True)
+        info_path = os.path.join(playlist_folder, "playlist_info.json")
         
-        info_path = os.path.join(snapshot_dir, "playlist_info.json")
-        
-        # Load previous info before renaming to compute exact deltas for Git
+        # Load previous info before saving to compute exact deltas for Git
         old_info = None
         if os.path.isfile(info_path):
             try:
@@ -1142,7 +1128,7 @@ def _save_playlist_info_with_versioning(playlist_folder: str, info: dict, source
         with open(info_path, "w", encoding="utf-8") as f:
             json.dump(info, f, ensure_ascii=False, indent=2)
 
-        print(f"  Saved playlist_info.json to: playlist_info_snapshot/")
+        print(f"  Saved playlist_info.json to: {playlist_folder}/")
 
         # Git metadata versioning: stage & commit atomically for this playlist
         try:
@@ -1233,7 +1219,7 @@ def _build_playlist_paths(
 ) -> Tuple[str, str, str]:
     """
     Build paths for playlist folder, archive file, and audio folder.
-    If create_folders is True, creates the folders immediately including playlist_info_snapshot.
+    If create_folders is True, creates the folders immediately.
     """
     safe_title = _sanitize_title(title)
     playlist_folder = os.path.join(BASE_DOWNLOAD_PATH, safe_title)
@@ -1243,12 +1229,10 @@ def _build_playlist_paths(
     else:
         label = format_label or resolve_audio_format_info(None)[0]
     audio_folder = os.path.join(playlist_folder, f"{safe_title} [{label}]")
-    snapshot_folder = os.path.join(playlist_folder, "playlist_info_snapshot")
 
     if create_folders:
         os.makedirs(playlist_folder, exist_ok=True)
         os.makedirs(audio_folder, exist_ok=True)
-        os.makedirs(snapshot_folder, exist_ok=True)
 
     return playlist_folder, archive_file, audio_folder
 

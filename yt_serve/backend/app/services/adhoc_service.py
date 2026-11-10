@@ -493,8 +493,8 @@ def reconcile_and_scan_directory(dir_path: str) -> Dict[str, Any]:
                         else:
                             present_vids.add(vid)
 
-                        # Preserve exact disk filename without extension
-                        title = os.path.splitext(entry.name)[0].strip() or entry.name
+                        # Preserve exact physical disk filename verbatim including extension
+                        title = entry.name
 
                         # Check for local companion thumbnail if any
                         base_no_ext = os.path.splitext(real_p)[0]

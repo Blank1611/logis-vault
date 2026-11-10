@@ -248,6 +248,54 @@ class TestOnboardingService(unittest.TestCase):
         self.assertEqual(manual_track.downloaded_fps, 60)
         self.assertEqual(manual_track.downloaded_audio_codec, "aac")
 
+    def test_onboarding_sse_stream_and_progress_dispatch(self):
+        """Verify onboarding SSE subscriber registration, dispatch, and stream endpoint"""
+        import asyncio
+        from app.services.onboarding_service import (
+            register_onboarding_sse_queue,
+            unregister_onboarding_sse_queue,
+            get_latest_onboarding_state,
+            dispatch_onboarding_progress,
+        )
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        queue = asyncio.Queue(maxsize=10)
+        register_onboarding_sse_queue(queue)
+        try:
+            payload = {
+                "playlist_index": 1,
+                "total_playlists": 5,
+                "playlist_title": "Test Playlist",
+                "tracks_probed": 10,
+                "tracks_total": 50,
+                "overall_percent": 67,
+                "stage": "probing"
+            }
+            dispatch_onboarding_progress(payload)
+
+            self.assertEqual(queue.qsize(), 1)
+            received = queue.get_nowait()
+            self.assertEqual(received["playlist_title"], "Test Playlist")
+            self.assertEqual(received["overall_percent"], 67)
+            self.assertEqual(get_latest_onboarding_state(), payload)
+
+            # Test HTTP GET /api/config/onboarding/stream
+            client = TestClient(app)
+            with client.stream("GET", "/api/config/onboarding/stream") as response:
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("text/event-stream", response.headers.get("content-type", ""))
+                # Read first line / chunk
+                for line in response.iter_lines():
+                    if line.startswith("data:"):
+                        data_str = line[5:].strip()
+                        data = json.loads(data_str)
+                        self.assertEqual(data["playlist_title"], "Test Playlist")
+                        break
+        finally:
+            unregister_onboarding_sse_queue(queue)
+
+
 if __name__ == "__main__":
     unittest.main()
 

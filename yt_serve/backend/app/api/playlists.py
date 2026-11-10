@@ -313,19 +313,10 @@ async def get_playlist_video_info(playlist_id: int, db: Session = Depends(get_db
     
     # Get playlist folder using case-insensitive resolver
     playlist_folder = ytdlp_service.resolve_playlist_folder(playlist.title)
-    snapshot_folder = os.path.join(playlist_folder, "playlist_info_snapshot")
     
-    latest_file = None
-    if os.path.exists(snapshot_folder):
-        json_files = [f for f in os.listdir(snapshot_folder) if f.startswith("playlist_info_") and f.endswith(".json")]
-        if json_files:
-            json_files.sort(reverse=True)
-            latest_file = os.path.join(snapshot_folder, json_files[0])
-            
-    if not latest_file:
-        direct_file = os.path.join(playlist_folder, "playlist_info.json")
-        if os.path.exists(direct_file):
-            latest_file = direct_file
+    # Canonical root playlist_info.json
+    direct_file = os.path.join(playlist_folder, "playlist_info.json")
+    latest_file = direct_file if os.path.exists(direct_file) else None
     
     # Build map of video_id -> info
     video_info = {}
@@ -897,14 +888,14 @@ async def extract_single_track_audio(
     if not ffmpeg_path:
         raise HTTPException(status_code=500, detail="FFmpeg not found on system")
 
-    # Read YouTube index and metadata from snapshot
+    # Read YouTube index and metadata from canonical playlist_info.json
     meta = None
     idx = 1
     total_tracks = 1
-    snapshot_file = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
-    if os.path.isfile(snapshot_file):
+    info_file = os.path.join(playlist_folder, "playlist_info.json")
+    if os.path.isfile(info_file):
         try:
-            with open(snapshot_file, "r", encoding="utf-8") as f:
+            with open(info_file, "r", encoding="utf-8") as f:
                 s_data = json.load(f)
                 entries = s_data.get("entries") or []
                 total_tracks = max(len(entries), 1)

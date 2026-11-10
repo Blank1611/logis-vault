@@ -1,10 +1,13 @@
 """
 Configuration API endpoints
 """
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import os
+import json
+import asyncio
 from pathlib import Path
 from sqlalchemy.orm import Session
 
@@ -752,12 +755,76 @@ async def confirm_onboarding_ingest(
     db: Session = Depends(get_db)
 ):
     """Ingest discovered playlists and mark initial setup completed"""
+    from starlette.concurrency import run_in_threadpool
     from app.services.onboarding_service import ingest_discovered_library
     from app.models.database import set_system_setting
     target = payload.base_path or settings.BASE_DOWNLOAD_PATH
-    res = ingest_discovered_library(discovered_items=payload.items, base_path=target, db=db)
+    # Offload heavy synchronous ingestion to worker thread pool, keeping event loop free for SSE
+    res = await run_in_threadpool(
+        ingest_discovered_library,
+        discovered_items=payload.items,
+        base_path=target,
+        db=db
+    )
     set_system_setting("setup_completed", "true", db=db)
     return res
+
+
+@router.get("/onboarding/stream")
+async def stream_onboarding_progress(request: Request):
+    """
+    Stream real-time onboarding library ingestion progress and track-level telemetry via Server-Sent Events (SSE).
+    """
+    from app.services.onboarding_service import (
+        register_onboarding_sse_queue,
+        unregister_onboarding_sse_queue,
+        get_latest_onboarding_state,
+    )
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    register_onboarding_sse_queue(loop, queue)
+
+    async def event_generator():
+        last_ping_time = loop.time()
+
+        # Send current state immediately on initial connection or reconnect
+        latest = get_latest_onboarding_state()
+        if latest:
+            yield f"event: progress\ndata: {json.dumps(latest)}\n\n"
+
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    yield f"event: progress\ndata: {json.dumps(payload)}\n\n"
+                    if payload.get("stage") == "completed":
+                        break
+                except asyncio.TimeoutError:
+                    pass
+
+                now = loop.time()
+                if now - last_ping_time >= 15.0:
+                    last_ping_time = now
+                    yield f": ping\n\n"
+
+        except asyncio.CancelledError:
+            pass
+        finally:
+            unregister_onboarding_sse_queue(loop, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
 
 
 class BatchLinkItem(BaseModel):

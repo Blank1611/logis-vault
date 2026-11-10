@@ -155,6 +155,19 @@ class TestRoutesContract(unittest.TestCase):
         self.assertEqual(res_jobs_slash.status_code, 200)
         self.assertIsInstance(res_jobs_slash.json(), list)
 
+    def test_playlist_tracks_inspect_endpoint(self):
+        """Verify GET /api/playlists/{id}/tracks executes cleanly without 500 error or ImportError"""
+        db = self.TestingSession()
+        pl = Playlist(url="https://www.youtube.com/playlist?list=PLinspect_test", title="Inspect Test Playlist", local_count=1)
+        db.add(pl)
+        db.commit()
+        pl_id = pl.id
+        db.close()
+
+        res = self.client.get(f"/api/playlists/{pl_id}/tracks")
+        self.assertEqual(res.status_code, 200)
+        self.assertIsInstance(res.json(), list)
+
     def test_all_registered_get_routes_sanity(self):
         """
         Automated Route Discovery Sanity:

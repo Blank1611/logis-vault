@@ -102,7 +102,7 @@ class TestAdhocDownloads(unittest.TestCase):
         res = reconcile_and_scan_directory(target_dir)
         self.assertEqual(res["item_count"], 1)
         self.assertEqual(res["items"][0]["id"], "metaVid999")
-        self.assertEqual(res["items"][0]["title"], "Metadata Song [metaVid999]")
+        self.assertEqual(res["items"][0]["title"], "Metadata Song [metaVid999].mp4")
 
     @patch("yt_dlp.YoutubeDL")
     def test_execute_adhoc_download(self, mock_ydl_class):
@@ -159,7 +159,7 @@ class TestAdhocDownloads(unittest.TestCase):
         scan_res = reconcile_and_scan_directory(target_dir)
         self.assertEqual(scan_res["item_count"], 1)
         self.assertEqual(scan_res["items"][0]["id"], "adhocExec123")
-        self.assertEqual(scan_res["items"][0]["title"], "Adhoc Executed Song [adhocExec123]")
+        self.assertEqual(scan_res["items"][0]["title"], "Adhoc Executed Song [adhocExec123].mp4")
 
         # Verify Track table is decoupled (no phantom track rows created)
         indexed_track = TrackRepository.get_by_video_id("adhocExec123", db=self.db)

@@ -17,7 +17,6 @@ import {
   Film,
   Music,
   Filter,
-  Layers,
   CheckSquare,
   Square,
   AlertTriangle,
@@ -77,11 +76,7 @@ export const AdhocMediaViewer: React.FC<AdhocMediaViewerProps> = ({
   const [itemToDelete, setItemToDelete] = useState<AdhocMediaItem | null>(null)
   const [isDeleting, setIsDeleting] = useState<boolean>(false)
 
-  // Playlist Promotion Modal
-  const [showPromoteModal, setShowPromoteModal] = useState<boolean>(false)
-  const [promoteTitle, setPromoteTitle] = useState<string>('')
   const [selectedFilepaths, setSelectedFilepaths] = useState<string[]>([])
-  const [isPromoting, setIsPromoting] = useState<boolean>(false)
 
   const fetchItems = async () => {
     setIsLoading(true)
@@ -195,44 +190,6 @@ export const AdhocMediaViewer: React.FC<AdhocMediaViewerProps> = ({
     }
   }
 
-  // Promote Action
-  const handlePromoteConfirm = async () => {
-    const title = promoteTitle.trim()
-    if (!title) {
-      toast.error('Please enter a playlist title')
-      return
-    }
-
-    const filesToPromote = selectedFilepaths.length > 0
-      ? selectedFilepaths
-      : filteredItems.map((it) => it.filepath || it.audio_filepath || '').filter(Boolean)
-
-    if (filesToPromote.length === 0) {
-      toast.error('No valid media files found to promote')
-      return
-    }
-
-    const firstItem = filteredItems.find((it) => (it.filepath || it.audio_filepath) === filesToPromote[0])
-    const sourceDir = firstItem?.directory || data?.directories[0] || '/downloads'
-
-    setIsPromoting(true)
-    try {
-      const res = await adhocApi.promoteToPlaylist({
-        source_directory: sourceDir,
-        filepaths: filesToPromote,
-        playlist_title: title,
-      })
-      toast.success(`Promoted ${res.data.tracks_added} tracks to playlist "${res.data.playlist_title}"`)
-      setShowPromoteModal(false)
-      setPromoteTitle('')
-      setSelectedFilepaths([])
-    } catch (err: any) {
-      toast.error('Failed to promote media to playlist')
-    } finally {
-      setIsPromoting(false)
-    }
-  }
-
   const toggleSelectAll = () => {
     const allPaths = filteredItems.map((it) => it.filepath || it.audio_filepath || '').filter(Boolean)
     if (selectedFilepaths.length === allPaths.length) {
@@ -265,20 +222,6 @@ export const AdhocMediaViewer: React.FC<AdhocMediaViewerProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {filteredItems.length > 0 && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                setPromoteTitle(selectedDirectory !== 'all' ? selectedDirectory : 'Ad-hoc Collection')
-                setShowPromoteModal(true)
-              }}
-              icon={<Layers className="w-3.5 h-3.5 text-blue-400" />}
-            >
-              Promote to Playlist {selectedFilepaths.length > 0 ? `(${selectedFilepaths.length})` : ''}
-            </Button>
-          )}
-
           <Button
             variant="ghost"
             size="sm"
@@ -475,8 +418,8 @@ export const AdhocMediaViewer: React.FC<AdhocMediaViewerProps> = ({
 
                       {/* File Title */}
                       <td className="py-2.5 px-3">
-                        <div className="font-medium text-gray-100 break-words" title={item.title}>
-                          {item.title}
+                        <div className="font-medium text-gray-100 break-words font-mono text-xs select-text" title={item.filename || item.title}>
+                          {item.filename || item.title}
                         </div>
                         {item.id && !item.id.startsWith('file_') && (
                           <div className="flex items-center gap-2 text-[11px] text-gray-400 mt-0.5">
@@ -625,66 +568,6 @@ export const AdhocMediaViewer: React.FC<AdhocMediaViewerProps> = ({
             <p className="text-gray-400 text-[11px]">
               This permanently removes the file from disk and unblocks re-downloading in <span className="font-mono text-gray-300">archive.txt</span>.
             </p>
-          </div>
-        </Modal>
-      )}
-
-      {/* Promote to Playlist Modal */}
-      {showPromoteModal && (
-        <Modal
-          isOpen={true}
-          onClose={() => setShowPromoteModal(false)}
-          title={
-            <div className="flex items-center gap-2 text-blue-400">
-              <Layers className="w-5 h-5" />
-              <span>Promote to Managed Playlist</span>
-            </div>
-          }
-          subtitle="Convert staged ad-hoc media into a permanent SQLite playlist"
-          maxWidth="md"
-          footer={
-            <div className="flex items-center justify-end gap-2 w-full">
-              <Button variant="secondary" size="sm" onClick={() => setShowPromoteModal(false)}>
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={handlePromoteConfirm}
-                disabled={!promoteTitle.trim() || isPromoting}
-                icon={isPromoting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined}
-              >
-                Promote {selectedFilepaths.length > 0 ? `(${selectedFilepaths.length})` : 'All'}
-              </Button>
-            </div>
-          }
-        >
-          <div className="space-y-3 text-xs text-gray-300">
-            <div>
-              <label className="block text-gray-400 mb-1 font-medium">
-                Playlist Title
-              </label>
-              <input
-                type="text"
-                value={promoteTitle}
-                onChange={(e) => setPromoteTitle(e.target.value)}
-                placeholder="e.g. Synthwave Gems, Dev Tutorials"
-                className="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                autoFocus
-              />
-            </div>
-
-            <div className="p-3 bg-gray-900/80 border border-gray-800 rounded text-[11px] text-gray-400 space-y-1">
-              <div className="flex justify-between">
-                <span>Items to convert:</span>
-                <span className="font-semibold text-white">
-                  {selectedFilepaths.length > 0 ? selectedFilepaths.length : filteredItems.length} tracks
-                </span>
-              </div>
-              <p className="text-gray-500">
-                These media files will be formally indexed into the Track table and placed in a new Playlist.
-              </p>
-            </div>
           </div>
         </Modal>
       )}

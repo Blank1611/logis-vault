@@ -249,17 +249,23 @@ class DownloadService:
         else:
             safe_title = tools._sanitize_title(title)
 
-        direct_path = os.path.join(self.base_path, safe_title)
+        try:
+            from app.core.config import settings
+            base_dir = settings.BASE_DOWNLOAD_PATH or self.base_path
+        except Exception:
+            base_dir = self.base_path
+
+        direct_path = os.path.join(base_dir, safe_title)
         if os.path.isdir(direct_path):
             return direct_path
 
         # Case-insensitive check against existing directories on disk
         try:
-            if os.path.isdir(self.base_path):
+            if os.path.isdir(base_dir):
                 safe_title_lower = safe_title.lower()
                 raw_title_lower = title.strip().lower()
-                for entry in os.listdir(self.base_path):
-                    entry_path = os.path.join(self.base_path, entry)
+                for entry in os.listdir(base_dir):
+                    entry_path = os.path.join(base_dir, entry)
                     if not os.path.isdir(entry_path) or entry.startswith('.'):
                         continue
                     entry_lower = entry.lower()
@@ -333,3 +339,23 @@ class DownloadService:
                 available_count += 1
         
         return local_count, available_count, unavailable_count
+
+
+# Default singleton instance for fast folder resolution and operations across endpoints
+def _get_default_ytdlp_service() -> DownloadService:
+    try:
+        from app.core.config import settings
+        return DownloadService(settings.BASE_DOWNLOAD_PATH, {
+            "audio_extract_mode": settings.AUDIO_EXTRACT_MODE,
+            "max_extraction_workers": settings.MAX_CONCURRENT_EXTRACTIONS,
+            "batch_size": settings.BATCH_SIZE,
+            "use_browser_cookies": settings.USE_BROWSER_COOKIES,
+            "browser_name": settings.BROWSER_NAME,
+            "cookies_file": settings.COOKIES_FILE,
+        })
+    except Exception:
+        return DownloadService("/downloads", {})
+
+
+ytdlp_service = _get_default_ytdlp_service()
+

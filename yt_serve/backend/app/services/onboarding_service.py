@@ -10,8 +10,9 @@ import json
 import glob
 import logging
 import threading
+import asyncio
 import time
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set, Tuple
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -31,6 +32,83 @@ def extract_video_id_from_filename(filename: str) -> Optional[str]:
     if match:
         return match.group(1) or match.group(2)
     return None
+
+
+# Global thread-safe SSE subscription registry for onboarding library ingestion
+_onboarding_subscribers: Set[Tuple[asyncio.AbstractEventLoop, asyncio.Queue]] = set()
+_onboarding_subscribers_lock = threading.Lock()
+_latest_onboarding_state: Optional[Dict[str, Any]] = None
+
+
+def register_onboarding_sse_queue(arg1: Any, arg2: Optional[asyncio.Queue] = None):
+    """
+    Register an SSE subscriber queue for real-time onboarding progress.
+    Supports both register_onboarding_sse_queue(loop, queue) and register_onboarding_sse_queue(queue).
+    """
+    if arg2 is not None:
+        loop = arg1
+        queue = arg2
+    else:
+        queue = arg1
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+    with _onboarding_subscribers_lock:
+        _onboarding_subscribers.add((loop, queue))
+
+
+def unregister_onboarding_sse_queue(arg1: Any, arg2: Optional[asyncio.Queue] = None):
+    """
+    Unregister an SSE subscriber queue.
+    Supports both unregister_onboarding_sse_queue(loop, queue) and unregister_onboarding_sse_queue(queue).
+    """
+    with _onboarding_subscribers_lock:
+        if arg2 is not None:
+            _onboarding_subscribers.discard((arg1, arg2))
+        else:
+            queue = arg1
+            for item in list(_onboarding_subscribers):
+                if item[1] == queue:
+                    _onboarding_subscribers.discard(item)
+
+
+def get_latest_onboarding_state() -> Optional[Dict[str, Any]]:
+    """Return the most recently dispatched onboarding progress payload."""
+    with _onboarding_subscribers_lock:
+        return _latest_onboarding_state
+
+
+def dispatch_onboarding_progress(payload: Dict[str, Any]):
+    """Thread-safe dispatch of onboarding progress to all active SSE queues."""
+    global _latest_onboarding_state
+    with _onboarding_subscribers_lock:
+        _latest_onboarding_state = payload
+        for loop, queue in list(_onboarding_subscribers):
+            def _put_to_queue(q=queue, p=payload):
+                try:
+                    q.put_nowait(p)
+                except asyncio.QueueFull:
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        q.put_nowait(p)
+                    except asyncio.QueueFull:
+                        pass
+
+            try:
+                if loop and loop.is_running() and not loop.is_closed():
+                    loop.call_soon_threadsafe(_put_to_queue)
+                else:
+                    _put_to_queue()
+            except Exception:
+                try:
+                    _put_to_queue()
+                except Exception:
+                    pass
 
 
 def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
@@ -107,43 +185,31 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
         audio_files = []
         is_verified_cache = False
 
-        # 1. Check for playlist_info.json or snapshots
-        info_json_candidates = [
-            os.path.join(folder_path, "playlist_info.json"),
-            os.path.join(folder_path, "playlist_info_snapshot", "playlist_info.json"),
-        ]
-        # Also check for any .info.json files
-        snapshot_dir = os.path.join(folder_path, "playlist_info_snapshot")
-        if os.path.isdir(snapshot_dir):
-            for f in os.listdir(snapshot_dir):
-                if f.endswith('.json'):
-                    info_json_candidates.append(os.path.join(snapshot_dir, f))
-
+        # 1. Check for canonical playlist_info.json at folder root
+        root_info = os.path.join(folder_path, "playlist_info.json")
         raw_url = ""
-        for candidate in info_json_candidates:
-            if os.path.isfile(candidate):
-                try:
-                    with open(candidate, "r", encoding="utf-8") as jf:
-                        data = json.load(jf)
-                        if isinstance(data, dict):
-                            playlist_title = data.get("title") or playlist_title
-                            candidate_url = (
-                                data.get("webpage_url") or 
-                                data.get("url") or 
-                                data.get("original_url") or 
-                                ""
-                            )
-                            if not candidate_url and data.get("id"):
-                                candidate_url = f"https://www.youtube.com/playlist?list={data.get('id')}"
-                            total_online_count = data.get("playlist_count") or len(data.get("entries", []))
-                            if candidate_url:
-                                raw_url = candidate_url
-                                # Authentic cache check: valid playlist type and entries or verified ID with count
-                                if data.get("_type") == "playlist" and (data.get("entries") or (data.get("id") and total_online_count > 0)):
-                                    is_verified_cache = True
-                                break
-                except Exception as json_err:
-                    logger.debug(f"Could not parse info json {candidate}: {json_err}")
+        if os.path.isfile(root_info):
+            try:
+                with open(root_info, "r", encoding="utf-8") as jf:
+                    data = json.load(jf)
+                    if isinstance(data, dict):
+                        playlist_title = data.get("title") or playlist_title
+                        candidate_url = (
+                            data.get("webpage_url") or 
+                            data.get("url") or 
+                            data.get("original_url") or 
+                            ""
+                        )
+                        if not candidate_url and data.get("id"):
+                            candidate_url = f"https://www.youtube.com/playlist?list={data.get('id')}"
+                        total_online_count = data.get("playlist_count") or len(data.get("entries", []))
+                        if candidate_url:
+                            raw_url = candidate_url
+                            # Authentic cache check: valid playlist type and entries or verified ID with count
+                            if data.get("_type") == "playlist" and (data.get("entries") or (data.get("id") and total_online_count > 0)):
+                                is_verified_cache = True
+            except Exception as json_err:
+                logger.debug(f"Could not parse info json {root_info}: {json_err}")
 
         # Stage 1: Syntax Filter & Corrupt Stub Quarantine
         if raw_url:
@@ -154,15 +220,11 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
                     f"[Auto-Discovery] Folder '{entry}' has invalid URL syntax '{raw_url}'. "
                     f"Removing corrupt metadata stub and classifying as unmanaged."
                 )
-                for stub_file in (
-                    os.path.join(folder_path, "playlist_info.json"),
-                    os.path.join(folder_path, "playlist_info_snapshot", "playlist_info.json")
-                ):
-                    if os.path.isfile(stub_file):
-                        try:
-                            os.remove(stub_file)
-                        except Exception as rem_err:
-                            logger.debug(f"Could not remove corrupt stub {stub_file}: {rem_err}")
+                if os.path.isfile(root_info):
+                    try:
+                        os.remove(root_info)
+                    except Exception as rem_err:
+                        logger.debug(f"Could not remove corrupt stub {root_info}: {rem_err}")
                 playlist_url = ""
 
         # 2. Check archive.txt / downloaded_videos.txt
@@ -265,8 +327,19 @@ def ingest_discovered_library(
             discovered_items = scan_res.get("discovered_playlists", [])
 
         workers = max(1, getattr(settings, "MAX_CONCURRENT_EXTRACTIONS", 4))
-        logger.info(f"[Onboarding] Starting library ingestion for {len(discovered_items)} discovered playlist(s) (concurrency={workers})...")
+        total_pls = len(discovered_items)
+        logger.info(f"[Onboarding] Starting library ingestion for {total_pls} discovered playlist(s) (concurrency={workers})...")
         onboarding_start = time.time()
+
+        dispatch_onboarding_progress({
+            "playlist_index": 0,
+            "total_playlists": total_pls,
+            "playlist_title": "Starting library ingestion...",
+            "tracks_probed": 0,
+            "tracks_total": 0,
+            "overall_percent": 60,
+            "stage": "starting"
+        })
 
         imported_count = 0
         skipped_count = 0
@@ -305,27 +378,20 @@ def ingest_discovered_library(
                         title = info.get("title") or title
                         url = info.get("webpage_url") or url
                         item["total_online_count"] = info.get("playlist_count") or len(info.get("entries", []))
-                        # Persist verified metadata dump to disk
-                        snapshot_dir = os.path.join(folder_path, "playlist_info_snapshot")
-                        os.makedirs(snapshot_dir, exist_ok=True)
+                        # Persist verified metadata dump to root playlist folder
                         with open(os.path.join(folder_path, "playlist_info.json"), "w", encoding="utf-8") as jf:
-                            json.dump(info, jf, indent=2)
-                        with open(os.path.join(snapshot_dir, "playlist_info.json"), "w", encoding="utf-8") as jf:
                             json.dump(info, jf, indent=2)
                     except Exception as probe_err:
                         logger.error(
                             f"[Auto-Discovery] Metadata verification probe failed for folder '{folder_name}' ({url}): {probe_err}. "
                             f"Rejecting from database and cleaning up corrupt stub."
                         )
-                        for stub_file in (
-                            os.path.join(folder_path, "playlist_info.json"),
-                            os.path.join(folder_path, "playlist_info_snapshot", "playlist_info.json")
-                        ):
-                            if os.path.isfile(stub_file):
-                                try:
-                                    os.remove(stub_file)
-                                except Exception:
-                                    pass
+                        stub_file = os.path.join(folder_path, "playlist_info.json")
+                        if os.path.isfile(stub_file):
+                            try:
+                                os.remove(stub_file)
+                            except Exception:
+                                pass
                         continue
 
                 new_playlist = PlaylistRepository.create(
@@ -422,17 +488,62 @@ def ingest_discovered_library(
             # Phase 1: Parallel media probing across MAX_EXTRACTION_WORKERS
             probed_meta = {}
             if planned_tracks:
-                from concurrent.futures import ThreadPoolExecutor
+                from concurrent.futures import ThreadPoolExecutor, as_completed
                 from app.core.track_indexer import probe_local_media_metadata
 
                 def _probe_entry(trk):
                     return trk["video_id"], probe_local_media_metadata(trk["filepath"], trk["audio_filepath"])
 
+                total_pl_tracks = len(planned_tracks)
+                probed_count = 0
+                log_interval = max(1, min(25, max(1, total_pl_tracks // 10)))
+
                 with ThreadPoolExecutor(max_workers=workers) as executor:
-                    for vid, meta in executor.map(_probe_entry, planned_tracks):
+                    future_to_trk = {executor.submit(_probe_entry, trk): trk for trk in planned_tracks}
+                    for future in as_completed(future_to_trk):
+                        vid, meta = future.result()
                         probed_meta[vid] = meta
+                        probed_count += 1
+
+                        if probed_count % log_interval == 0 or probed_count == total_pl_tracks:
+                            pct = int((probed_count / total_pl_tracks) * 100)
+                            logger.info(
+                                f"[Onboarding] [{idx}/{total_pls}] '{title}': "
+                                f"Probed {probed_count}/{total_pl_tracks} tracks ({pct}%) across {workers} workers..."
+                            )
+                            overall_fraction = ((idx - 1) + (probed_count / total_pl_tracks)) / max(total_pls, 1)
+                            overall_pct = min(95, int(60 + overall_fraction * 35))
+                            dispatch_onboarding_progress({
+                                "playlist_index": idx,
+                                "total_playlists": total_pls,
+                                "playlist_title": title,
+                                "tracks_probed": probed_count,
+                                "tracks_total": total_pl_tracks,
+                                "overall_percent": overall_pct,
+                                "stage": "probing"
+                            })
+            else:
+                dispatch_onboarding_progress({
+                    "playlist_index": idx,
+                    "total_playlists": total_pls,
+                    "playlist_title": title,
+                    "tracks_probed": 0,
+                    "tracks_total": 0,
+                    "overall_percent": min(95, int(60 + (idx / max(total_pls, 1)) * 35)),
+                    "stage": "probing"
+                })
 
             # Phase 2: Instantaneous single-threaded DB insertion
+            logger.info(f"[Onboarding] [{idx}/{total_pls}] '{title}': Inserting {len(planned_tracks)} tracks into database...")
+            dispatch_onboarding_progress({
+                "playlist_index": idx,
+                "total_playlists": total_pls,
+                "playlist_title": title,
+                "tracks_probed": len(planned_tracks),
+                "tracks_total": len(planned_tracks),
+                "overall_percent": min(95, int(60 + (idx / max(total_pls, 1)) * 35)),
+                "stage": "indexing"
+            })
             pl_indexed_count = 0
             for trk in planned_tracks:
                 vid = trk["video_id"]
@@ -453,12 +564,22 @@ def ingest_discovered_library(
                 tracks_indexed_count += 1
 
             pl_elapsed = time.time() - pl_start
-            logger.info(f"[Onboarding] [{idx}/{len(discovered_items)}] ✓ Finished '{title}': {pl_indexed_count} tracks indexed in {pl_elapsed:.2f}s.")
+            logger.info(f"[Onboarding] [{idx}/{total_pls}] ✓ Finished '{title}': {pl_indexed_count} tracks indexed in {pl_elapsed:.2f}s.")
 
         try:
             backfill_all_local_tracks_metadata(session)
         except Exception as bf_err:
             logger.debug(f"Media metadata backfill notice: {bf_err}")
+
+        dispatch_onboarding_progress({
+            "playlist_index": total_pls,
+            "total_playlists": total_pls,
+            "playlist_title": "All playlists indexed",
+            "tracks_probed": 0,
+            "tracks_total": 0,
+            "overall_percent": 95,
+            "stage": "completed"
+        })
 
         total_elapsed = time.time() - onboarding_start
         logger.info(f"[Onboarding] Complete: {imported_count} playlists imported, {skipped_count} existing, {tracks_indexed_count} tracks indexed in {total_elapsed:.2f}s.")
@@ -578,12 +699,8 @@ def batch_link_unmanaged_folders(
                         else:
                             logger.warning(f"[Unmanaged Linking] Target folder {new_target_path} already exists; keeping existing path {folder_path}")
 
-                # 3. Write playlist_info.json and snapshot
-                snapshot_dir = os.path.join(folder_path, "playlist_info_snapshot")
-                os.makedirs(snapshot_dir, exist_ok=True)
+                # 3. Write canonical playlist_info.json
                 with open(os.path.join(folder_path, "playlist_info.json"), "w", encoding="utf-8") as jf:
-                    json.dump(info, jf, indent=2)
-                with open(os.path.join(snapshot_dir, "playlist_info.json"), "w", encoding="utf-8") as jf:
                     json.dump(info, jf, indent=2)
 
                 # 4. Ingest and index tracks

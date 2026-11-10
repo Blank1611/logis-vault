@@ -49,8 +49,6 @@ class TestOrphanMediaPreservation(unittest.TestCase):
         """
         playlist_folder = os.path.join(self.temp_dir.name, "ClassicRock")
         os.makedirs(playlist_folder, exist_ok=True)
-        snap_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-        os.makedirs(snap_dir, exist_ok=True)
 
         info_data = {
             "title": "ClassicRock",
@@ -85,7 +83,7 @@ class TestOrphanMediaPreservation(unittest.TestCase):
             ]
         }
 
-        with open(os.path.join(snap_dir, "playlist_info.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(playlist_folder, "playlist_info.json"), "w", encoding="utf-8") as f:
             json.dump(info_data, f)
 
         # Create dummy physical files on disk for all 7 songs
@@ -120,8 +118,6 @@ class TestOrphanMediaPreservation(unittest.TestCase):
         """Verify 3-Tier resolution: Snapshot active -> Snapshot archived -> SQLite -> Regex"""
         playlist_folder = os.path.join(self.temp_dir.name, "TestLadder")
         os.makedirs(playlist_folder, exist_ok=True)
-        snap_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-        os.makedirs(snap_dir, exist_ok=True)
 
         info_data = {
             "title": "TestLadder",
@@ -132,7 +128,7 @@ class TestOrphanMediaPreservation(unittest.TestCase):
                 {"id": "tier1_arc", "title": "Archived Song", "uploader": "Archived Artist"}
             ]
         }
-        with open(os.path.join(snap_dir, "playlist_info.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(playlist_folder, "playlist_info.json"), "w", encoding="utf-8") as f:
             json.dump(info_data, f)
 
         # 1. Tier 1A: Snapshot active
@@ -223,8 +219,6 @@ class TestOrphanMediaPreservation(unittest.TestCase):
         """Verify generate_m3u_playlists writes both active and preserved tracks in exact sequence"""
         playlist_folder = os.path.join(self.temp_dir.name, "Synthwave")
         os.makedirs(playlist_folder, exist_ok=True)
-        snap_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-        os.makedirs(snap_dir, exist_ok=True)
 
         info = {
             "title": "Synthwave",
@@ -241,7 +235,7 @@ class TestOrphanMediaPreservation(unittest.TestCase):
                 }
             ]
         }
-        with open(os.path.join(snap_dir, "playlist_info.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(playlist_folder, "playlist_info.json"), "w", encoding="utf-8") as f:
             json.dump(info, f)
 
         # Create video files in root
@@ -289,8 +283,6 @@ class TestOrphanMediaPreservation(unittest.TestCase):
         """Verify _save_playlist_info_with_versioning automatically saves missing songs into archived_entries"""
         playlist_folder = os.path.join(self.temp_dir.name, "DeltaTest")
         os.makedirs(playlist_folder, exist_ok=True)
-        snap_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-        os.makedirs(snap_dir, exist_ok=True)
 
         old_info = {
             "title": "DeltaTest",
@@ -300,7 +292,7 @@ class TestOrphanMediaPreservation(unittest.TestCase):
                 {"id": "keep2", "title": "Staying 2", "duration": 300}
             ]
         }
-        with open(os.path.join(snap_dir, "playlist_info.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(playlist_folder, "playlist_info.json"), "w", encoding="utf-8") as f:
             json.dump(old_info, f)
 
         # YouTube returns fresh scan without drop1
@@ -315,7 +307,7 @@ class TestOrphanMediaPreservation(unittest.TestCase):
         _save_playlist_info_with_versioning(playlist_folder, new_info, source="test")
 
         # Verify drop1 was preserved into archived_entries with slot info
-        with open(os.path.join(snap_dir, "playlist_info.json"), "r", encoding="utf-8") as f:
+        with open(os.path.join(playlist_folder, "playlist_info.json"), "r", encoding="utf-8") as f:
             saved = json.load(f)
 
         self.assertEqual(len(saved["entries"]), 2)

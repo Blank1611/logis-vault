@@ -30,18 +30,16 @@ export const TrackInspectionModal: React.FC<TrackInspectionModalProps> = ({ play
   const [exportFormat, setExportFormat] = useState('mp3')
   const [extractingAudioVideoId, setExtractingAudioVideoId] = useState<string | null>(null)
 
-  const hasLocalTracks = (playlist.local_count || 0) > 0
-
-  // Fetch playlist tracks (instant render with 0ms delay if local_count === 0)
-  const { data: tracks = [], isLoading } = useQuery({
+  // Fetch playlist tracks
+  const { data: tracks = [], isLoading, isError, error } = useQuery({
     queryKey: ['playlistTracks', playlist.id],
     queryFn: async () => {
       const res = await playlistsApi.getTracks(playlist.id)
       return res.data
     },
-    enabled: hasLocalTracks,
-    initialData: hasLocalTracks ? undefined : [],
   })
+
+  const hasLocalTracks = (playlist.local_count || 0) > 0 || tracks.length > 0
 
   // Refresh available resolutions mutation
   const refreshResolutions = useMutation({
@@ -257,6 +255,11 @@ export const TrackInspectionModal: React.FC<TrackInspectionModalProps> = ({ play
           <div className="flex flex-col items-center justify-center py-16 text-slate-400 gap-3">
             <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
             <p className="text-sm font-medium">Loading playlist track catalog...</p>
+          </div>
+        ) : isError ? (
+          <div className="text-center py-12 text-rose-400 bg-rose-950/20 rounded-xl border border-rose-500/20 space-y-2 p-4">
+            <p className="text-sm font-semibold">Failed to load tracks</p>
+            <p className="text-xs text-rose-300">{(error as any)?.response?.data?.detail || (error as any)?.message || 'Unknown error occurred'}</p>
           </div>
         ) : filteredTracks.length === 0 ? (
           <div className="text-center py-12 text-slate-400 bg-slate-900/30 rounded-xl border border-white/5 space-y-1.5">

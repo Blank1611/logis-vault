@@ -57,13 +57,12 @@ class TestBatchRecoveryGuards(unittest.TestCase):
     def _make_playlist(self, title: str, video_ids: list):
         """Helper to create and commit an initial baseline playlist snapshot."""
         p_folder = os.path.join(self.temp_dir, title)
-        snap_dir = os.path.join(p_folder, "playlist_info_snapshot")
-        os.makedirs(snap_dir, exist_ok=True)
+        os.makedirs(p_folder, exist_ok=True)
         info = {
             "title": title,
             "entries": [{"id": vid, "title": f"Song {vid}"} for vid in video_ids]
         }
-        json_path = os.path.join(snap_dir, "playlist_info.json")
+        json_path = os.path.join(p_folder, "playlist_info.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(info, f, indent=2)
         commit_playlist_atomic(p_folder, title, None, info, source="manual")
@@ -94,14 +93,14 @@ class TestBatchRecoveryGuards(unittest.TestCase):
                 {"id": "vid5", "title": "Song vid5"}
             ]
         }
-        with open(os.path.join(p1_folder, "playlist_info_snapshot", "playlist_info.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(p1_folder, "playlist_info.json"), "w", encoding="utf-8") as f:
             json.dump(p1_new_info, f, indent=2)
 
         p2_new_info = {
             "title": "Jazz Vibes",
             "entries": [{"id": "vid3", "title": "Song vid3"}]  # vid4 removed
         }
-        with open(os.path.join(p2_folder, "playlist_info_snapshot", "playlist_info.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(p2_folder, "playlist_info.json"), "w", encoding="utf-8") as f:
             json.dump(p2_new_info, f, indent=2)
 
         # Batch execution (e.g. Scheduled Daily Scan or Startup Scan)
@@ -140,7 +139,7 @@ class TestBatchRecoveryGuards(unittest.TestCase):
                 {"id": "vid6", "title": "Song vid6"}
             ]
         }
-        with open(os.path.join(p1_folder, "playlist_info_snapshot", "playlist_info.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(p1_folder, "playlist_info.json"), "w", encoding="utf-8") as f:
             json.dump(p1_atomic_info, f, indent=2)
 
         c = commit_playlist_atomic(p1_folder, "Rock Classics", p1_info, p1_atomic_info, source="manual")
@@ -159,7 +158,7 @@ class TestBatchRecoveryGuards(unittest.TestCase):
             "title": "Rock Classics",
             "entries": [{"id": "vid1", "title": "Song vid1"}, {"id": "vid99", "title": "Crashed song"}]
         }
-        with open(os.path.join(p1_folder, "playlist_info_snapshot", "playlist_info.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(p1_folder, "playlist_info.json"), "w", encoding="utf-8") as f:
             json.dump(p1_crash_info, f, indent=2)
 
         # Simulate stale .git/index.lock backdated by 120 seconds

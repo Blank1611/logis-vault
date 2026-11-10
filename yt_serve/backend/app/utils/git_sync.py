@@ -37,8 +37,6 @@ BASE_DOWNLOAD_GITIGNORE = """# YouTube Playlist Manager - Metadata Whitelist .gi
 # Whitelist metadata and archives only
 !playlist_info.json
 !*/playlist_info.json
-!playlist_info_snapshot/
-!playlist_info_snapshot/playlist_info.json
 !archive.txt
 !*/archive.txt
 
@@ -391,14 +389,12 @@ def commit_playlist_atomic(
 
         _cleanup_stale_git_lock(base_path)
 
-        # Path to the playlist_info.json relative to base_path (prioritize root file)
-        snapshot_json = os.path.join(playlist_folder, "playlist_info.json")
-        if not os.path.isfile(snapshot_json):
-            snapshot_json = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
-            if not os.path.isfile(snapshot_json):
-                return False
+        # Path to the canonical playlist_info.json relative to base_path
+        info_json = os.path.join(playlist_folder, "playlist_info.json")
+        if not os.path.isfile(info_json):
+            return False
 
-        rel_path = os.path.relpath(snapshot_json, base_path)
+        rel_path = os.path.relpath(info_json, base_path)
 
         # Stage this specific file
         code, _, stderr = _run_git_cmd(["add", rel_path], base_path)

@@ -73,6 +73,10 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete
     result: OnboardingResult | null
     progressPercent: number
     currentPlaylistTitle: string
+    playlistIndex?: number
+    totalPlaylists?: number
+    tracksProbed?: number
+    tracksTotal?: number
     error?: string
   }>({
     status: 'idle',
@@ -80,7 +84,21 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete
     result: null,
     progressPercent: 0,
     currentPlaylistTitle: '',
+    playlistIndex: 0,
+    totalPlaylists: 0,
+    tracksProbed: 0,
+    tracksTotal: 0,
   })
+
+  const sseRef = React.useRef<EventSource | null>(null)
+  useEffect(() => {
+    return () => {
+      if (sseRef.current) {
+        sseRef.current.close()
+        sseRef.current = null
+      }
+    }
+  }, [])
 
   const runDiscoveryAndIngestion = async (configPayload: Partial<Config>) => {
     setCurrentStep('ingestion')
@@ -104,16 +122,61 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete
       // 3. Confirm ingestion if playlists discovered
       let confirmData: OnboardingResult | null = null
       if (scanData.discovered_playlists.length > 0) {
+        const firstPl = scanData.discovered_playlists[0]
+        const estTracks = Math.max(firstPl?.video_count || 0, firstPl?.audio_count || 0, firstPl?.archived_count || 0)
         setIngestionState(prev => ({
           ...prev,
-          currentPlaylistTitle: scanData.discovered_playlists[0]?.title || '',
-          progressPercent: 80,
+          currentPlaylistTitle: firstPl?.title || '',
+          totalPlaylists: scanData.discovered_playlists.length,
+          playlistIndex: 1,
+          progressPercent: 60,
+          tracksProbed: 0,
+          tracksTotal: estTracks,
         }))
-        const confirmRes = await onboardingApi.confirm({
-          base_path: configPayload.base_download_path,
-          items: scanData.discovered_playlists,
-        })
-        confirmData = confirmRes.data
+
+        // Establish real-time SSE stream for resilient dual-tier progress
+        try {
+          if (sseRef.current) {
+            sseRef.current.close()
+          }
+          const es = new EventSource('/api/config/onboarding/stream')
+          sseRef.current = es
+
+          es.addEventListener('progress', (e: MessageEvent) => {
+            try {
+              const data = JSON.parse(e.data)
+              setIngestionState(prev => ({
+                ...prev,
+                currentPlaylistTitle: data.playlist_title || prev.currentPlaylistTitle,
+                playlistIndex: data.playlist_index ?? prev.playlistIndex,
+                totalPlaylists: data.total_playlists ?? prev.totalPlaylists,
+                tracksProbed: data.tracks_probed ?? prev.tracksProbed,
+                tracksTotal: data.tracks_total ?? prev.tracksTotal,
+                progressPercent: data.overall_percent ?? prev.progressPercent,
+              }))
+            } catch {
+              // Ignore payload parse issues
+            }
+          })
+          es.onerror = () => {
+            // EventSource handles auto-reconnect natively
+          }
+        } catch (sseErr) {
+          console.warn('Could not establish SSE onboarding stream', sseErr)
+        }
+
+        try {
+          const confirmRes = await onboardingApi.confirm({
+            base_path: configPayload.base_download_path,
+            items: scanData.discovered_playlists,
+          })
+          confirmData = confirmRes.data
+        } finally {
+          if (sseRef.current) {
+            sseRef.current.close()
+            sseRef.current = null
+          }
+        }
       }
 
       setIngestionState(prev => ({
@@ -374,25 +437,69 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({ onComplete
             </span>
           </div>
 
-          {/* Animated Progress Bar */}
+          {/* Main Progress Bar (Tier 1: Overall Library Progress) */}
           <div className="space-y-2">
-            <div className="flex justify-between text-xs font-bold text-gray-700 dark:text-gray-300">
-              <span className="flex items-center gap-1.5">
-                <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+            <div className="flex justify-between items-center text-xs font-bold text-gray-700 dark:text-gray-300">
+              <span className="flex items-center gap-1.5 truncate max-w-[85%]">
+                <Loader2 className="w-4 h-4 animate-spin text-blue-500 shrink-0" />
                 {ingestionState.status === 'scanning' && 'Scanning download directory...'}
-                {ingestionState.status === 'ingesting' && 'Populating SQLite database & track index...'}
+                {ingestionState.status === 'ingesting' && (
+                  ingestionState.playlistIndex && ingestionState.totalPlaylists ? (
+                    <span className="truncate">
+                      Library Ingestion — Indexing playlist <span className="text-cyan-400 font-mono font-bold">[{ingestionState.playlistIndex}/{ingestionState.totalPlaylists}]</span> <span className="font-semibold text-slate-100">'{ingestionState.currentPlaylistTitle}'</span>
+                    </span>
+                  ) : (
+                    'Populating SQLite database & track index...'
+                  )
+                )}
                 {ingestionState.status === 'error' && 'Error during ingestion'}
               </span>
-              <span className="font-mono">{ingestionState.progressPercent}%</span>
+              <span className="font-mono text-cyan-400 font-bold shrink-0">{ingestionState.progressPercent}%</span>
             </div>
 
             <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 overflow-hidden">
               <div
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 h-3 rounded-full transition-all duration-500 ease-out"
+                className="bg-gradient-to-r from-blue-600 via-indigo-500 to-cyan-500 h-3 rounded-full transition-all duration-300 ease-out"
                 style={{ width: `${ingestionState.progressPercent}%` }}
               />
             </div>
           </div>
+
+          {/* Sub-Progress Bar: Real-time track probing (Tier 2: Current Playlist Tracks) */}
+          {ingestionState.status === 'ingesting' && (
+            <div className="space-y-2 p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 animate-in fade-in duration-200 shadow-inner">
+              <div className="flex justify-between items-center text-xs">
+                <span className="flex items-center gap-1.5 font-medium text-slate-300 truncate max-w-[70%]">
+                  <Music className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                  <span className="truncate">
+                    Probing media specs for <span className="text-white font-semibold">"{ingestionState.currentPlaylistTitle || 'playlist'}"</span>
+                  </span>
+                </span>
+                <span className="font-mono text-cyan-400 font-semibold shrink-0">
+                  {(ingestionState.tracksTotal ?? 0) > 0 ? (
+                    `${ingestionState.tracksProbed || 0} / ${ingestionState.tracksTotal} tracks (${Math.round(((ingestionState.tracksProbed || 0) / (ingestionState.tracksTotal || 1)) * 100)}%)`
+                  ) : (
+                    <span className="text-slate-400 font-normal italic flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin inline" />
+                      Initializing worker threads...
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
+                {(ingestionState.tracksTotal ?? 0) > 0 ? (
+                  <div
+                    className="h-full bg-gradient-to-r from-cyan-500 to-teal-400 transition-all duration-200 ease-out rounded-full"
+                    style={{
+                      width: `${Math.min(100, Math.round(((ingestionState.tracksProbed || 0) / (ingestionState.tracksTotal || 1)) * 100))}%`
+                    }}
+                  />
+                ) : (
+                  <div className="h-full w-1/3 bg-cyan-500/40 rounded-full animate-pulse" />
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Error Message */}
           {ingestionState.status === 'error' && (

@@ -1,8 +1,7 @@
 import React from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Settings, Moon, Sun, Key } from 'lucide-react'
+import { Settings, Key } from 'lucide-react'
 import { NavigationTabs, type TabType } from './NavigationTabs'
-import { useTheme } from '../../context/ThemeContext'
 import { configApi } from '../../services/api'
 
 export interface HeaderProps {
@@ -20,8 +19,6 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   onOpenSettingsTab,
 }) => {
-  const { darkMode, toggleDarkMode } = useTheme()
-
   const { data: cookiesStatus } = useQuery({
     queryKey: ['cookiesStatus'],
     queryFn: async () => {
@@ -112,19 +109,6 @@ export const Header: React.FC<HeaderProps> = ({
             title="Settings"
           >
             <Settings className="w-4 h-4" />
-          </button>
-
-          {/* Dark Mode Toggle */}
-          <button
-            onClick={toggleDarkMode}
-            className="p-2 rounded-xl bg-slate-900/70 hover:bg-slate-800/90 border border-white/10 hover:border-yellow-500/40 transition-all shadow-sm backdrop-blur-md"
-            title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-          >
-            {darkMode ? (
-              <Sun className="w-4 h-4 text-yellow-400" />
-            ) : (
-              <Moon className="w-4 h-4 text-slate-300" />
-            )}
           </button>
         </div>
       </div>
