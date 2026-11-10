@@ -151,5 +151,18 @@ class TestLoggingEngine(unittest.TestCase):
         finally:
             unregister_sse_queue(test_queue)
 
+    def test_ring_buffer_exception_formatting(self):
+        try:
+            raise ValueError("Test handled exception for logger")
+        except ValueError:
+            self.logger.exception("An error occurred with exception trace")
+
+        logs = get_recent_logs(limit=5)
+        self.assertTrue(len(logs) > 0)
+        latest = logs[0]
+        self.assertEqual(latest["message"], "An error occurred with exception trace")
+        self.assertIn("exception", latest)
+        self.assertIn("ValueError: Test handled exception for logger", latest["exception"])
+
 if __name__ == "__main__":
     unittest.main()

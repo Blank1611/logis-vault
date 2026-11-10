@@ -97,44 +97,8 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
         if entry.startswith('.') or entry_lower in excluded_dirs or entry in excluded_dirs:
             continue
 
-        # Layer 2: Check if this is a dedicated Ad-hoc Storage directory
+        # Layer 2: Check if this is a valid Playlist first (Playlist-first discovery)
         norm_folder_path = os.path.abspath(folder_path)
-        is_adhoc = (
-            norm_folder_path in known_adhoc_paths
-            or entry_lower == "_adhoc_downloads"
-            or (settings.ADHOC_DOWNLOAD_PATH and entry_lower == os.path.basename(settings.ADHOC_DOWNLOAD_PATH).lower())
-            or os.path.isfile(os.path.join(folder_path, "archive.txt"))
-        )
-
-        if is_adhoc:
-            default_adhoc = os.path.abspath(settings.get_adhoc_download_path())
-            adhoc_type = "system_default" if (norm_folder_path == default_adhoc or entry_lower == "_adhoc_downloads") else "config_custom"
-
-            video_files = []
-            for ext in ("*.mp4", "*.mkv", "*.webm", "*.m4v"):
-                for vfile in glob.glob(os.path.join(folder_path, ext)):
-                    if not vfile.endswith('.part'):
-                        video_files.append(vfile)
-
-            audio_files = []
-            for ext in ("*.mp3", "*.m4a", "*.opus", "*.flac", "*.wav"):
-                for afile in glob.glob(os.path.join(folder_path, ext)):
-                    audio_files.append(afile)
-                for afile in glob.glob(os.path.join(folder_path, "**", ext), recursive=True):
-                    if afile not in audio_files:
-                        audio_files.append(afile)
-
-            unmanaged_folders.append({
-                "folder_name": entry,
-                "folder_path": folder_path,
-                "video_count": len(video_files),
-                "audio_count": len(audio_files),
-                "total_files": len(video_files) + len(audio_files),
-                "is_adhoc": True,
-                "adhoc_type": adhoc_type,
-            })
-            continue
-
         playlist_title = entry
         playlist_url = ""
         total_online_count = 0
@@ -251,15 +215,23 @@ def scan_download_directory(base_path: Optional[str] = None) -> Dict[str, Any]:
                 "is_verified_cache": is_verified_cache,
             })
         else:
-            # Unmanaged folder classification (never generate fake URL)
+            # Unmanaged folder classification (check if it's the designated ad-hoc directory)
+            default_adhoc = os.path.abspath(settings.get_adhoc_download_path())
+            is_adhoc = (
+                norm_folder_path in known_adhoc_paths
+                or entry_lower == "_adhoc_downloads"
+                or (settings.ADHOC_DOWNLOAD_PATH and entry_lower == os.path.basename(settings.ADHOC_DOWNLOAD_PATH).lower())
+            )
+            adhoc_type = "system_default" if (norm_folder_path == default_adhoc or entry_lower == "_adhoc_downloads") else ("config_custom" if is_adhoc else None)
+
             unmanaged_folders.append({
                 "folder_name": entry,
                 "folder_path": folder_path,
                 "video_count": len(video_files),
                 "audio_count": len(audio_files),
                 "total_files": len(video_files) + len(audio_files),
-                "is_adhoc": False,
-                "adhoc_type": None,
+                "is_adhoc": is_adhoc,
+                "adhoc_type": adhoc_type,
             })
 
     return {
@@ -292,11 +264,15 @@ def ingest_discovered_library(
             scan_res = scan_download_directory(base_path)
             discovered_items = scan_res.get("discovered_playlists", [])
 
+        workers = max(1, getattr(settings, "MAX_CONCURRENT_EXTRACTIONS", 4))
+        logger.info(f"[Onboarding] Starting library ingestion for {len(discovered_items)} discovered playlist(s) (concurrency={workers})...")
+        onboarding_start = time.time()
+
         imported_count = 0
         skipped_count = 0
         tracks_indexed_count = 0
 
-        for item in discovered_items:
+        for idx, item in enumerate(discovered_items, 1):
             if item.get("is_adhoc"):
                 logger.warning(f"[Auto-Discovery] Strictly bypassing ad-hoc directory from playlist ingestion: {item.get('folder_name')}")
                 continue
@@ -308,6 +284,9 @@ def ingest_discovered_library(
                 logger.warning(f"Skipping ingestion for item without URL: {folder_name}")
                 continue
             
+            pl_start = time.time()
+            logger.info(f"[Onboarding] [{idx}/{len(discovered_items)}] Processing playlist '{title}' ({folder_name})...")
+
             # Check if playlist already exists
             existing = PlaylistRepository.get_by_url_or_title(url=url, title=title, db=session)
 
@@ -320,6 +299,7 @@ def ingest_discovered_library(
                 is_verified = item.get("is_verified_cache", False)
                 if not is_verified:
                     try:
+                        logger.info(f"[Onboarding] Probing online metadata for unverified playlist '{title}' ({url})...")
                         from app.core.yt_playlist_audio_tools import _get_playlist_info
                         info = _get_playlist_info(url)
                         title = info.get("title") or title
@@ -361,7 +341,6 @@ def ingest_discovered_library(
             # Build aligned sequence for true chronological order, metadata, and position
             from app.core.yt_playlist_audio_tools import build_aligned_playlist_sequence
             aligned_tracks = build_aligned_playlist_sequence(folder_path, playlist_title=title, db=session)
-            aligned_map = {t["video_id"]: t for t in aligned_tracks}
 
             # Map audio files
             audio_map = {}
@@ -370,9 +349,10 @@ def ingest_discovered_library(
                 if vid:
                     audio_map[vid] = afile
 
-            indexed_ids = set()
+            # Plan all tracks to index for this playlist
+            planned_tracks = []
+            planned_vids = set()
 
-            # First index tracks from the aligned sequence that exist on disk
             for t in aligned_tracks:
                 vid = t["video_id"]
                 fpath = t.get("filepath")
@@ -384,68 +364,104 @@ def ingest_discovered_library(
                 if fpath and os.path.exists(fpath):
                     audio_file = audio_map.get(vid)
                     dur = int(t["duration"]) if t.get("duration") and t["duration"] > 0 else None
-                    index_track(
-                        video_id=vid,
-                        title=t["title"],
-                        artist=t.get("artist"),
-                        duration=dur,
-                        filepath=fpath,
-                        playlist_id=playlist_id,
-                        position=t["position"],
-                        is_archived=t.get("is_archived", False),
-                        audio_filepath=audio_file,
-                        db=session
-                    )
-                    indexed_ids.add(vid)
-                    tracks_indexed_count += 1
+                    planned_tracks.append({
+                        "video_id": vid,
+                        "title": t["title"],
+                        "artist": t.get("artist"),
+                        "duration": dur,
+                        "filepath": fpath,
+                        "audio_filepath": audio_file,
+                        "position": t["position"],
+                        "is_archived": t.get("is_archived", False),
+                    })
+                    planned_vids.add(vid)
 
             # Fallback for any video files not in aligned sequence
             for vfile in item.get("video_files", []):
                 fname = os.path.basename(vfile)
                 vid = extract_video_id_from_filename(fname)
-                if not vid or vid in indexed_ids:
+                if not vid or vid in planned_vids:
                     continue
 
                 song_title = os.path.splitext(fname)[0]
                 song_title = re.sub(r'\[[a-zA-Z0-9_-]{11}\]', '', song_title).strip() or fname
                 audio_file = audio_map.get(vid)
-                index_track(
-                    video_id=vid,
-                    title=song_title,
-                    filepath=vfile,
-                    playlist_id=playlist_id,
-                    audio_filepath=audio_file,
-                    db=session
-                )
-                indexed_ids.add(vid)
-                tracks_indexed_count += 1
+                planned_tracks.append({
+                    "video_id": vid,
+                    "title": song_title,
+                    "artist": None,
+                    "duration": None,
+                    "filepath": vfile,
+                    "audio_filepath": audio_file,
+                    "position": None,
+                    "is_archived": False,
+                })
+                planned_vids.add(vid)
 
             # Fallback for any audio-only files not already covered
             for afile in item.get("audio_files", []):
                 fname = os.path.basename(afile)
                 vid = extract_video_id_from_filename(fname)
-                if not vid or vid in indexed_ids:
+                if not vid or vid in planned_vids:
                     continue
 
                 song_title = os.path.splitext(fname)[0]
                 song_title = re.sub(r'\[[a-zA-Z0-9_-]{11}\]', '', song_title).strip() or fname
+                planned_tracks.append({
+                    "video_id": vid,
+                    "title": song_title,
+                    "artist": None,
+                    "duration": None,
+                    "filepath": afile,
+                    "audio_filepath": afile,
+                    "position": None,
+                    "is_archived": False,
+                })
+                planned_vids.add(vid)
+
+            # Phase 1: Parallel media probing across MAX_EXTRACTION_WORKERS
+            probed_meta = {}
+            if planned_tracks:
+                from concurrent.futures import ThreadPoolExecutor
+                from app.core.track_indexer import probe_local_media_metadata
+
+                def _probe_entry(trk):
+                    return trk["video_id"], probe_local_media_metadata(trk["filepath"], trk["audio_filepath"])
+
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    for vid, meta in executor.map(_probe_entry, planned_tracks):
+                        probed_meta[vid] = meta
+
+            # Phase 2: Instantaneous single-threaded DB insertion
+            pl_indexed_count = 0
+            for trk in planned_tracks:
+                vid = trk["video_id"]
                 index_track(
                     video_id=vid,
-                    title=song_title,
-                    filepath=afile,
+                    title=trk["title"],
+                    artist=trk["artist"],
+                    duration=trk["duration"],
+                    filepath=trk["filepath"],
                     playlist_id=playlist_id,
-                    audio_filepath=afile,
+                    position=trk["position"],
+                    is_archived=trk["is_archived"],
+                    audio_filepath=trk["audio_filepath"],
+                    meta=probed_meta.get(vid),
                     db=session
                 )
-                indexed_ids.add(vid)
+                pl_indexed_count += 1
                 tracks_indexed_count += 1
+
+            pl_elapsed = time.time() - pl_start
+            logger.info(f"[Onboarding] [{idx}/{len(discovered_items)}] ✓ Finished '{title}': {pl_indexed_count} tracks indexed in {pl_elapsed:.2f}s.")
 
         try:
             backfill_all_local_tracks_metadata(session)
         except Exception as bf_err:
             logger.debug(f"Media metadata backfill notice: {bf_err}")
 
-        logger.info(f"Onboarding complete: {imported_count} playlists imported, {skipped_count} existing, {tracks_indexed_count} tracks indexed.")
+        total_elapsed = time.time() - onboarding_start
+        logger.info(f"[Onboarding] Complete: {imported_count} playlists imported, {skipped_count} existing, {tracks_indexed_count} tracks indexed in {total_elapsed:.2f}s.")
 
         return {
             "status": "success",

@@ -150,14 +150,17 @@ def index_track(
     artist: Optional[str] = None,
     duration: Optional[int] = None,
     is_hardlinked: bool = False,
+    meta: Optional[Dict[str, Any]] = None,
     db: Optional[Session] = None
 ) -> Track:
     """
     Register or update a track in the global SQLite tracks index and associate with playlist.
+    Optionally accepts pre-computed metadata to skip synchronous ffprobe subprocess execution.
     """
     with get_db_context(db) as session:
         track = session.query(Track).filter(Track.video_id == video_id).first()
-        meta = probe_local_media_metadata(filepath, audio_filepath)
+        if meta is None:
+            meta = probe_local_media_metadata(filepath, audio_filepath)
         if track:
             assoc = session.query(PlaylistTrack).filter_by(
                 playlist_id=playlist_id, track_id=video_id
@@ -239,23 +242,44 @@ def index_track(
 
 
 def backfill_all_local_tracks_metadata(db: Optional[Session] = None) -> int:
-    """Scan existing database tracks with missing resolution info and backfill using local ffprobe."""
+    """Scan existing database tracks with missing resolution info and backfill using local ffprobe in parallel."""
+    from concurrent.futures import ThreadPoolExecutor
+    from app.core.config import settings
+
+    workers = max(1, getattr(settings, "MAX_CONCURRENT_EXTRACTIONS", 4))
     backfilled = 0
     with get_db_context(db) as session:
         tracks = session.query(Track).all()
-        for t in tracks:
-            if not t.downloaded_resolutions_json or len(t.downloaded_resolutions_json) == 0:
-                meta = probe_local_media_metadata(t.primary_filepath, t.primary_audio_filepath)
-                if meta["resolution"]:
-                    t.downloaded_resolutions_json = [meta["resolution"]]
-                    t.downloaded_fps = meta["fps"]
-                    t.downloaded_audio_codec = meta["audio_codec"]
-                    t.downloaded_audio_bitrate = meta["audio_bitrate"]
-                    t.updated_at = datetime.utcnow()
-                    backfilled += 1
+        candidates = [t for t in tracks if not t.downloaded_resolutions_json or len(t.downloaded_resolutions_json) == 0]
+        if not candidates:
+            return 0
+
+        logger.info(f"[Backfill] Probing media specs for {len(candidates)} track(s) across {workers} concurrent workers...")
+
+        probe_args = [(t.video_id, t.primary_filepath, t.primary_audio_filepath) for t in candidates]
+        results = {}
+
+        def _worker_probe(item):
+            vid, fp, afp = item
+            return vid, probe_local_media_metadata(fp, afp)
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for vid, meta in executor.map(_worker_probe, probe_args):
+                results[vid] = meta
+
+        for t in candidates:
+            meta = results.get(t.video_id)
+            if meta and meta.get("resolution"):
+                t.downloaded_resolutions_json = [meta["resolution"]]
+                t.downloaded_fps = meta["fps"]
+                t.downloaded_audio_codec = meta["audio_codec"]
+                t.downloaded_audio_bitrate = meta["audio_bitrate"]
+                t.updated_at = datetime.utcnow()
+                backfilled += 1
+
         if backfilled > 0:
             session.flush()
-            logger.info(f"Backfilled media resolution specs for {backfilled} existing tracks via local ffprobe.")
+            logger.info(f"[Backfill] Successfully backfilled media resolution specs for {backfilled} track(s).")
     return backfilled
 
 

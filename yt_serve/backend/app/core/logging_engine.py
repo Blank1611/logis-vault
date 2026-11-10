@@ -79,7 +79,10 @@ class RingBufferHandler(logging.Handler):
                 "job_id": getattr(record, "job_id", None),
             }
             if record.exc_info:
-                entry["exception"] = self.formatException(record.exc_info)
+                if self.formatter:
+                    entry["exception"] = self.formatter.formatException(record.exc_info)
+                else:
+                    entry["exception"] = logging.Formatter().formatException(record.exc_info)
 
             # Store in ring buffer
             with _buffer_lock:

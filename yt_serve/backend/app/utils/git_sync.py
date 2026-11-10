@@ -391,10 +391,10 @@ def commit_playlist_atomic(
 
         _cleanup_stale_git_lock(base_path)
 
-        # Path to the playlist_info.json relative to base_path
-        snapshot_json = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
+        # Path to the playlist_info.json relative to base_path (prioritize root file)
+        snapshot_json = os.path.join(playlist_folder, "playlist_info.json")
         if not os.path.isfile(snapshot_json):
-            snapshot_json = os.path.join(playlist_folder, "playlist_info.json")
+            snapshot_json = os.path.join(playlist_folder, "playlist_info_snapshot", "playlist_info.json")
             if not os.path.isfile(snapshot_json):
                 return False
 
@@ -546,9 +546,9 @@ def sync_git_remote_origin(
             _run_git_cmd(["remote", "remove", "origin"], base_path)
             return True
 
-        token = auth_token if auth_token is not None else getattr(settings, "GIT_AUTH_TOKEN", None)
+        token = auth_token if (auth_token is not None and isinstance(auth_token, str)) else getattr(settings, "GIT_AUTH_TOKEN", None)
         url_clean = url.strip()
-        if token and token.strip() and url_clean.startswith("https://") and "@" not in url_clean:
+        if token and isinstance(token, str) and token.strip() and url_clean.startswith("https://") and "@" not in url_clean:
             auth_url = f"https://oauth2:{token.strip()}@" + url_clean[len("https://"):]
         else:
             auth_url = url_clean

@@ -12,9 +12,9 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [darkMode, setDarkModeState] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('darkMode')
-      return saved ? JSON.parse(saved) : false
+      return saved !== null ? JSON.parse(saved) : true
     } catch {
-      return false
+      return true
     }
   })
 

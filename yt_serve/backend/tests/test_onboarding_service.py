@@ -155,6 +155,99 @@ class TestOnboardingService(unittest.TestCase):
         self.assertTrue(os.path.isdir(custom_dir))
         self.assertTrue(os.path.isfile(dummy_file))
 
+    def test_playlist_with_archive_txt_not_hijacked_as_adhoc(self):
+        """
+        Verify that a legitimate playlist folder containing archive.txt
+        is discovered as a playlist and NOT intercepted as an ad-hoc unmanaged folder.
+        """
+        pl_dir = os.path.join(self.temp_dir.name, "Electronic Hits")
+        os.makedirs(pl_dir, exist_ok=True)
+
+        with open(os.path.join(pl_dir, "playlist_info.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "_type": "playlist",
+                "id": "PL_ELECTRO_999",
+                "title": "Electronic Hits",
+                "webpage_url": "https://www.youtube.com/playlist?list=PL_ELECTRO_999",
+                "playlist_count": 2,
+                "entries": [{"id": "abc12345678", "title": "Track 1"}]
+            }, f)
+
+        # Create archive.txt tracking downloaded video IDs (standard yt-dlp archive)
+        with open(os.path.join(pl_dir, "archive.txt"), "w", encoding="utf-8") as f:
+            f.write("youtube abc12345678\n")
+
+        # Create media file
+        with open(os.path.join(pl_dir, "Track 1 [abc12345678].mp4"), "w") as f:
+            f.write("dummy video data")
+
+        scan_res = scan_download_directory(self.temp_dir.name)
+        self.assertEqual(scan_res["discovered_playlists_count"], 1)
+        self.assertEqual(scan_res["unmanaged_folders_count"], 0)
+
+        discovered = scan_res["discovered_playlists"][0]
+        self.assertEqual(discovered["title"], "Electronic Hits")
+        self.assertEqual(discovered["url"], "https://www.youtube.com/playlist?list=PL_ELECTRO_999")
+        self.assertEqual(discovered["archived_count"], 1)
+
+    def test_parallel_probing_and_precomputed_meta_ingestion(self):
+        """
+        Verify that ingest_discovered_library properly parallelizes media probing
+        and indexes tracks into SQLite without lock contention.
+        """
+        from app.core.track_indexer import index_track
+
+        pl_dir = os.path.join(self.temp_dir.name, "Synthwave Mix")
+        os.makedirs(pl_dir, exist_ok=True)
+
+        entries = []
+        for i in range(5):
+            vid = f"synth{i:06d}abc"
+            entries.append({"id": vid, "title": f"Synth Track {i}"})
+            # Create video file
+            with open(os.path.join(pl_dir, f"Synth Track {i} [{vid}].mp4"), "w") as f:
+                f.write(f"dummy data for track {i}")
+
+        with open(os.path.join(pl_dir, "playlist_info.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "_type": "playlist",
+                "id": "PL_SYNTH_777",
+                "title": "Synthwave Mix",
+                "webpage_url": "https://www.youtube.com/playlist?list=PL_SYNTH_777",
+                "playlist_count": 5,
+                "entries": entries
+            }, f)
+
+        scan_res = scan_download_directory(self.temp_dir.name)
+        self.assertGreaterEqual(scan_res["discovered_playlists_count"], 1)
+
+        synth_pl = [p for p in scan_res["discovered_playlists"] if p["title"] == "Synthwave Mix"]
+        self.assertEqual(len(synth_pl), 1)
+
+        ingest_res = ingest_discovered_library(discovered_items=synth_pl, db=self.db)
+        self.assertEqual(ingest_res["status"], "success")
+        self.assertEqual(ingest_res["playlists_imported"], 1)
+        self.assertEqual(ingest_res["tracks_indexed"], 5)
+
+        # Test index_track with explicit precomputed meta
+        dummy_meta = {
+            "resolution": "1440p",
+            "fps": 60,
+            "audio_codec": "aac",
+            "audio_bitrate": 256
+        }
+        manual_track = index_track(
+            video_id="precomp00001",
+            title="Precomputed Test Track",
+            filepath=os.path.join(pl_dir, "non_existent.mp4"),
+            playlist_id=1,
+            meta=dummy_meta,
+            db=self.db
+        )
+        self.assertEqual(manual_track.downloaded_resolutions_json, ["1440p"])
+        self.assertEqual(manual_track.downloaded_fps, 60)
+        self.assertEqual(manual_track.downloaded_audio_codec, "aac")
+
 if __name__ == "__main__":
     unittest.main()
 

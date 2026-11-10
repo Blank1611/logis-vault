@@ -26,7 +26,7 @@ export function FieldHeader({
         <div className="flex items-center gap-1.5 flex-wrap">
           <label
             htmlFor={id}
-            className="text-sm font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-1"
+            className="text-sm font-semibold text-gray-200 dark:text-gray-100 flex items-center gap-1"
           >
             <span>{label}</span>
             {required && <span className="text-rose-500 font-bold">*</span>}

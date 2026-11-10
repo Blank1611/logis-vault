@@ -101,33 +101,46 @@ def discover_all_snapshots(base_path: str) -> Tuple[List[SnapshotRecord], List[s
 
         playlist_folder = os.path.join(base_path, entry)
         snap_dir = os.path.join(playlist_folder, "playlist_info_snapshot")
-        canonical_target = os.path.join(snap_dir, "playlist_info.json")
+        canonical_target = os.path.join(playlist_folder, "playlist_info.json")
 
-        if not os.path.exists(snap_dir):
-            continue
+        # Discover snapshots in snap_dir if present
+        if os.path.exists(snap_dir):
+            for fname in os.listdir(snap_dir):
+                if not fname.lower().startswith("playlist_info") or not fname.lower().endswith(".json"):
+                    continue
 
-        # Look for all playlist_info*.json in snap_dir
-        for fname in os.listdir(snap_dir):
-            if not fname.lower().startswith("playlist_info") or not fname.lower().endswith(".json"):
-                continue
+                full_file_path = os.path.join(snap_dir, fname)
+                if not os.path.isfile(full_file_path):
+                    continue
 
-            full_file_path = os.path.join(snap_dir, fname)
-            if not os.path.isfile(full_file_path):
-                continue
+                ts, is_latest = _parse_snapshot_timestamp(fname, full_file_path)
+                
+                if not is_latest:
+                    legacy_files.append(full_file_path)
 
-            ts, is_latest = _parse_snapshot_timestamp(fname, full_file_path)
-            
-            if not is_latest:
-                legacy_files.append(full_file_path)
+                records.append(SnapshotRecord(
+                    playlist_folder=playlist_folder,
+                    playlist_title=entry,
+                    source_file_path=full_file_path,
+                    target_file_path=canonical_target,
+                    timestamp=ts,
+                    is_latest=is_latest
+                ))
 
-            records.append(SnapshotRecord(
-                playlist_folder=playlist_folder,
-                playlist_title=entry,
-                source_file_path=full_file_path,
-                target_file_path=canonical_target,
-                timestamp=ts,
-                is_latest=is_latest
-            ))
+        # Also discover root playlist_info.json if present
+        root_info = os.path.join(playlist_folder, "playlist_info.json")
+        if os.path.isfile(root_info):
+            already_captured = any(r.playlist_folder == playlist_folder and r.is_latest for r in records)
+            if not already_captured:
+                ts, _ = _parse_snapshot_timestamp("playlist_info.json", root_info)
+                records.append(SnapshotRecord(
+                    playlist_folder=playlist_folder,
+                    playlist_title=entry,
+                    source_file_path=root_info,
+                    target_file_path=canonical_target,
+                    timestamp=ts,
+                    is_latest=True
+                ))
 
     # Sort records globally by timestamp ascending
     # For identical timestamps, keep unversioned latest file last
@@ -736,6 +749,14 @@ def run_migration(
                     cleaned_count += 1
             except Exception as e:
                 print(f"  [WARN] Failed to delete {l_path}: {e}")
+        # Prune empty playlist_info_snapshot folders
+        for entry in os.listdir(base_path):
+            s_dir = os.path.join(base_path, entry, "playlist_info_snapshot")
+            if os.path.isdir(s_dir) and not os.listdir(s_dir):
+                try:
+                    os.rmdir(s_dir)
+                except Exception:
+                    pass
         print(f"Successfully removed {cleaned_count} legacy timestamped snapshot files.")
     else:
         print("5. Preserving legacy timestamped files (pass --cleanup-legacy to delete).")

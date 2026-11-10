@@ -126,6 +126,18 @@ class TestRoutesContract(unittest.TestCase):
             self.assertEqual(res_data.get("daily_refresh_interval_minutes"), 180)
             self.assertEqual(res_data.get("daily_refresh_timezone"), "Asia/Kolkata")
 
+            # Test PUT /api/config with Git settings (prevent AttributeError: 'bool' object has no attribute 'strip')
+            with patch("app.utils.git_sync.test_git_connection_sync", return_value=(True, "Connected")):
+                git_payload = {
+                    "enable_git_metadata_sync": True,
+                    "enable_git_remote_push": True,
+                    "git_remote_url": "https://github.com/Blank1611/yt_metadata.git",
+                    "git_auth_token": "ghp_mock_token_1234567890",
+                    "git_branch": "main"
+                }
+                git_put_res = self.client.put("/api/config", json=git_payload)
+                self.assertEqual(git_put_res.status_code, 200, f"Expected 200, got {git_put_res.status_code}: {git_put_res.text}")
+
     def test_housekeeping_and_jobs_endpoints(self):
         """Verify operational and housekeeping endpoints return 200 OK."""
         res_folders = self.client.get("/api/config/unmanaged-folders")

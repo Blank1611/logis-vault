@@ -346,9 +346,10 @@ async def update_config(config: ConfigUpdate, db: Session = Depends(get_db)):
     # Synchronize or clean up local origin remote
     from app.utils.git_sync import sync_git_remote_origin
     sync_git_remote_origin(
-        settings.BASE_DOWNLOAD_PATH,
-        settings.GIT_REMOTE_URL,
-        getattr(settings, "ENABLE_GIT_REMOTE_PUSH", False)
+        base_path=settings.BASE_DOWNLOAD_PATH,
+        remote_url=settings.GIT_REMOTE_URL,
+        auth_token=getattr(settings, "GIT_AUTH_TOKEN", None),
+        enable_push=getattr(settings, "ENABLE_GIT_REMOTE_PUSH", False),
     )
 
     # Persist to .env file
